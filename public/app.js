@@ -291,11 +291,12 @@ function niceStep(raw) {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
 }
 
-let lastChart = null;
+// Charts sized to their container re-render on resize.
+const redraws = new Map();
 
 // opts: { from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime }
 function renderLineChart(root, opts) {
-  lastChart = { root, opts };
+  redraws.set(root, () => renderLineChart(root, opts));
   root.replaceChildren();
   const { from, to, step, series } = opts;
   const pts0 = series[0].pts;
@@ -419,11 +420,100 @@ function renderLineChart(root, opts) {
   root.append(svg);
 }
 
+/* ---------- daily bar chart ---------- */
+
+// days: Map<'YYYY-MM-DD', number>; one bar per day for the last n days, ending today.
+function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String(v) } = {}) {
+  redraws.set(root, () => renderDailyBars(root, days, describe, { n, fmtTick }));
+  root.replaceChildren();
+
+  const end = todayStr();
+  const dates = [];
+  for (let i = n - 1; i >= 0; i--) dates.push(addDays(end, -i));
+  const vals = dates.map((d) => days.get(d) || 0);
+
+  const W = Math.max(280, root.clientWidth);
+  const H = root.clientHeight || 200;
+  const m = { l: 34, r: 4, t: 10, b: 24 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+
+  const vmax = Math.max(...vals);
+  const ystep = vmax > 0 ? niceStep(vmax / 4) : 1;
+  const ymax = vmax > 0 ? Math.ceil(vmax / ystep) * ystep : 4;
+  const y = (v) => m.t + ph - (v / ymax) * ph;
+
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Activity per day, last ${n} days` });
+
+  for (let v = 0; v <= ymax + 1e-9; v += ystep) {
+    if (v > 0) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
+    const t = sv('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis-text' });
+    t.textContent = fmtTick(Math.round(v * 100) / 100);
+    svg.append(t);
+  }
+
+  const slot = pw / n;
+  const bw = Math.max(4, Math.min(40, slot - 2 * Math.max(2, slot * 0.15)));
+  const labelEvery = slot >= 44 ? 1 : slot >= 22 ? 2 : 3;
+  const bars = [];
+
+  dates.forEach((d, i) => {
+    const cx = m.l + slot * (i + 0.5);
+    const v = vals[i];
+    const top = y(v), base = y(0);
+    const h = base - top;
+    if (h > 0.5) {
+      // rounded top, square base
+      const r = Math.min(4, h, bw / 2);
+      const x0 = cx - bw / 2, x1 = cx + bw / 2;
+      const bar = sv('path', {
+        d: `M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z`,
+        class: 'dbar',
+      });
+      svg.append(bar);
+      bars[i] = bar;
+    }
+
+    // Only every few days is labelled on narrow screens, counted back from today.
+    if ((n - 1 - i) % labelEvery === 0) {
+      const day = Number(d.slice(8));
+      const t = sv('text', { x: cx, y: H - 6, 'text-anchor': 'middle', class: 'axis-text' });
+      t.textContent = i === n - 1 ? 'Today' : day === 1 || slot >= 44 || i < labelEvery ? fmtDay(d, { month: 'short', day: 'numeric' }) : String(day);
+      svg.append(t);
+    }
+
+    const hit = sv('rect', { x: cx - slot / 2, y: m.t, width: slot, height: ph + m.b, fill: 'transparent', class: 'dbar-hit' });
+    hit.dataset.i = i;
+    svg.append(hit);
+  });
+  svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
+
+  let hovered = null;
+  const move = (e) => {
+    const t = e.target.closest('.dbar-hit');
+    if (!t) return;
+    const i = Number(t.dataset.i);
+    if (hovered !== bars[i]) {
+      hovered?.classList.remove('hover');
+      hovered = bars[i] || null;
+      hovered?.classList.add('hover');
+    }
+    showTip(e.clientX, e.clientY, describe(dates[i], vals[i]));
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerdown', move);
+  svg.addEventListener('pointerleave', () => { hovered?.classList.remove('hover'); hovered = null; hideTip(); });
+
+  root.append(svg);
+}
+
 let resizeTimer;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (lastChart && lastChart.root.isConnected && lastChart.root.offsetParent) renderLineChart(lastChart.root, lastChart.opts);
+    for (const [root, redraw] of redraws) {
+      if (!root.isConnected) redraws.delete(root);
+      else if (root.offsetParent) redraw();
+    }
   }, 120);
 }).observe(document.body);
 
@@ -543,10 +633,11 @@ function renderServerHeatmap() {
     days.set(d, (days.get(d) || 0) + sum / 60);
     peaks.set(d, Math.max(peaks.get(d) || 0, pk));
   }
-  renderHeatmap($('#heatmap'), days, (d, v) => [
+  // Bars for the last 14 days while history is short; renderHeatmap(days, …) is the year view.
+  renderDailyBars($('#heatmap'), days, (d, v) => [
     { value: v ? `${fmtHours(v)} player-hours` : 'No activity' },
-    { label: `${fmtDay(d)}${peaks.get(d) ? ` · peak ${peaks.get(d)}` : ''}` },
-  ]);
+    { label: `${fmtDay(d)}${peaks.get(d) ? ` · peak ${peaks.get(d)} online` : ''}` },
+  ], { fmtTick: (v) => `${v}h` });
 }
 
 function renderServerWeekGrid() {
@@ -718,10 +809,11 @@ async function showPlayer(uuid) {
   $('#p-first').textContent = fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' });
   $('#p-last').textContent = fmt(player.first_seen, { hour: 'numeric', minute: '2-digit' });
 
-  renderHeatmap($('#p-heatmap'), perDay, (d, v) => [
-    { value: v ? dur(v) : 'Didn’t play' },
+  const perDayHours = new Map([...perDay].map(([d, secs]) => [d, secs / 3600]));
+  renderDailyBars($('#p-heatmap'), perDayHours, (d, v) => [
+    { value: v ? dur(v * 3600) : 'Didn’t play' },
     { label: fmtDay(d) },
-  ]);
+  ], { fmtTick: (v) => `${v}h` });
   renderWeekGrid($('#p-weekgrid'), grid, (v, label) => [
     { value: v ? dur(v) : 'Never', label: v ? 'total' : null },
     { label },

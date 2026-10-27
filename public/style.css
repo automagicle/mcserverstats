@@ -308,3 +308,7 @@ tr.link:hover td { background: var(--hover); }
   .tile-value { font-size: 24px; }
   .hide-sm { display: none; }
 }
+
+.chart-bars { height: 200px; }
+.dbar { fill: var(--series-1); }
+.dbar.hover { opacity: 0.75; }
