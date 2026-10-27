@@ -23,7 +23,7 @@
     {
       "binding": "DB",
       "database_name": "mcstats",
-      "database_id": "REPLACE_WITH_ID_FROM_wrangler_d1_create",
+      "database_id": "b45c9980-b769-42cf-94e2-421c6a20931b",
       "migrations_dir": "migrations"
     }
   ],
