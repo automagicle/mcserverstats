@@ -312,3 +312,55 @@ tr.link:hover td { background: var(--hover); }
 .chart-bars { height: 200px; }
 .dbar { fill: var(--series-1); }
 .dbar.hover { opacity: 0.75; }
+
+/* ---------- update effects ---------- */
+
+.fx-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 20;
+}
+.fx-local {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+}
+#leaderboard, .chips { position: relative; }
+
+/* rolling digits */
+.odo { display: inline-flex; vertical-align: top; }
+.odo-col { display: inline-block; height: 1.2em; overflow: hidden; }
+.odo-strip { display: block; will-change: transform; }
+.odo-strip > span { display: block; height: 1.2em; line-height: 1.2em; text-align: center; }
+.odo-static { white-space: pre; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* online chips */
+@keyframes chip-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.chip-enter { animation: chip-pop 0.35s cubic-bezier(0.2, 0.8, 0.3, 1.2) both; }
+.chip.collapsing {
+  visibility: hidden;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: width 0.25s ease, padding 0.25s ease, margin 0.25s ease;
+}
+.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chip-enter { animation: none; }
+  .odo-strip { transition: none !important; }
+}

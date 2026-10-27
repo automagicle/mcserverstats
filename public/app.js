@@ -257,10 +257,240 @@ function renderHeatmap(root, days, describe) {
   root.scrollLeft = root.scrollWidth; // most recent weeks visible on narrow screens
 }
 
+/* ---------- update effects ---------- */
+
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const FX = {
+  green: ['#0ca30c', '#3ddc84', '#9af0b0', '#e3ffe9'],
+  red: ['#d03b3b', '#ff6b6b', '#ffb0b0', '#ffe3e3'],
+  blue: ['#2a78d6', '#5598e7', '#9ec5f4', '#e3f0ff'],
+};
+
+// Square "pixel" particles drawn on one full-screen canvas that only runs while particles exist.
+const fx = (() => {
+  const cv = el('canvas', { class: 'fx-canvas', 'aria-hidden': 'true' });
+  document.body.append(cv);
+  const ctx = cv.getContext('2d');
+  let parts = [], raf = 0, last = 0, dpr = 1;
+  const resize = () => {
+    dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(window.innerWidth * dpr);
+    cv.height = Math.round(window.innerHeight * dpr);
+  };
+  resize();
+  window.addEventListener('resize', resize);
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    parts = parts.filter((p) => now - p.born < p.life);
+    for (const p of parts) {
+      p.vx *= 1 - 2 * dt;
+      p.vy = p.vy * (1 - 2 * dt) + p.g * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      const age = (now - p.born) / p.life;
+      const twinkle = p.twinkle ? 0.55 + 0.45 * Math.sin(now / 45 + p.phase) : 1;
+      ctx.globalAlpha = Math.max(0, (1 - age * age) * twinkle);
+      ctx.fillStyle = p.color;
+      const s = Math.max(1, Math.round(p.size * dpr));
+      ctx.fillRect(Math.round(p.x * dpr), Math.round(p.y * dpr), s, s);
+    }
+    ctx.globalAlpha = 1;
+    raf = parts.length ? requestAnimationFrame(frame) : 0;
+  }
+
+  const api = {
+    // One particle at viewport coordinates (x, y). Ranges are [min, max].
+    spark(x, y, { colors, vx = [-20, 20], vy = [-40, -10], g = 0, life = [500, 900], size = [2, 3] }) {
+      if (reducedMotion()) return;
+      parts.push({
+        x, y, vx: rand(...vx), vy: rand(...vy), g,
+        born: performance.now(), life: rand(...life), size: Math.round(rand(...size)),
+        color: colors[Math.floor(Math.random() * colors.length)],
+        twinkle: Math.random() < 0.6, phase: Math.random() * 6.28,
+      });
+      if (!raf) {
+        last = performance.now();
+        raf = requestAnimationFrame(frame);
+      }
+    },
+    burst(rect, { count = 16, ...opts }) {
+      for (let i = 0; i < count; i++) {
+        api.spark(rect.left + Math.random() * rect.width, rect.top + Math.random() * rect.height, opts);
+      }
+    },
+  };
+  return api;
+})();
+
+const burstUp = (node) => fx.burst(node.getBoundingClientRect(), {
+  colors: FX.green, count: 18, vx: [-60, 60], vy: [-120, -30], g: 40, life: [600, 1100], size: [2, 4],
+});
+const burstDown = (node) => fx.burst(node.getBoundingClientRect(), {
+  colors: FX.red, count: 18, vx: [-60, 60], vy: [-30, 30], g: 160, life: [600, 1100], size: [2, 4],
+});
+
+// A grid of square tiles on a canvas over `target` (inside `host`, which must be position: relative).
+// mode 'clear': starts filled with `color`, tiles vanish one by one (a tint dissolving away).
+// mode 'cover': tiles fill in with `color` one by one (the element disintegrating into the page).
+function pixelTiles({ host, target, mode, color, tile = 4, pad = 0, hold = 0, duration = 800, sweep = 0.4, spark, onDone }) {
+  if (reducedMotion()) { onDone?.(); return; }
+  const hr = host.getBoundingClientRect();
+  const r = target.getBoundingClientRect();
+  const w = Math.ceil(r.width + 2 * pad), h = Math.ceil(r.height + 2 * pad);
+  const dpr = window.devicePixelRatio || 1;
+  const cv = el('canvas', { class: 'fx-local', 'aria-hidden': 'true' });
+  cv.width = Math.ceil(w * dpr);
+  cv.height = Math.ceil(h * dpr);
+  Object.assign(cv.style, {
+    left: `${r.left - hr.left + host.scrollLeft - pad}px`,
+    top: `${r.top - hr.top + host.scrollTop - pad}px`,
+    width: `${w}px`, height: `${h}px`,
+  });
+  host.append(cv);
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = color;
+  if (mode === 'clear') ctx.fillRect(0, 0, w, h);
+
+  const cols = Math.ceil(w / tile), rows = Math.ceil(h / tile);
+  const tiles = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      tiles.push({ x: x * tile, y: y * tile, at: hold + duration * ((x / cols) * sweep + Math.random() * (1 - sweep)) });
+    }
+  }
+  tiles.sort((a, b) => a.at - b.at);
+
+  let i = 0;
+  const t0 = performance.now();
+  const step = (now) => {
+    const t = now - t0;
+    const cr = cv.getBoundingClientRect();
+    while (i < tiles.length && tiles[i].at <= t) {
+      const tl = tiles[i++];
+      if (mode === 'clear') ctx.clearRect(tl.x, tl.y, tile, tile);
+      else ctx.fillRect(tl.x, tl.y, tile, tile);
+      if (spark && Math.random() < spark.chance) fx.spark(cr.left + tl.x, cr.top + tl.y, spark);
+    }
+    if (i < tiles.length && cv.isConnected) requestAnimationFrame(step);
+    else { cv.remove(); onDone?.(); }
+  };
+  requestAnimationFrame(step);
+}
+
+/* ---------- rolling counters ---------- */
+
+const ROLL_MS = 650;
+
+// Renders `text` with each digit in a vertical strip (0-9 twice) that can roll to a new digit.
+function buildOdometer(node, text, fromText) {
+  const fromDigits = fromText ? fromText.replace(/\D/g, '') : '';
+  const digitCount = text.replace(/\D/g, '').length;
+  let di = 0;
+  const odo = el('span', { class: 'odo', 'aria-hidden': 'true' });
+  for (const c of text) {
+    if (/\d/.test(c)) {
+      // right-align old digits against new ones; brand-new leading digits start at 0
+      const oi = fromDigits.length - (digitCount - di);
+      const start = fromText == null ? Number(c) : oi >= 0 ? Number(fromDigits[oi]) : 0;
+      const strip = el('span', { class: 'odo-strip' });
+      for (let k = 0; k < 20; k++) strip.append(el('span', { text: String(k % 10) }));
+      strip.style.transform = `translateY(${-start * 1.2}em)`;
+      strip.dataset.pos = start;
+      odo.append(el('span', { class: 'odo-col' }, strip));
+      di++;
+    } else {
+      odo.append(el('span', { class: 'odo-static', text: c }));
+    }
+  }
+  node.replaceChildren(odo, el('span', { class: 'sr-only', text }));
+}
+
+function rollOdometer(node, text, up) {
+  const targets = text.replace(/\D/g, '');
+  const strips = node.querySelectorAll('.odo-strip');
+  strips.forEach((strip, i) => {
+    const t = Number(targets[i]);
+    const cur = Number(strip.dataset.pos);
+    if (t === cur) return;
+    let to = t;
+    if (up && t < cur) to = t + 10; // keep rolling forward through 9 -> 0
+    if (!up && t > cur) {
+      // jump to the identical digit in the second half, then roll backward
+      strip.style.transition = 'none';
+      strip.style.transform = `translateY(${-(cur + 10) * 1.2}em)`;
+      void strip.offsetHeight;
+    }
+    const delay = (strips.length - 1 - i) * 60; // ones column moves first, like a clicker
+    strip.style.transition = `transform ${ROLL_MS}ms cubic-bezier(.2,.8,.25,1) ${delay}ms`;
+    strip.style.transform = `translateY(${-to * 1.2}em)`;
+    strip.dataset.pos = t;
+    if (to !== t) {
+      strip.addEventListener('transitionend', () => {
+        strip.style.transition = 'none';
+        strip.style.transform = `translateY(${-t * 1.2}em)`;
+      }, { once: true });
+    }
+  });
+}
+
+// Sets a tile's value. On live updates digits roll and particles burst green (up) or red (down).
+function setCounter(node, text, value, animate) {
+  const prevText = node.dataset.text;
+  const prevValue = node.dataset.value === undefined || node.dataset.value === '' ? null : Number(node.dataset.value);
+  node.dataset.text = text;
+  node.dataset.value = value ?? '';
+  if (prevText === text && node.querySelector('.odo')) return;
+
+  const changed = animate && prevValue != null && value != null && value !== prevValue;
+  if (!changed || reducedMotion()) {
+    buildOdometer(node, text, null);
+    return;
+  }
+  const up = value > prevValue;
+  const shape = (s) => s.replace(/\d/g, '0');
+  if (!node.querySelector('.odo') || shape(prevText) !== shape(text)) buildOdometer(node, text, prevText);
+  requestAnimationFrame(() => rollOdometer(node, text, up));
+  (up ? burstUp : burstDown)(node);
+}
+
+/* ---------- chart tweening ---------- */
+
+const TWEEN_MS = 650;
+const chartPrev = new Map(); // root -> what was last drawn, to tween from
+const tweens = new Map();
+const lerp = (a, b, e) => a + (b - a) * e;
+const easeInOut = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+
+function stopTween(root) {
+  cancelAnimationFrame(tweens.get(root));
+  tweens.delete(root);
+}
+
+function tween(root, draw) {
+  stopTween(root);
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / TWEEN_MS);
+    draw(easeInOut(k));
+    if (k < 1) tweens.set(root, requestAnimationFrame(step));
+    else tweens.delete(root);
+  };
+  draw(0);
+  tweens.set(root, requestAnimationFrame(step));
+}
+
 /* ---------- hour × weekday grid ---------- */
 
+const weekPrev = new Map();
+
 // grid[dow][hour] = number
-function renderWeekGrid(root, grid, describe) {
+function renderWeekGrid(root, grid, describe, { animate = false } = {}) {
   root.replaceChildren();
   const max = Math.max(0, ...grid.flat());
   const level = (v) => (v <= 0 || max <= 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4)));
@@ -268,6 +498,7 @@ function renderWeekGrid(root, grid, describe) {
 
   g.append(el('span'));
   for (let h = 0; h < 24; h += 3) g.append(el('span', { class: 'hlabel', text: hourName(h, true) }));
+  const cells = [];
   for (let d = 0; d < 7; d++) {
     g.append(el('span', { class: 'dlabel', text: DOWS[d] }));
     for (let h = 0; h < 24; h++) {
@@ -275,12 +506,25 @@ function renderWeekGrid(root, grid, describe) {
       c.dataset.d = d;
       c.dataset.h = h;
       g.append(c);
+      cells.push(c);
     }
   }
   root.append(g, scaleLegend());
   attachCellTips(root, '.wcell', (c) => {
     const d = Number(c.dataset.d), h = Number(c.dataset.h);
     return describe(grid[d][h], `${DOWS[d]} ${hourName(h)}–${hourName((h + 1) % 24)}`);
+  });
+
+  const prev = weekPrev.get(root);
+  weekPrev.set(root, grid.map((row) => row.slice()));
+  if (!animate || !prev) return;
+  cells.forEach((c) => {
+    const d = Number(c.dataset.d), h = Number(c.dataset.h);
+    if (Math.abs(prev[d][h] - grid[d][h]) < 1e-9) return;
+    const r = c.getBoundingClientRect();
+    fx.burst({ left: r.left - 6, top: r.top - 6, width: r.width + 12, height: r.height + 12 }, {
+      colors: FX.blue, count: 12, vx: [-35, 35], vy: [-50, -10], life: [600, 1100], size: [2, 3],
+    });
   });
 }
 
@@ -295,11 +539,53 @@ function niceStep(raw) {
 // Charts sized to their container re-render on resize.
 const redraws = new Map();
 
-// opts: { from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime }
-function renderLineChart(root, opts) {
-  redraws.set(root, () => renderLineChart(root, opts));
+function lineTarget(opts) {
+  let vmax = 0;
+  for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
+  const ystep = niceStep(Math.max(1, vmax / 4));
+  const ymax = Math.max(ystep * 4, Math.ceil(vmax / ystep) * ystep);
+  return { from: opts.from, to: opts.to, ymax, ystep, vals: opts.series.map((s) => s.pts.map((p) => p.v)) };
+}
+
+// opts: { key, from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime }
+// With animate, morphs from the previous drawing of the same range (domain, scale and values).
+function renderLineChart(root, opts, { animate = false } = {}) {
+  const prev = chartPrev.get(root);
+  const target = lineTarget(opts);
+  chartPrev.set(root, { key: opts.key, opts, frame: target });
+  redraws.set(root, () => drawLineChart(root, opts, target));
+
+  const canTween = animate && prev && prev.key === opts.key
+    && opts.series[0].pts.length && prev.opts.series[0].pts.length;
+  if (!canTween) {
+    stopTween(root);
+    drawLineChart(root, opts, target);
+    return;
+  }
+
+  const start = {
+    ...prev.frame,
+    vals: opts.series.map((s, k) => {
+      const oldPts = prev.opts.series[k]?.pts || [];
+      const oldVals = prev.frame.vals[k] || [];
+      const byT = new Map(oldPts.map((p, i) => [p.t, oldVals[i]]));
+      const tail = oldVals.length ? oldVals[oldVals.length - 1] : 0; // new points grow out of the last one
+      return s.pts.map((p) => (byT.has(p.t) ? byT.get(p.t) : tail));
+    }),
+  };
+  tween(root, (e) => drawLineChart(root, opts, {
+    from: lerp(start.from, target.from, e),
+    to: lerp(start.to, target.to, e),
+    ymax: lerp(start.ymax, target.ymax, e),
+    ystep: e < 0.5 ? start.ystep : target.ystep,
+    vals: target.vals.map((vs, k) => vs.map((v, i) => lerp(start.vals[k][i], v, e))),
+  }));
+}
+
+function drawLineChart(root, opts, f) {
   root.replaceChildren();
-  const { from, to, step, series } = opts;
+  const { step, series } = opts;
+  const { from, to, ymax, ystep } = f;
   const pts0 = series[0].pts;
   if (!pts0.length) {
     root.append(el('div', { class: 'empty-chart', text: 'No data in this range yet' }));
@@ -310,11 +596,6 @@ function renderLineChart(root, opts) {
   const H = root.clientHeight || 240;
   const m = { l: 30, r: 10, t: 10, b: 24 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
-
-  let vmax = 0;
-  for (const s of series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
-  const ystep = niceStep(Math.max(1, vmax / 4));
-  const ymax = Math.max(ystep * 4, Math.ceil(vmax / ystep) * ystep);
 
   const x = (t) => m.l + ((t - from) / (to - from)) * pw;
   const y = (v) => m.t + ph - (v / ymax) * ph;
@@ -347,29 +628,38 @@ function renderLineChart(root, opts) {
     svg.append(t);
   });
 
-  // lines, broken wherever there is missing data
-  for (const s of series) {
+  // lines, broken wherever there is missing data; clipped to the plot while the domain slides
+  const clipId = `${root.id}-clip`;
+  const clip = sv('clipPath', { id: clipId });
+  clip.append(sv('rect', { x: m.l, y: 0, width: pw, height: m.t + ph + 1 }));
+  svg.append(clip);
+  const plot = sv('g', { 'clip-path': `url(#${clipId})` });
+  svg.append(plot);
+
+  series.forEach((s, k) => {
+    const vals = f.vals[k];
     let line = '', area = '', segStart = null, prev = null;
     const closeArea = () => {
       if (s.area && segStart !== null) area += `L${x(prev.t)},${y(0)}L${x(segStart.t)},${y(0)}Z`;
     };
-    for (const p of s.pts) {
+    s.pts.forEach((p, i) => {
+      const py = y(vals[i]);
       const gap = !prev || p.t - prev.t > step * 2.5;
       if (gap) {
         closeArea();
-        line += `M${x(p.t)},${y(p.v)}`;
-        if (s.area) area += `M${x(p.t)},${y(p.v)}`;
+        line += `M${x(p.t)},${py}`;
+        if (s.area) area += `M${x(p.t)},${py}`;
         segStart = p;
       } else {
-        line += `L${x(p.t)},${y(p.v)}`;
-        if (s.area) area += `L${x(p.t)},${y(p.v)}`;
+        line += `L${x(p.t)},${py}`;
+        if (s.area) area += `L${x(p.t)},${py}`;
       }
       prev = p;
-    }
+    });
     closeArea();
-    if (s.area) svg.append(sv('path', { d: area, class: `area-${s.cls}` }));
-    svg.append(sv('path', { d: line, class: `line-${s.cls}` }));
-  }
+    if (s.area) plot.append(sv('path', { d: area, class: `area-${s.cls}` }));
+    plot.append(sv('path', { d: line, class: `line-${s.cls}` }));
+  });
 
   // crosshair + tooltip
   const cross = sv('line', { y1: m.t, y2: m.t + ph, class: 'crosshair', visibility: 'hidden' });
@@ -398,7 +688,7 @@ function renderLineChart(root, opts) {
     cross.setAttribute('visibility', 'visible');
     series.forEach((s, k) => {
       markers[k].setAttribute('cx', px);
-      markers[k].setAttribute('cy', y(s.pts[i].v));
+      markers[k].setAttribute('cy', y(f.vals[k][i]));
       markers[k].setAttribute('visibility', 'visible');
     });
     const rows = series.map((s) => ({
@@ -423,24 +713,50 @@ function renderLineChart(root, opts) {
 
 /* ---------- daily bar chart ---------- */
 
-// days: Map<'YYYY-MM-DD', number>; one bar per day for the last n days, ending today.
-function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String(v) } = {}) {
-  redraws.set(root, () => renderDailyBars(root, days, describe, { n, fmtTick }));
-  root.replaceChildren();
+function barTarget(vals) {
+  const vmax = Math.max(...vals);
+  const ystep = vmax > 0 ? niceStep(vmax / 4) : 1;
+  const ymax = vmax > 0 ? Math.ceil(vmax / ystep) * ystep : 4;
+  return { vals, ymax, ystep };
+}
 
+// days: Map<'YYYY-MM-DD', number>; one bar per day for the last n days, ending today.
+// With animate, bars and the scale grow/shrink from the previous drawing.
+function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String(v), animate = false } = {}) {
   const end = todayStr();
   const dates = [];
   for (let i = n - 1; i >= 0; i--) dates.push(addDays(end, -i));
   const vals = dates.map((d) => days.get(d) || 0);
+  const target = barTarget(vals);
+  const ctx = { dates, vals, describe, n, fmtTick };
 
+  const prev = chartPrev.get(root);
+  chartPrev.set(root, { dates, frame: target });
+  redraws.set(root, () => drawDailyBars(root, ctx, target));
+
+  const old = prev ? new Map(prev.dates.map((d, i) => [d, prev.frame.vals[i]])) : null;
+  const startVals = old ? dates.map((d) => old.get(d) ?? 0) : null;
+  const same = startVals && startVals.every((v, i) => Math.abs(v - vals[i]) < 1e-9);
+  if (!animate || !prev || same) {
+    stopTween(root);
+    drawDailyBars(root, ctx, target);
+    return;
+  }
+  const start = barTarget(startVals);
+  tween(root, (e) => drawDailyBars(root, ctx, {
+    vals: vals.map((v, i) => lerp(startVals[i], v, e)),
+    ymax: lerp(start.ymax, target.ymax, e),
+    ystep: e < 0.5 ? start.ystep : target.ystep,
+  }));
+}
+
+function drawDailyBars(root, { dates, vals, describe, n, fmtTick }, f) {
+  root.replaceChildren();
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 200;
   const m = { l: 34, r: 4, t: 10, b: 24 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
-
-  const vmax = Math.max(...vals);
-  const ystep = vmax > 0 ? niceStep(vmax / 4) : 1;
-  const ymax = vmax > 0 ? Math.ceil(vmax / ystep) * ystep : 4;
+  const { ymax, ystep } = f;
   const y = (v) => m.t + ph - (v / ymax) * ph;
 
   const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Activity per day, last ${n} days` });
@@ -459,8 +775,7 @@ function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String
 
   dates.forEach((d, i) => {
     const cx = m.l + slot * (i + 0.5);
-    const v = vals[i];
-    const top = y(v), base = y(0);
+    const top = Math.max(m.t, y(f.vals[i])), base = y(0);
     const h = base - top;
     if (h > 0.5) {
       // rounded top, square base
@@ -513,12 +828,17 @@ new ResizeObserver(() => {
   resizeTimer = setTimeout(() => {
     for (const [root, redraw] of redraws) {
       if (!root.isConnected) redraws.delete(root);
-      else if (root.offsetParent) redraw();
+      else if (root.offsetParent && !tweens.has(root)) redraw();
     }
   }, 120);
 }).observe(document.body);
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function withAlpha(hex, a) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
 
 /* ---------- segmented controls ---------- */
 
@@ -581,17 +901,55 @@ function renderLive() {
     + (last ? ` · last check ${fmt(last.ts, { hour: 'numeric', minute: '2-digit' })}` : '');
 }
 
+function makeChip(p) {
+  const chip = el('a', { class: 'chip', href: `#/player/${p.uuid}` },
+    headImg(p.name, 24),
+    el('span', { class: 'chip-name', text: p.name }),
+    el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
+  );
+  chip.dataset.uuid = p.uuid;
+  return chip;
+}
+
+// The player disintegrates into the page in pixels, then the gap closes.
+function removeChip(chip) {
+  chip.classList.add('leaving');
+  const list = chip.parentNode;
+  const muted = [cssVar('--ink-2'), cssVar('--muted'), cssVar('--axis')];
+  pixelTiles({
+    host: list, target: chip, mode: 'cover', color: cssVar('--page'),
+    tile: 3, pad: 2, duration: 700, sweep: 0.6,
+    spark: { chance: 0.12, colors: muted, vx: [10, 50], vy: [-35, -5], life: [400, 800], size: [1, 2] },
+    onDone: () => {
+      chip.style.width = `${chip.offsetWidth}px`;
+      chip.classList.add('collapsing');
+      requestAnimationFrame(() => chip.classList.add('collapsed'));
+      setTimeout(() => chip.remove(), 260);
+    },
+  });
+}
+
 function renderOnlineChips() {
   const list = $('#online-list');
-  list.replaceChildren(
-    ...state.status.online.map((p) =>
-      el('a', { class: 'chip', href: `#/player/${p.uuid}` },
-        headImg(p.name, 24),
-        el('span', { text: p.name }),
-        el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
-      )
-    )
-  );
+  const animate = live();
+  const current = new Map([...list.querySelectorAll('.chip:not(.leaving)')].map((c) => [c.dataset.uuid, c]));
+  const wanted = new Set(state.status.online.map((p) => p.uuid));
+
+  for (const [uuid, chip] of current) {
+    if (wanted.has(uuid)) continue;
+    if (animate) removeChip(chip);
+    else chip.remove();
+  }
+  for (const p of state.status.online) {
+    const existing = current.get(p.uuid);
+    if (existing) {
+      existing.querySelector('.chip-name').textContent = p.name;
+      continue;
+    }
+    const chip = makeChip(p);
+    list.append(chip);
+    if (animate) chip.classList.add('chip-enter');
+  }
 
   const warn = $('#sample-warning');
   const last = state.status.last;
@@ -612,7 +970,8 @@ function renderTiles() {
   const st = state.status;
   const last = st.last;
   const fresh = last && nowSec() - last.ts <= 300;
-  $('#t-online').textContent = fresh ? (last.up ? last.online : 'Offline') : '–';
+  const animate = live();
+  setCounter($('#t-online'), fresh ? (last.up ? String(last.online) : 'Offline') : '–', fresh && last.up ? last.online : null, animate);
   $('#t-online-sub').textContent = fresh && last.up && last.max ? `of ${last.max} slots` : fresh ? '' : 'no recent data';
 
   const today = todayStr();
@@ -622,9 +981,9 @@ function renderTiles() {
     if (hourInfo(ts).date === today) peak = Math.max(peak, pk);
     if (ts >= weekAgo) weekMinutes += sum;
   }
-  $('#t-peak').textContent = peak;
-  $('#t-week').textContent = fmtHours(weekMinutes / 60);
-  $('#t-players').textContent = st.players_total.toLocaleString();
+  setCounter($('#t-peak'), String(peak), peak, animate);
+  setCounter($('#t-week'), fmtHours(weekMinutes / 60), weekMinutes, animate);
+  setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, animate);
 }
 
 function renderServerHeatmap() {
@@ -639,7 +998,7 @@ function renderServerHeatmap() {
   renderDailyBars($('#heatmap'), days, (d, v) => [
     { value: v ? `${fmtHours(v)} player-hours` : 'No activity' },
     { label: `${fmtDay(d)}${peaks.get(d) ? ` · peak ${peaks.get(d)} online` : ''}` },
-  ], { fmtTick: (v) => `${v}h` });
+  ], { fmtTick: (v) => `${v}h`, animate: live() });
 }
 
 function renderServerWeekGrid() {
@@ -656,7 +1015,7 @@ function renderServerWeekGrid() {
   renderWeekGrid($('#weekgrid'), avg, (v, label) => [
     { value: `${v.toFixed(v < 10 ? 1 : 0)} players`, label: 'avg' },
     { label: `${label} · last 90 days` },
-  ]);
+  ], { animate: live() });
 }
 
 async function loadTimeline() {
@@ -693,7 +1052,8 @@ async function loadTimeline() {
       el('span', {}, el('span', { class: 'key', style: `background:${c2}` }), 'Peak online')
     );
   }
-  renderLineChart($('#timeline'), opts);
+  opts.key = state.tlRange;
+  renderLineChart($('#timeline'), opts, { animate: live() });
 }
 
 async function loadLeaderboard() {
@@ -707,6 +1067,9 @@ async function loadLeaderboard() {
   }
   const top = r.players[0].secs || 1;
   const onlineNow = new Set(state.status.online.map((p) => p.uuid));
+  const prev = state.lbPrev?.range === state.lbRange ? state.lbPrev.secs : null;
+  state.lbPrev = { range: state.lbRange, secs: new Map(r.players.map((p) => [p.uuid, p.secs])) };
+  const changed = [];
   const tbody = el('tbody');
   r.players.slice(0, 25).forEach((p, i) => {
     const link = el('a', { href: `#/player/${p.uuid}`, text: p.name });
@@ -721,6 +1084,7 @@ async function loadLeaderboard() {
     );
     tr.addEventListener('click', (e) => { if (e.target !== link) location.hash = `#/player/${p.uuid}`; });
     tbody.append(tr);
+    if (prev && prev.get(p.uuid) !== p.secs) changed.push(tr);
   });
   root.replaceChildren(el('table', {},
     el('thead', {}, el('tr', {},
@@ -728,6 +1092,17 @@ async function loadLeaderboard() {
     )),
     tbody
   ));
+
+  // Updated rows get a blue tint that dissolves away in sparkly pixels.
+  if (!live()) return;
+  const blue = cssVar('--series-1');
+  for (const tr of changed) {
+    pixelTiles({
+      host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.2),
+      tile: 4, hold: 500, duration: 900, sweep: 0.3,
+      spark: { chance: 0.06, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
+    });
+  }
 }
 
 async function loadStatus() {
@@ -821,11 +1196,13 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   let week = 0;
   for (const [s, e] of sessions) if (e > weekAgo) week += e - Math.max(s, weekAgo);
 
-  $('#p-total').textContent = dur(total);
+  const animate = live() && state.playerShown === player.uuid;
+  state.playerShown = player.uuid;
+  setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the last 7 days`;
-  $('#p-sessions').textContent = sessions.length.toLocaleString();
+  setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
   $('#p-avg').textContent = sessions.length ? `avg ${dur(total / sessions.length)}` : '';
-  $('#p-longest').textContent = dur(longest[0]);
+  setCounter($('#p-longest'), dur(longest[0]), longest[0], animate);
   $('#p-longest-sub').textContent = longest[1] ? fmt(longest[1], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   $('#p-first').textContent = fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' });
   $('#p-last').textContent = fmt(player.first_seen, { hour: 'numeric', minute: '2-digit' });
@@ -834,11 +1211,11 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   renderDailyBars($('#p-heatmap'), perDayHours, (d, v) => [
     { value: v ? dur(v * 3600) : 'Didn’t play' },
     { label: fmtDay(d) },
-  ], { fmtTick: (v) => `${v}h` });
+  ], { fmtTick: (v) => `${v}h`, animate });
   renderWeekGrid($('#p-weekgrid'), grid, (v, label) => [
     { value: v ? dur(v) : 'Never', label: v ? 'total' : null },
     { label },
-  ]);
+  ], { animate });
 
   const recent = sessions.slice(-15).reverse();
   const root = $('#p-recent');
@@ -892,6 +1269,10 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // Live updates: re-render everything shortly after each once-a-minute server check,
 // while the tab is visible. Fetches are incremental, so this stays cheap.
 let refreshing = false;
+// Effects only play for automatic updates, not first loads or range changes.
+function live() {
+  return refreshing && !reducedMotion();
+}
 async function refresh() {
   if (document.hidden || refreshing) return;
   refreshing = true;
