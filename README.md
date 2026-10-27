@@ -38,3 +38,6 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   `enable-query=true` in `server.properties` so mcstatus.io can read the full player list.
 - Time played is counted in 1-minute steps. A player missing for up to 3.5 minutes stays in the same session.
 - Usage on Cloudflare's free tier: about 1,440 Cron runs per day, plus a few D1 rows written per check (1 per player).
+
+
+67
