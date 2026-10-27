@@ -23,7 +23,25 @@ function sv(tag, attrs = {}) {
   return n;
 }
 
-const head = (uuid, size) => `https://mc-heads.net/avatar/${encodeURIComponent(uuid)}/${size}`;
+// Looked up by name: servers in offline mode (or query-only player lists) report
+// made-up v3 UUIDs that skin services don't know, which renders everyone as Steve.
+const head = (name, size) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/${size}`;
+const headFallback = (name, size) => `https://minotar.net/helm/${encodeURIComponent(name)}/${size}`;
+
+// One-shot fallback to a second skin service if the first fails to load.
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.name || img.dataset.fellBack) return;
+  img.dataset.fellBack = '1';
+  img.src = headFallback(img.dataset.name, img.dataset.size);
+}, true);
+
+function headImg(name, size, attrs = {}) {
+  const img = el('img', { src: head(name, size), alt: '', loading: 'lazy', ...attrs });
+  img.dataset.name = name;
+  img.dataset.size = size;
+  return img;
+}
 
 /* ---------- time helpers (everything shown in the server's configured zone) ---------- */
 
@@ -476,7 +494,7 @@ function renderOnlineChips() {
   list.replaceChildren(
     ...state.status.online.map((p) =>
       el('a', { class: 'chip', href: `#/player/${p.uuid}` },
-        el('img', { src: head(p.uuid, 24), alt: '', loading: 'lazy' }),
+        headImg(p.name, 24),
         el('span', { text: p.name }),
         el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
       )
@@ -602,7 +620,7 @@ async function loadLeaderboard() {
     const tr = el('tr', { class: 'link' },
       el('td', { class: 'rank', text: String(i + 1) }),
       el('td', {},
-        el('div', { class: 'pname' }, el('img', { src: head(p.uuid, 22), alt: '', loading: 'lazy' }), link),
+        el('div', { class: 'pname' }, headImg(p.name, 22), link),
         el('div', { class: 'bar', style: `width:${Math.max(1, (p.secs / top) * 100)}%` })
       ),
       el('td', { class: 'num', text: dur(p.secs) }),
@@ -658,7 +676,11 @@ async function showPlayer(uuid) {
   document.title = `${player.name} · Server Stats`;
 
   $('#p-name').textContent = player.name;
-  $('#p-head').src = head(player.uuid, 64);
+  const ph = $('#p-head');
+  delete ph.dataset.fellBack;
+  ph.dataset.name = player.name;
+  ph.dataset.size = 64;
+  ph.src = head(player.name, 64);
 
   const sessions = r.sessions.map(([s, e]) => [s, e + r.poll_seconds]);
   const lastTs = state.status.last?.ts;
