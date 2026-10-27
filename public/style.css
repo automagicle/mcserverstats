@@ -364,3 +364,14 @@ tr.link:hover td { background: var(--hover); }
   .chip-enter { animation: none; }
   .odo-strip { transition: none !important; }
 }
+
+/* ---------- data coverage ---------- */
+
+.card-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.data-note { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
+.data-note.warn { color: var(--critical); }
+.warn-icon { flex: none; position: relative; top: 1px; }
+
+.nodata-fill { fill: var(--surface-2); opacity: 0.55; }
+.nodata-line { stroke: var(--axis); stroke-width: 1; opacity: 0.7; }
+.nodata-text { fill: var(--muted); opacity: 0.8; }

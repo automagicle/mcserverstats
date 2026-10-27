@@ -528,6 +528,26 @@ function renderWeekGrid(root, grid, describe, { animate = false } = {}) {
   });
 }
 
+/* ---------- "no data yet" block ---------- */
+
+// A quiet grey rectangle with sparse diagonal lines, covering x0..x1 of a plot.
+function noDataBlock(svg, parent, id, x0, x1, top, height) {
+  const w = x1 - x0;
+  if (w < 1) return;
+  const pattern = sv('pattern', { id, width: 7, height: 7, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
+  pattern.append(sv('line', { x1: 0, y1: 0, x2: 0, y2: 7, class: 'nodata-line' }));
+  svg.append(pattern);
+  parent.append(
+    sv('rect', { x: x0, y: top, width: w, height, class: 'nodata-fill' }),
+    sv('rect', { x: x0, y: top, width: w, height, fill: `url(#${id})` })
+  );
+  if (w >= 70) {
+    const t = sv('text', { x: x0 + w / 2, y: top + 16, 'text-anchor': 'middle', class: 'axis-text nodata-text' });
+    t.textContent = 'No data yet';
+    parent.append(t);
+  }
+}
+
 /* ---------- line chart with crosshair ---------- */
 
 function niceStep(raw) {
@@ -636,6 +656,11 @@ function drawLineChart(root, opts, f) {
   const plot = sv('g', { 'clip-path': `url(#${clipId})` });
   svg.append(plot);
 
+  // hatched block for the time before tracking started
+  if (opts.dataStart && opts.dataStart > from) {
+    noDataBlock(svg, plot, `${root.id}-hatch`, m.l, Math.min(m.l + pw, x(opts.dataStart)), m.t, ph);
+  }
+
   series.forEach((s, k) => {
     const vals = f.vals[k];
     let line = '', area = '', segStart = null, prev = null;
@@ -728,7 +753,8 @@ function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String
   for (let i = n - 1; i >= 0; i--) dates.push(addDays(end, -i));
   const vals = dates.map((d) => days.get(d) || 0);
   const target = barTarget(vals);
-  const ctx = { dates, vals, describe, n, fmtTick };
+  const startDate = state.dataStart ? hourInfo(state.dataStart).date : null;
+  const ctx = { dates, vals, describe, n, fmtTick, startDate };
 
   const prev = chartPrev.get(root);
   chartPrev.set(root, { dates, frame: target });
@@ -750,7 +776,7 @@ function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String
   }));
 }
 
-function drawDailyBars(root, { dates, vals, describe, n, fmtTick }, f) {
+function drawDailyBars(root, { dates, vals, describe, n, fmtTick, startDate }, f) {
   root.replaceChildren();
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 200;
@@ -772,6 +798,10 @@ function drawDailyBars(root, { dates, vals, describe, n, fmtTick }, f) {
   const bw = Math.max(4, Math.min(40, slot - 2 * Math.max(2, slot * 0.15)));
   const labelEvery = slot >= 44 ? 1 : slot >= 22 ? 2 : 3;
   const bars = [];
+
+  // hatched block over the days before tracking started
+  const emptyDays = startDate ? dates.filter((d) => d < startDate).length : 0;
+  if (emptyDays) noDataBlock(svg, svg, `${root.id}-hatch`, m.l, m.l + slot * emptyDays, m.t, ph);
 
   dates.forEach((d, i) => {
     const cx = m.l + slot * (i + 0.5);
@@ -844,16 +874,19 @@ function withAlpha(hex, a) {
 
 function segmented(root, initial, onChange) {
   let value = initial;
+  const mark = () => {
+    for (const b of root.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === value));
+  };
   for (const b of root.querySelectorAll('button')) {
-    b.setAttribute('aria-pressed', String(b.dataset.v === value));
     b.addEventListener('click', () => {
       if (b.dataset.v === value) return;
       value = b.dataset.v;
-      for (const o of root.querySelectorAll('button')) o.setAttribute('aria-pressed', String(o === b));
+      mark();
       onChange(value);
     });
   }
-  return () => value;
+  mark();
+  return { set(v) { value = v; mark(); } };
 }
 
 /* ---------- app state ---------- */
@@ -864,11 +897,28 @@ const state = {
   snaps: { since: 0, rows: [] }, // cached minute rows [ts, up, online] from `since` to now
   tlRange: '24h',
   lbRange: '30d',
+  dataStart: null, // first recorded check (unix seconds)
+  rangesChosen: false,
 };
 
 const TL_DAYS = { '6h': 0.25, '12h': 0.5, '24h': 1, '7d': 7, '30d': 30, '90d': 90 };
 const LB_DAYS = { '24h': 1, '7d': 7, '30d': 30, all: null };
 const HOURLY_DAYS = 92; // longest range anything on the page needs
+const LB_ORDER = ['24h', '7d', '30d', 'all'];
+
+const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
+
+// Smallest chart range that shows all the data, capped at 24h.
+function fittingTimelineRange() {
+  const span = dataSpan();
+  return span <= 6 * 3600 ? '6h' : span <= 12 * 3600 ? '12h' : '24h';
+}
+
+// Smallest leaderboard range that covers all the data.
+function fittingLeaderboardRange() {
+  const span = dataSpan();
+  return LB_ORDER.find((k) => LB_DAYS[k] == null || span <= LB_DAYS[k] * 86400);
+}
 
 function showError(msg) {
   const e = $('#error');
@@ -1053,10 +1103,36 @@ async function loadTimeline() {
     );
   }
   opts.key = state.tlRange;
+  opts.dataStart = state.dataStart;
   renderLineChart($('#timeline'), opts, { animate: live() });
 }
 
+// "Data starts on …" beside the heading; red with a warning icon when the range reaches back before it.
+function renderLeaderboardNote() {
+  const note = $('#lb-note');
+  if (!state.dataStart) {
+    note.replaceChildren();
+    return;
+  }
+  const text = `Data starts on ${fmt(state.dataStart, { month: 'short', day: 'numeric' })}`;
+  const warn = LB_ORDER.indexOf(state.lbRange) > LB_ORDER.indexOf(fittingLeaderboardRange());
+  note.classList.toggle('warn', warn);
+  note.title = warn ? 'This range reaches back further than the data does, so totals cover less time than it suggests.' : '';
+  note.replaceChildren(...(warn ? [warningIcon()] : []), text);
+}
+
+function warningIcon() {
+  const svg = sv('svg', { width: 13, height: 13, viewBox: '0 0 16 16', 'aria-hidden': 'true', class: 'warn-icon' });
+  svg.append(
+    sv('path', { d: 'M8 1.8 15 14.2H1z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }),
+    sv('path', { d: 'M8 6.2v3.6', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round' }),
+    sv('circle', { cx: 8, cy: 11.9, r: 0.95, fill: 'currentColor' })
+  );
+  return svg;
+}
+
 async function loadLeaderboard() {
+  renderLeaderboardNote();
   const days = LB_DAYS[state.lbRange];
   const from = days ? nowSec() - days * 86400 : 1;
   const r = await api(`/api/leaderboard?from=${from}`);
@@ -1099,7 +1175,7 @@ async function loadLeaderboard() {
   for (const tr of changed) {
     pixelTiles({
       host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.2),
-      tile: 4, hold: 500, duration: 900, sweep: 0.3,
+      tile: 4, hold: 120, duration: 900, sweep: 0.3,
       spark: { chance: 0.06, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
     });
   }
@@ -1109,6 +1185,14 @@ async function loadStatus() {
   state.status = await api('/api/status');
   setTz(state.status.tz);
   POLL = state.status.poll_seconds;
+  state.dataStart = state.status.data_start;
+  if (!state.rangesChosen) {
+    state.rangesChosen = true;
+    state.tlRange = fittingTimelineRange();
+    state.lbRange = fittingLeaderboardRange();
+    tlSeg.set(state.tlRange);
+    lbSeg.set(state.lbRange);
+  }
   renderLive();
 }
 
@@ -1258,8 +1342,8 @@ async function route() {
   }
 }
 
-segmented($('#tl-range'), state.tlRange, (v) => { state.tlRange = v; loadTimeline().catch((e) => showError(e.message)); });
-segmented($('#lb-range'), state.lbRange, (v) => { state.lbRange = v; loadLeaderboard().catch((e) => showError(e.message)); });
+const tlSeg = segmented($('#tl-range'), state.tlRange, (v) => { state.tlRange = v; loadTimeline().catch((e) => showError(e.message)); });
+const lbSeg = segmented($('#lb-range'), state.lbRange, (v) => { state.lbRange = v; loadLeaderboard().catch((e) => showError(e.message)); });
 
 window.addEventListener('hashchange', route);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

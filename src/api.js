@@ -37,6 +37,7 @@ export async function handleApi(request, env, url) {
       online = results;
     }
     const totals = await db.prepare('SELECT COUNT(*) AS players FROM players').first();
+    const first = await db.prepare('SELECT MIN(ts) AS ts FROM snapshots').first();
     return json({
       tz: env.TZ_NAME || 'America/Los_Angeles',
       poll_seconds: POLL_SECONDS,
@@ -44,6 +45,7 @@ export async function handleApi(request, env, url) {
       last,
       online,
       players_total: totals.players,
+      data_start: first?.ts ?? null,
     });
   }
 
