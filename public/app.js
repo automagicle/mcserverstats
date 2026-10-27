@@ -25,8 +25,9 @@ function sv(tag, attrs = {}) {
 
 // Looked up by name: servers in offline mode (or query-only player lists) report
 // made-up v3 UUIDs that skin services don't know, which renders everyone as Steve.
-const head = (name, size) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/${size}`;
-const headFallback = (name, size) => `https://minotar.net/helm/${encodeURIComponent(name)}/${size}`;
+// minotar renders current skins reliably (incl. slim/newer skins mc-heads shows as Steve).
+const head = (name, size) => `https://minotar.net/helm/${encodeURIComponent(name)}/${size}`;
+const headFallback = (name, size) => `https://mc-heads.net/avatar/${encodeURIComponent(name)}/${size}`;
 
 // One-shot fallback to a second skin service if the first fails to load.
 document.addEventListener('error', (e) => {
@@ -333,7 +334,7 @@ function renderLineChart(root, opts) {
   const candidates = [];
   for (let h = Math.ceil(from / 3600) * 3600; h <= to; h += 3600) {
     const info = hourInfo(h);
-    if (days <= 1.5 ? info.hour % 3 === 0 : info.hour === 0) candidates.push(h);
+    if (days <= 0.6 || (days <= 1.5 ? info.hour % 3 === 0 : info.hour === 0)) candidates.push(h);
   }
   const maxTicks = Math.max(2, Math.floor(pw / 80));
   const every = Math.max(1, Math.ceil(candidates.length / maxTicks));
@@ -540,13 +541,14 @@ function segmented(root, initial, onChange) {
 const state = {
   status: null,
   hourly: [], // [hour_ts, samples, up_samples, online_sum, peak]
-  hourlyLoadedAt: 0,
+  snaps: { since: 0, rows: [] }, // cached minute rows [ts, up, online] from `since` to now
   tlRange: '24h',
   lbRange: '30d',
 };
 
-const TL_DAYS = { '24h': 1, '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
-const LB_DAYS = { '7d': 7, '30d': 30, all: null };
+const TL_DAYS = { '6h': 0.25, '12h': 0.5, '24h': 1, '7d': 7, '30d': 30, '90d': 90 };
+const LB_DAYS = { '24h': 1, '7d': 7, '30d': 30, all: null };
+const HOURLY_DAYS = 92; // longest range anything on the page needs
 
 function showError(msg) {
   const e = $('#error');
@@ -667,10 +669,10 @@ async function loadTimeline() {
   let opts;
 
   if (days <= 7) {
-    const r = await api(`/api/snapshots?from=${from}&to=${to}`);
+    const rows = await loadSnapshots(from);
     opts = {
       from, to, step: POLL,
-      series: [{ name: 'online', cls: '1', color: c1, area: true, pts: r.rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
+      series: [{ name: 'online', cls: '1', color: c1, area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
       fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
       fmtTime: (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     };
@@ -735,11 +737,28 @@ async function loadStatus() {
   renderLive();
 }
 
-async function loadHourly(force) {
-  if (!force && Date.now() - state.hourlyLoadedAt < 10 * 60_000) return;
-  const r = await api(`/api/hourly?from=${nowSec() - 371 * 86400}`);
-  state.hourly = r.rows;
-  state.hourlyLoadedAt = Date.now();
+// After the first load, only rows from the latest (still-filling) hour onward are re-fetched.
+async function loadHourly() {
+  const since = nowSec() - HOURLY_DAYS * 86400;
+  if (!state.hourly.length) {
+    state.hourly = (await api(`/api/hourly?from=${since}`)).rows;
+    return;
+  }
+  const from = state.hourly.at(-1)[0];
+  const fresh = (await api(`/api/hourly?from=${from}`)).rows;
+  state.hourly = state.hourly.filter((r) => r[0] >= since && r[0] < from).concat(fresh);
+}
+
+// Minute rows, fetching only what's newer than the cache unless the range grew.
+async function loadSnapshots(from) {
+  const s = state.snaps;
+  if (!s.rows.length || from < s.since) {
+    state.snaps = { since: from, rows: (await api(`/api/snapshots?from=${from}`)).rows };
+  } else {
+    const fresh = (await api(`/api/snapshots?from=${s.rows.at(-1)[0] + 1}`)).rows;
+    s.rows.push(...fresh);
+  }
+  return state.snaps.rows.filter((r) => r[0] >= from);
 }
 
 async function showHome() {
@@ -757,10 +776,10 @@ async function showHome() {
 
 /* ---------- player page ---------- */
 
-async function showPlayer(uuid) {
+async function showPlayer(uuid, { refresh = false } = {}) {
   $('#view-home').hidden = true;
   $('#view-player').hidden = false;
-  window.scrollTo(0, 0);
+  if (!refresh) window.scrollTo(0, 0);
   await loadStatus();
   const r = await api(`/api/player/${encodeURIComponent(uuid)}`);
   const { player } = r;
@@ -768,10 +787,12 @@ async function showPlayer(uuid) {
 
   $('#p-name').textContent = player.name;
   const ph = $('#p-head');
-  delete ph.dataset.fellBack;
-  ph.dataset.name = player.name;
-  ph.dataset.size = 64;
-  ph.src = head(player.name, 64);
+  if (ph.dataset.name !== player.name) {
+    delete ph.dataset.fellBack;
+    ph.dataset.name = player.name;
+    ph.dataset.size = 64;
+    ph.src = head(player.name, 64);
+  }
 
   const sessions = r.sessions.map(([s, e]) => [s, e + r.poll_seconds]);
   const lastTs = state.status.last?.ts;
@@ -868,15 +889,32 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
   if (!$('#view-home').hidden) loadTimeline().catch(() => {});
 });
 
-// Light refresh while the tab is visible: status every minute, the 24h chart with it.
-setInterval(async () => {
-  if (document.hidden || $('#view-home').hidden) return;
+// Live updates: re-render everything shortly after each once-a-minute server check,
+// while the tab is visible. Fetches are incremental, so this stays cheap.
+let refreshing = false;
+async function refresh() {
+  if (document.hidden || refreshing) return;
+  refreshing = true;
   try {
-    await loadStatus();
-    renderTiles();
-    renderOnlineChips();
-    if (state.tlRange === '24h') await loadTimeline();
-  } catch { /* next tick will retry */ }
-}, 60_000);
+    const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
+    if (m) await showPlayer(m[1], { refresh: true });
+    else await showHome();
+    showError('');
+  } catch (err) {
+    if (err instanceof AuthError) showError('Your login expired. Reload the page to sign in again.');
+    // other errors: keep showing the last good data; the next tick retries
+  } finally {
+    refreshing = false;
+  }
+}
+
+function scheduleRefresh() {
+  const ms = Date.now() % 60_000;
+  const wait = (20_000 - ms + 60_000) % 60_000 || 60_000; // ~20s past each minute
+  setTimeout(async () => { await refresh(); scheduleRefresh(); }, wait);
+}
+
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+scheduleRefresh();
 
 route();
