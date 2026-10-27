@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mcstats",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+
+  // Only the workers.dev URL, which Cloudflare Access protects. Preview URLs
+  // would be a second, unprotected way in.
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // Static UI from ./public. Only /api/* runs the Worker (and requires login).
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Check the server every minute (mcstatus.io caches for ~60s anyway).
+  "triggers": { "crons": ["* * * * *"] },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mcstats",
+      "database_id": "REPLACE_WITH_ID_FROM_wrangler_d1_create",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // MC_SERVER is a secret (wrangler secret put MC_SERVER), never put it here.
+  "vars": {
+    "TZ_NAME": "America/Los_Angeles",
+    // Filled in after enabling Cloudflare Access on the workers.dev URL.
+    // Until both are set, every /api/* request is refused.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+
+  "observability": { "enabled": true }
+}

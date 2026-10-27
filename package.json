@@ -1,0 +1,15 @@
+{
+  "name": "mcserverstats",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply mcstats --local",
+    "db:migrate:remote": "wrangler d1 migrations apply mcstats --remote",
+    "seed:local": "node scripts/seed-fake.mjs > .wrangler/seed.sql && wrangler d1 execute mcstats --local --file .wrangler/seed.sql"
+  },
+  "devDependencies": {
+    "wrangler": "4.150.0"
+  }
+}
