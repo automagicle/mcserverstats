@@ -1492,20 +1492,15 @@ async function loadTimeline(slide = 0) {
   if (minuteData) {
     const pts = rows.map(([t, up, v]) => ({ t, v, down: !up }));
     const series = [{ name: 'online', cls: '1', color: c1, area: true, pts }];
-    // Trend line for ranges longer than 6h: 30-minute average up to a day and a half, hourly beyond.
-    const span = to - from;
-    const avgWindow = span > 6 * 3600 + 60 ? (span <= 36 * 3600 ? 1800 : 3600) : 0;
-    const avgName = avgWindow === 1800 ? 'avg (30 min)' : 'avg (1 hour)';
-    if (avgWindow) series.push({ name: avgName, cls: '2', color: c2, pts: rollingAverage(pts, avgWindow) });
+    // Trend line (1-hour average) for ranges longer than 6h.
+    const trend = to - from > 6 * 3600 + 60;
+    if (trend) series.push({ name: 'avg (1 hour)', cls: '2', color: c2, pts: rollingAverage(pts, 3600) });
     opts = {
       from, to, step: POLL, series, whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? `${v} ${v === 1 ? 'player' : 'players'}` : v.toFixed(1)),
       fmtTime: (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     };
-    legend.replaceChildren(...(avgWindow ? [
-      key(c1, 'Players online'),
-      key(c2, `Average online (${avgWindow === 1800 ? '30 min' : '1 hour'})`),
-    ] : []));
+    legend.replaceChildren(...(trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
     const rows = await getHourlyRange(from, to);
     opts = {

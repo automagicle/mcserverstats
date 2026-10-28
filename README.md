@@ -35,8 +35,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 ## Dashboard
 
 - **Home**: live status and online players, stat tiles, players online over time, daily activity bars,
-  leaderboard, and busiest hours by weekday. The players online chart adds a moving-average trend line
-  (30 min up to 36h, 1 hour up to 8 days), switches to hourly average/peak for longer ranges, and its
+  leaderboard, and busiest hours by weekday. The players online chart adds a 1-hour moving-average trend line
+  for ranges over 6 hours, switches to hourly average/peak for longer ranges, and its
   tooltip lists who was online.
 - **Player pages**: totals, an activity chart (hourly bars for 24h, daily bars for longer ranges) with a
   when-online strip underneath, when they usually play, and recent sessions.
