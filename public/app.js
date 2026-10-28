@@ -795,22 +795,25 @@ function barScale(vals) {
 //   dataStart   hatch everything before it
 //   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
 // }
-function renderBars(root, spec, { animate = false, slide = 0 } = {}) {
+// grow: bars rise from zero (first drawing for a newly opened page).
+function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {}) {
   const old = slide ? root.firstElementChild : null;
   const target = { vals: spec.vals, ...barScale(spec.vals) };
   const prev = chartPrev.get(root);
   chartPrev.set(root, { windowKey: spec.windowKey, byKey: new Map(spec.buckets.map((b, i) => [b.key, spec.vals[i]])) });
   redraws.set(root, () => drawBars(root, spec, target));
 
-  const startVals = prev && prev.windowKey === spec.windowKey ? spec.buckets.map((b) => prev.byKey.get(b.key) ?? 0) : null;
+  if (grow && reducedMotion()) grow = false;
+  const startVals = grow ? spec.buckets.map(() => 0)
+    : prev && prev.windowKey === spec.windowKey ? spec.buckets.map((b) => prev.byKey.get(b.key) ?? 0) : null;
   const same = startVals && startVals.every((v, i) => Math.abs(v - spec.vals[i]) < 1e-9);
-  if (!animate || !startVals || same) {
+  if (!(animate || grow) || !startVals || same) {
     stopTween(root);
     drawBars(root, spec, target);
     slideIn(root, old, slide);
     return;
   }
-  const start = barScale(startVals);
+  const start = grow ? target : barScale(startVals);
   tween(root, (e) => drawBars(root, spec, {
     vals: spec.vals.map((v, i) => lerp(startVals[i], v, e)),
     ymax: lerp(start.ymax, target.ymax, e),
@@ -1323,12 +1326,15 @@ function renderLive() {
 }
 
 function makeChip(p) {
+  knownNames.set(p.uuid, p.name);
   const chip = el('a', { class: 'chip', href: `#/player/${p.uuid}` },
     headImg(p.name, 24),
     el('span', { class: 'chip-name', text: p.name }),
     el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
   );
   chip.dataset.uuid = p.uuid;
+  chip.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
+  chip.addEventListener('focus', () => prefetchPlayer(p.uuid));
   return chip;
 }
 
@@ -1570,6 +1576,9 @@ async function loadLeaderboard() {
       el('td', { class: 'num muted hide-sm', text: onlineNow.has(p.uuid) ? 'online' : ago(p.last_seen) })
     );
     tr.addEventListener('click', (e) => { if (e.target !== link) location.hash = `#/player/${p.uuid}`; });
+    tr.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
+    link.addEventListener('focus', () => prefetchPlayer(p.uuid));
+    knownNames.set(p.uuid, p.name);
     tbody.append(tr);
     if (prev && prev.get(p.uuid) !== p.secs) changed.push(tr);
   });
@@ -1661,23 +1670,81 @@ async function showHome() {
 
 /* ---------- player page ---------- */
 
+const knownNames = new Map(); // uuid -> name, from the leaderboard and chips, for the loading header
+const playerCache = new Map(); // uuid -> { at, promise }
+
+// Player data is fetched on hover, so a click usually finds it ready.
+function fetchPlayer(uuid, fresh = false) {
+  const hit = playerCache.get(uuid);
+  if (!fresh && hit && Date.now() - hit.at < 60_000) return hit.promise;
+  const promise = api(`/api/player/${encodeURIComponent(uuid)}`);
+  playerCache.set(uuid, { at: Date.now(), promise });
+  promise.catch(() => playerCache.delete(uuid));
+  return promise;
+}
+const prefetchPlayer = (uuid) => fetchPlayer(uuid).catch(() => {});
+
+function setHead(img, name) {
+  if (img.dataset.name === name) return;
+  delete img.dataset.fellBack;
+  img.dataset.name = name;
+  img.dataset.size = 64;
+  img.src = head(name, 64);
+}
+
+// Placeholders while a different player's data loads, so the last player never shows.
+function showPlayerLoading(uuid) {
+  const view = $('#view-player');
+  view.classList.remove('reveal');
+  view.classList.add('is-loading');
+  const name = knownNames.get(uuid);
+  $('#p-name').textContent = name || 'Loading…';
+  const ph = $('#p-head');
+  if (name) setHead(ph, name);
+  else { ph.removeAttribute('src'); delete ph.dataset.name; }
+  $('#p-status').textContent = 'Loading…';
+  for (const id of ['p-total', 'p-sessions', 'p-longest', 'p-first']) {
+    const n = $(`#${id}`);
+    delete n.dataset.text;
+    delete n.dataset.value;
+    n.textContent = '–';
+  }
+  for (const id of ['p-total-sub', 'p-avg', 'p-longest-sub', 'p-last', 'pa-label']) $(`#${id}`).textContent = '';
+  const chart = $('#p-heatmap');
+  stopTween(chart);
+  chartPrev.delete(chart);
+  redraws.delete(chart);
+  chart.replaceChildren(el('div', { class: 'empty-chart', text: 'Loading…' }));
+  const empty = Array.from({ length: 7 }, () => Array(24).fill(0));
+  renderWeekGrid($('#p-weekgrid'), empty, () => [{ value: 'Loading…' }]);
+  weekPrev.delete($('#p-weekgrid'));
+  $('#p-recent').replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+}
+
+let playerReq = 0;
+
 async function showPlayer(uuid, { refresh = false } = {}) {
   $('#view-home').hidden = true;
   $('#view-player').hidden = false;
   if (!refresh) window.scrollTo(0, 0);
-  await loadStatus();
-  const r = await api(`/api/player/${encodeURIComponent(uuid)}`);
+  const switching = !refresh && state.playerShown !== uuid;
+  const req = ++playerReq;
+  if (switching) {
+    state.playerShown = null;
+    state.playerData = null;
+    showPlayerLoading(uuid);
+  }
+  const [r] = await Promise.all([
+    fetchPlayer(uuid, refresh),
+    refresh || !state.status ? loadStatus() : null,
+  ]);
+  if (req !== playerReq) return; // another player was opened meanwhile
   const { player } = r;
+  knownNames.set(player.uuid, player.name);
   document.title = `${player.name} · Server Stats`;
 
   $('#p-name').textContent = player.name;
-  const ph = $('#p-head');
-  if (ph.dataset.name !== player.name) {
-    delete ph.dataset.fellBack;
-    ph.dataset.name = player.name;
-    ph.dataset.size = 64;
-    ph.src = head(player.name, 64);
-  }
+  setHead($('#p-head'), player.name);
 
   const sessions = r.sessions.map(([s, e]) => [s, e + r.poll_seconds]);
   const lastTs = state.status.last?.ts;
@@ -1717,7 +1784,18 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   $('#p-first').textContent = fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' });
   $('#p-last').textContent = fmt(player.first_seen, { hour: 'numeric', minute: '2-digit' });
 
-  renderPlayerActivity(animate);
+  // A newly opened player fades in, with the activity bars rising from zero.
+  const view = $('#view-player');
+  view.classList.remove('is-loading');
+  if (switching && !reducedMotion()) {
+    view.classList.remove('reveal');
+    void view.offsetWidth; // restart the animations
+    view.classList.add('reveal');
+    clearTimeout(showPlayer.revealTimer);
+    showPlayer.revealTimer = setTimeout(() => view.classList.remove('reveal'), 900);
+  }
+
+  renderPlayerActivity(animate, 0, switching);
   renderWeekGrid($('#p-weekgrid'), grid, (v, label) => [
     { value: v ? dur(v) : 'Never', label: v ? 'total' : null },
     { label },
@@ -1746,7 +1824,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
 }
 
 // Bars of time played per hour or day, with the when-online strip underneath.
-function renderPlayerActivity(animate = false, slide = 0) {
+function renderPlayerActivity(animate = false, slide = 0, grow = false) {
   const d = state.playerData;
   if (!d) return;
   const w = pCtl.get();
@@ -1778,7 +1856,7 @@ function renderPlayerActivity(animate = false, slide = 0) {
       const when = hourly
         ? `${fmt(b.start, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(b.start).hour)}–${hourName(hourInfo(b.end).hour)}`
         : fmtDay(b.date);
-      return [{ value: secs[i] ? dur(secs[i]) : 'Didn’t play' }, { label: when }];
+      return [{ value: secs[i] ? dur(secs[i]) : 'Offline' }, { label: when }];
     },
     strip: {
       intervals: inWindow,
@@ -1794,7 +1872,7 @@ function renderPlayerActivity(animate = false, slide = 0) {
         ];
       },
     },
-  }, { animate, slide });
+  }, { animate, slide, grow });
 }
 
 /* ---------- routing & refresh ---------- */

@@ -39,7 +39,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   for ranges over 6 hours, switches to hourly average/peak for longer ranges, and its
   tooltip lists who was online.
 - **Player pages**: totals, an activity chart (hourly bars for 24h, daily bars for longer ranges) with a
-  when-online strip underneath, when they usually play, and recent sessions.
+  when-online strip underneath, when they usually play, and recent sessions. Player data is fetched when you
+  hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Defaults are the smallest preset that covers all
   the data collected so far, and anything before tracking began is hatched out.
