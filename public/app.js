@@ -531,17 +531,19 @@ function renderWeekGrid(root, grid, describe, { animate = false } = {}) {
 /* ---------- "no data yet" block ---------- */
 
 // A quiet grey rectangle with sparse diagonal lines, covering x0..x1 of a plot.
-function noDataBlock(svg, parent, id, x0, x1, top, height) {
+function noDataBlock(svg, parent, id, x0, x1, top, height, { label = true } = {}) {
   const w = x1 - x0;
   if (w < 1) return;
-  const pattern = sv('pattern', { id, width: 7, height: 7, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
-  pattern.append(sv('line', { x1: 0, y1: 0, x2: 0, y2: 7, class: 'nodata-line' }));
-  svg.append(pattern);
+  if (!svg.querySelector(`#${CSS.escape(id)}`)) {
+    const pattern = sv('pattern', { id, width: 7, height: 7, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
+    pattern.append(sv('line', { x1: 0, y1: 0, x2: 0, y2: 7, class: 'nodata-line' }));
+    svg.append(pattern);
+  }
   parent.append(
     sv('rect', { x: x0, y: top, width: w, height, class: 'nodata-fill' }),
     sv('rect', { x: x0, y: top, width: w, height, fill: `url(#${id})` })
   );
-  if (w >= 70) {
+  if (label && w >= 70) {
     const t = sv('text', { x: x0 + w / 2, y: top + 16, 'text-anchor': 'middle', class: 'axis-text nodata-text' });
     t.textContent = 'No data yet';
     parent.append(t);
@@ -736,56 +738,76 @@ function drawLineChart(root, opts, f) {
   root.append(svg);
 }
 
-/* ---------- daily bar chart ---------- */
+/* ---------- bar chart over time buckets ---------- */
 
-function barTarget(vals) {
-  const vmax = Math.max(...vals);
+function barScale(vals) {
+  const vmax = Math.max(0, ...vals);
   const ystep = vmax > 0 ? niceStep(vmax / 4) : 1;
   const ymax = vmax > 0 ? Math.ceil(vmax / ystep) * ystep : 4;
-  return { vals, ymax, ystep };
+  return { ymax, ystep };
 }
 
-// days: Map<'YYYY-MM-DD', number>; one bar per day for the last n days, ending today.
-// With animate, bars and the scale grow/shrink from the previous drawing.
-function renderDailyBars(root, days, describe, { n = 14, fmtTick = (v) => String(v), animate = false } = {}) {
-  const end = todayStr();
-  const dates = [];
-  for (let i = n - 1; i >= 0; i--) dates.push(addDays(end, -i));
-  const vals = dates.map((d) => days.get(d) || 0);
-  const target = barTarget(vals);
-  const startDate = state.dataStart ? hourInfo(state.dataStart).date : null;
-  const ctx = { dates, vals, describe, n, fmtTick, startDate };
-
+// spec: {
+//   buckets: [{ key, start, end, date }]   contiguous time slots, one bar each
+//   vals, fmtTick, describe(i) -> tooltip rows, labels: 'hour' | 'day',
+//   windowKey   tween only between drawings of the same window
+//   dataStart   hatch everything before it
+//   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
+// }
+function renderBars(root, spec, { animate = false } = {}) {
+  const target = { vals: spec.vals, ...barScale(spec.vals) };
   const prev = chartPrev.get(root);
-  chartPrev.set(root, { dates, frame: target });
-  redraws.set(root, () => drawDailyBars(root, ctx, target));
+  chartPrev.set(root, { windowKey: spec.windowKey, byKey: new Map(spec.buckets.map((b, i) => [b.key, spec.vals[i]])) });
+  redraws.set(root, () => drawBars(root, spec, target));
 
-  const old = prev ? new Map(prev.dates.map((d, i) => [d, prev.frame.vals[i]])) : null;
-  const startVals = old ? dates.map((d) => old.get(d) ?? 0) : null;
-  const same = startVals && startVals.every((v, i) => Math.abs(v - vals[i]) < 1e-9);
-  if (!animate || !prev || same) {
+  const startVals = prev && prev.windowKey === spec.windowKey ? spec.buckets.map((b) => prev.byKey.get(b.key) ?? 0) : null;
+  const same = startVals && startVals.every((v, i) => Math.abs(v - spec.vals[i]) < 1e-9);
+  if (!animate || !startVals || same) {
     stopTween(root);
-    drawDailyBars(root, ctx, target);
+    drawBars(root, spec, target);
     return;
   }
-  const start = barTarget(startVals);
-  tween(root, (e) => drawDailyBars(root, ctx, {
-    vals: vals.map((v, i) => lerp(startVals[i], v, e)),
+  const start = barScale(startVals);
+  tween(root, (e) => drawBars(root, spec, {
+    vals: spec.vals.map((v, i) => lerp(startVals[i], v, e)),
     ymax: lerp(start.ymax, target.ymax, e),
     ystep: e < 0.5 ? start.ystep : target.ystep,
   }));
 }
 
-function drawDailyBars(root, { dates, vals, describe, n, fmtTick, startDate }, f) {
+function drawBars(root, spec, f) {
   root.replaceChildren();
+  const { buckets, fmtTick, strip } = spec;
+  const n = buckets.length;
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 200;
-  const m = { l: 34, r: 4, t: 10, b: 24 };
+  const m = { l: 34, r: 4, t: 10, b: strip ? 48 : 24 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   const { ymax, ystep } = f;
   const y = (v) => m.t + ph - (v / ymax) * ph;
+  const slot = pw / n;
+  const from = buckets[0].start, to = buckets[n - 1].end;
 
-  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Activity per day, last ${n} days` });
+  // time <-> x, linear within each slot so bars, hatching and the strip line up exactly
+  const xAt = (t) => {
+    if (t <= from) return m.l;
+    if (t >= to) return m.l + pw;
+    let lo = 0, hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (buckets[mid].start <= t) lo = mid; else hi = mid - 1;
+    }
+    const b = buckets[lo];
+    return m.l + slot * (lo + (t - b.start) / (b.end - b.start));
+  };
+  const tAt = (px) => {
+    const u = Math.min(n - 1e-9, Math.max(0, (px - m.l) / slot));
+    const i = Math.floor(u);
+    const b = buckets[i];
+    return b.start + (u - i) * (b.end - b.start);
+  };
+
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Activity over time' });
 
   for (let v = 0; v <= ymax + 1e-9; v += ystep) {
     if (v > 0) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
@@ -794,16 +816,18 @@ function drawDailyBars(root, { dates, vals, describe, n, fmtTick, startDate }, f
     svg.append(t);
   }
 
-  const slot = pw / n;
-  const bw = Math.max(4, Math.min(40, slot - 2 * Math.max(2, slot * 0.15)));
-  const labelEvery = slot >= 44 ? 1 : slot >= 22 ? 2 : 3;
+  const hatchId = `${root.id}-hatch`;
+  if (spec.dataStart && spec.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(spec.dataStart), m.t, ph);
+
+  const gap = slot >= 8 ? 2 * Math.max(2, slot * 0.15) : slot * 0.3;
+  const bw = Math.min(40, slot - gap);
+  const hourly = spec.labels === 'hour';
+  const labelEvery = hourly
+    ? (slot >= 36 ? 1 : slot >= 18 ? 2 : slot >= 12 ? 3 : 6)
+    : (slot >= 44 ? 1 : slot >= 22 ? 2 : slot >= 14 ? 3 : slot >= 7 ? 7 : 14);
   const bars = [];
 
-  // hatched block over the days before tracking started
-  const emptyDays = startDate ? dates.filter((d) => d < startDate).length : 0;
-  if (emptyDays) noDataBlock(svg, svg, `${root.id}-hatch`, m.l, m.l + slot * emptyDays, m.t, ph);
-
-  dates.forEach((d, i) => {
+  buckets.forEach((b, i) => {
     const cx = m.l + slot * (i + 0.5);
     const top = Math.max(m.t, y(f.vals[i])), base = y(0);
     const h = base - top;
@@ -819,35 +843,82 @@ function drawDailyBars(root, { dates, vals, describe, n, fmtTick, startDate }, f
       bars[i] = bar;
     }
 
-    // Only every few days is labelled on narrow screens, counted back from today.
+    // Labels are counted back from the newest slot so the latest one is always labelled.
     if ((n - 1 - i) % labelEvery === 0) {
-      const day = Number(d.slice(8));
       const t = sv('text', { x: cx, y: H - 6, 'text-anchor': 'middle', class: 'axis-text' });
-      t.textContent = i === n - 1 ? 'Today' : day === 1 || slot >= 44 || i < labelEvery ? fmtDay(d, { month: 'short', day: 'numeric' }) : String(day);
+      if (hourly) {
+        t.textContent = hourName(hourInfo(b.start).hour, true);
+      } else {
+        const day = Number(b.date.slice(8));
+        t.textContent = b.date === todayStr() ? 'Today'
+          : day === 1 || slot >= 44 || i < labelEvery || labelEvery >= 7 ? fmtDay(b.date, { month: 'short', day: 'numeric' })
+          : String(day);
+      }
       svg.append(t);
     }
 
-    const hit = sv('rect', { x: cx - slot / 2, y: m.t, width: slot, height: ph + m.b, fill: 'transparent', class: 'dbar-hit' });
+    const hit = sv('rect', { x: m.l + slot * i, y: m.t, width: slot, height: ph, fill: 'transparent', class: 'dbar-hit' });
     hit.dataset.i = i;
     svg.append(hit);
   });
   svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
+  // when-online strip, sharing the bars' time scale
+  let stripCross = null;
+  if (strip) {
+    const sy = m.t + ph + 8, sh = 14;
+    svg.append(sv('rect', { x: m.l, y: sy, width: pw, height: sh, rx: 3, class: 'strip-bg' }));
+    if (spec.dataStart && spec.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(spec.dataStart), sy, sh, { label: false });
+    for (const [a, e] of strip.intervals) {
+      const x0 = xAt(Math.max(a, from));
+      svg.append(sv('rect', { x: x0, y: sy, width: Math.max(1.5, xAt(Math.min(e, to)) - x0), height: sh, class: 'strip-on' }));
+    }
+    if (slot >= 4) {
+      for (let i = 0; i <= n; i++) {
+        const tx = m.l + slot * i;
+        svg.append(sv('line', { x1: tx, x2: tx, y1: sy + sh + 1, y2: sy + sh + 5, class: 'strip-tick' }));
+      }
+    }
+    stripCross = sv('line', { y1: sy - 3, y2: sy + sh + 3, class: 'crosshair strip-cross', visibility: 'hidden' });
+    const stripHit = sv('rect', { x: m.l, y: sy - 5, width: pw, height: sh + 10, fill: 'transparent', class: 'strip-hit' });
+    svg.append(stripCross, stripHit);
+  }
+
   let hovered = null;
+  const clearHover = () => {
+    hovered?.classList.remove('hover');
+    hovered = null;
+    stripCross?.setAttribute('visibility', 'hidden');
+  };
   const move = (e) => {
-    const t = e.target.closest('.dbar-hit');
-    if (!t) return;
-    const i = Number(t.dataset.i);
+    if (e.target.classList.contains('strip-hit')) {
+      clearHover();
+      const px = e.clientX - svg.getBoundingClientRect().left;
+      const t = Math.floor(tAt(px) / 60) * 60;
+      const iv = strip.intervals.find(([a, b]) => t >= a && t < b) || null;
+      stripCross.setAttribute('x1', xAt(t));
+      stripCross.setAttribute('x2', xAt(t));
+      stripCross.setAttribute('visibility', 'visible');
+      showTip(e.clientX, e.clientY, strip.describe(t, iv));
+      return;
+    }
+    const hit = e.target.closest('.dbar-hit');
+    if (!hit) {
+      clearHover();
+      hideTip();
+      return;
+    }
+    const i = Number(hit.dataset.i);
     if (hovered !== bars[i]) {
-      hovered?.classList.remove('hover');
+      clearHover();
       hovered = bars[i] || null;
       hovered?.classList.add('hover');
     }
-    showTip(e.clientX, e.clientY, describe(dates[i], vals[i]));
+    showTip(e.clientX, e.clientY, spec.describe(i));
   };
   svg.addEventListener('pointermove', move);
   svg.addEventListener('pointerdown', move);
-  svg.addEventListener('pointerleave', () => { hovered?.classList.remove('hover'); hovered = null; hideTip(); });
+  svg.addEventListener('pointerleave', () => { clearHover(); hideTip(); });
 
   root.append(svg);
 }
@@ -889,29 +960,297 @@ function segmented(root, initial, onChange) {
   return { set(v) { value = v; mark(); } };
 }
 
+/* ---------- time windows ---------- */
+
+// A chart's window is `count` units ending at `end`, where end = null follows "now" (live).
+//   unit 'sec'  — end is a timestamp
+//   unit 'hour' — end is an hour boundary (exclusive); one bucket per hour
+//   unit 'day'  — end is the last date shown (YYYY-MM-DD); one bucket per local day
+// preset is the matching preset key, or 'custom'.
+
+function zonedParts(ts) {
+  const p = {};
+  const f = formatter({ year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  for (const { type, value } of f.formatToParts(ts * 1000)) p[type] = value;
+  return p;
+}
+
+// Timestamp of a wall-clock time in the dashboard's time zone.
+function zonedTs(date, hour = 0, minute = 0) {
+  const [y, mo, d] = date.split('-').map(Number);
+  const want = Date.UTC(y, mo - 1, d, hour, minute) / 1000;
+  let t = want;
+  for (let i = 0; i < 3; i++) {
+    const p = zonedParts(t);
+    const got = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute) / 1000;
+    if (got === want) break;
+    t += want - got;
+  }
+  return t;
+}
+
+// 'YYYY-MM-DDTHH:MM' for <input type="datetime-local">, in the dashboard's time zone.
+function localInput(ts) {
+  const p = zonedParts(ts);
+  return `${p.year}-${p.month}-${p.day}T${String(+p.hour % 24).padStart(2, '0')}:${p.minute}`;
+}
+
+const currentHourEnd = () => (Math.floor(nowSec() / 3600) + 1) * 3600;
+
+function resolveWindow(w) {
+  if (w.unit === 'day') {
+    const last = w.end ?? todayStr();
+    const buckets = [];
+    for (let d = addDays(last, -(w.count - 1)); d <= last; d = addDays(d, 1)) {
+      buckets.push({ key: d, date: d, start: zonedTs(d), end: zonedTs(addDays(d, 1)) });
+    }
+    return { from: buckets[0].start, to: buckets.at(-1).end, live: w.end == null, buckets };
+  }
+  if (w.unit === 'hour') {
+    const to = w.end ?? currentHourEnd();
+    const buckets = [];
+    for (let i = w.count; i > 0; i--) {
+      const start = to - i * 3600;
+      buckets.push({ key: start, start, end: start + 3600, date: hourInfo(start).date });
+    }
+    return { from: buckets[0].start, to, live: w.end == null, buckets };
+  }
+  const to = w.end ?? nowSec();
+  return { from: to - w.count, to, live: w.end == null };
+}
+
+function shiftWindow(w, dir) {
+  if (w.unit === 'day') {
+    const last = addDays(w.end ?? todayStr(), dir * w.count);
+    return { ...w, end: last >= todayStr() ? null : last };
+  }
+  const size = w.unit === 'hour' ? w.count * 3600 : w.count;
+  const end = resolveWindow(w).to + dir * size;
+  // the clock moves between clicks, so "within a couple of minutes of now" counts as now
+  const liveEnd = w.unit === 'hour' ? currentHourEnd() : nowSec() - 120;
+  return { ...w, end: end >= liveEnd ? null : end };
+}
+
+const presetWindow = (p) => ({ unit: p.unit, count: p.count, end: null, preset: p.v });
+const windowKey = (w) => `${w.unit}:${w.count}:${w.end ?? 'live'}`;
+const matchPreset = (presets, unit, count) => presets.find((p) => p.unit === unit && p.count === count)?.v ?? 'custom';
+
+function windowLabel(w, r, presets) {
+  const p = presets.find((x) => x.v === w.preset);
+  if (r.live && p) return p.long;
+  const md = { month: 'short', day: 'numeric' };
+  if (w.unit === 'day') {
+    const first = r.buckets[0].date, last = r.buckets.at(-1).date;
+    return first === last ? fmtDay(first, md) : `${fmtDay(first, md)} – ${fmtDay(last, md)}`;
+  }
+  const full = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+  const start = fmt(r.from, full);
+  if (r.live) return `${start} – now`;
+  const sameDay = hourInfo(r.from).date === hourInfo(r.to - 1).date;
+  return `${start} – ${fmt(r.to, sameDay ? { hour: 'numeric', minute: '2-digit' } : full)}`;
+}
+
+const TL_PRESETS = [
+  { v: '6h', label: '6h', unit: 'sec', count: 6 * 3600, long: 'Last 6 hours' },
+  { v: '24h', label: '24h', unit: 'sec', count: 86400, long: 'Last 24 hours' },
+  { v: '7d', label: '7d', unit: 'sec', count: 7 * 86400, long: 'Last 7 days' },
+  { v: '30d', label: '30d', unit: 'sec', count: 30 * 86400, long: 'Last 30 days' },
+  { v: '90d', label: '90d', unit: 'sec', count: 90 * 86400, long: 'Last 90 days' },
+];
+const dayPreset = (n) => ({ v: `${n}d`, label: `${n}d`, unit: 'day', count: n, long: `Last ${n} days` });
+const DAILY_PRESETS = [7, 14, 30, 90].map(dayPreset);
+const PLAYER_PRESETS = [
+  { v: '24h', label: '24h', unit: 'hour', count: 24, long: 'Last 24 hours' },
+  ...[7, 14, 30].map(dayPreset),
+];
+
+// Custom ranges from the date picker. Each returns a window, or an error message.
+function pickSeconds(from, to) {
+  if (to - from < 600) return 'Pick a range of at least 10 minutes.';
+  const count = to - from;
+  return { unit: 'sec', count, end: to >= nowSec() - 90 ? null : to, preset: matchPreset(TL_PRESETS, 'sec', count) };
+}
+
+function pickDays(presets) {
+  return (fromDate, toDate) => {
+    const today = todayStr();
+    const last = toDate > today ? today : toDate;
+    if (fromDate > last) return 'The start date must be on or before the end date.';
+    let count = 0;
+    for (let d = fromDate; d <= last; d = addDays(d, 1)) count++;
+    if (count > 366) return 'Pick a range of a year or less.';
+    return { unit: 'day', count, end: last >= today ? null : last, preset: matchPreset(presets, 'day', count) };
+  };
+}
+
+// Player chart: up to two days shows hourly bars, longer ranges daily bars.
+function pickPlayerRange(from, to) {
+  if (to <= from) return 'The end must be after the start.';
+  if (to - from <= 48 * 3600) {
+    const start = Math.floor(from / 3600) * 3600;
+    const end = Math.ceil(to / 3600) * 3600;
+    const count = (end - start) / 3600;
+    return { unit: 'hour', count, end: end >= currentHourEnd() ? null : end, preset: matchPreset(PLAYER_PRESETS, 'hour', count) };
+  }
+  return pickDays(PLAYER_PRESETS)(hourInfo(from).date, hourInfo(to - 1).date);
+}
+
+/* ---------- range control: [calendar] [presets | Custom] [‹] [›] ---------- */
+
+function icon(paths, size = 16) {
+  const s = sv('svg', { width: size, height: size, viewBox: '0 0 16 16', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+  for (const d of paths) s.append(sv('path', { d }));
+  return s;
+}
+const calendarIcon = () => icon(['M2.5 4.5h11v9h-11z', 'M2.5 7.5h11', 'M5.5 2.5v3', 'M10.5 2.5v3']);
+const chevronIcon = (dir) => icon([dir < 0 ? 'M10 3.5 5.5 8l4.5 4.5' : 'M6 3.5 10.5 8 6 12.5']);
+
+// picker: 'datetime' | 'date'. fromPicker(a, b) turns picked values into a window (or an error string).
+function rangeControl(host, { presets, picker, fromPicker, onChange }) {
+  let w = null;
+  let pop = null;
+
+  const cal = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Choose a date range', title: 'Choose a date range' }, calendarIcon());
+  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Time range' });
+  const presetBtns = presets.map((p) => {
+    const b = el('button', { type: 'button', text: p.label });
+    b.addEventListener('click', () => set(presetWindow(p), true));
+    seg.append(b);
+    return [p.v, b];
+  });
+  const custom = el('button', { type: 'button', text: 'Custom', hidden: '' });
+  custom.addEventListener('click', () => toggle());
+  seg.append(custom);
+  const prev = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Earlier', title: 'Earlier' }, chevronIcon(-1));
+  const next = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Later', title: 'Later' }, chevronIcon(1));
+  prev.addEventListener('click', () => set(shiftWindow(w, -1), true));
+  next.addEventListener('click', () => set(shiftWindow(w, 1), true));
+  cal.addEventListener('click', () => toggle());
+  host.replaceChildren(cal, seg, prev, next);
+
+  // Re-check button states; time passing can change what's possible.
+  function sync() {
+    for (const [v, b] of presetBtns) b.setAttribute('aria-pressed', String(w?.preset === v));
+    custom.hidden = w?.preset !== 'custom';
+    custom.setAttribute('aria-pressed', String(w?.preset === 'custom'));
+    if (!w) return;
+    next.disabled = w.end == null;
+    prev.disabled = state.dataStart != null && resolveWindow(w).from <= state.dataStart;
+  }
+
+  function set(nw, notify) {
+    w = nw;
+    close();
+    sync();
+    if (notify) onChange(w);
+  }
+
+  function close() {
+    if (!pop) return;
+    pop.remove();
+    pop = null;
+    document.removeEventListener('pointerdown', onOutside, true);
+    document.removeEventListener('keydown', onKey);
+  }
+  function onOutside(e) {
+    if (!host.contains(e.target)) close();
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') close();
+  }
+
+  function toggle() {
+    if (pop) return close();
+    const r = resolveWindow(w);
+    const dates = picker === 'date';
+    const type = dates ? 'date' : 'datetime-local';
+    const now = nowSec();
+    const max = dates ? todayStr() : localInput(now);
+    const min = state.dataStart ? (dates ? hourInfo(state.dataStart).date : localInput(state.dataStart)) : null;
+    const fromIn = el('input', { type, max, min, value: dates ? r.buckets[0].date : localInput(r.from) });
+    const toIn = el('input', { type, max, min, value: dates ? r.buckets.at(-1).date : localInput(Math.min(r.to, now)) });
+    const error = el('div', { class: 'range-error', role: 'alert', hidden: '' });
+    const apply = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Apply' });
+    const cancel = el('button', { type: 'button', class: 'btn', text: 'Cancel' });
+    cancel.addEventListener('click', close);
+
+    pop = el('form', { class: 'range-pop', 'aria-label': 'Choose a date range' },
+      el('label', {}, el('span', { text: 'From' }), fromIn),
+      el('label', {}, el('span', { text: 'To' }), toIn),
+      error,
+      el('div', { class: 'range-actions' }, cancel, apply)
+    );
+    pop.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!fromIn.value || !toIn.value) {
+        error.textContent = 'Pick both a start and an end.';
+        error.hidden = false;
+        return;
+      }
+      const parse = (v) => {
+        if (dates) return v;
+        const [d, t] = v.split('T');
+        const [h, mi] = t.split(':').map(Number);
+        return zonedTs(d, h, mi);
+      };
+      const res = fromPicker(parse(fromIn.value), parse(toIn.value));
+      if (typeof res === 'string') {
+        error.textContent = res;
+        error.hidden = false;
+        return;
+      }
+      set(res, true);
+    });
+    host.append(pop);
+    fromIn.focus();
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey);
+  }
+
+  return { get: () => w, set: (nw) => set(nw, false), sync };
+}
+
 /* ---------- app state ---------- */
 
 const state = {
   status: null,
   hourly: [], // [hour_ts, samples, up_samples, online_sum, peak]
+  hourlyFrom: 0, // state.hourly covers hourlyFrom..now
   snaps: { since: 0, rows: [] }, // cached minute rows [ts, up, online] from `since` to now
-  tlRange: '24h',
   lbRange: '30d',
   dataStart: null, // first recorded check (unix seconds)
   rangesChosen: false,
 };
 
-const TL_DAYS = { '6h': 0.25, '12h': 0.5, '24h': 1, '7d': 7, '30d': 30, '90d': 90 };
 const LB_DAYS = { '24h': 1, '7d': 7, '30d': 30, all: null };
 const HOURLY_DAYS = 92; // longest range anything on the page needs
 const LB_ORDER = ['24h', '7d', '30d', 'all'];
 
 const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
 
-// Smallest chart range that shows all the data, capped at 24h.
-function fittingTimelineRange() {
-  const span = dataSpan();
-  return span <= 6 * 3600 ? '6h' : span <= 12 * 3600 ? '12h' : '24h';
+// Default ranges: the smallest preset that shows all the data.
+const presetByKey = (presets, v) => presets.find((p) => p.v === v);
+
+function fittingTimelineWindow() {
+  return presetWindow(presetByKey(TL_PRESETS, dataSpan() <= 6 * 3600 ? '6h' : '24h')); // capped at 24h
+}
+
+function daysCovered(since) {
+  if (!since) return 1;
+  let n = 0;
+  for (let d = hourInfo(since).date, today = todayStr(); d <= today && n < 400; d = addDays(d, 1)) n++;
+  return n;
+}
+
+function fittingDailyWindow() {
+  const n = daysCovered(state.dataStart);
+  return presetWindow(DAILY_PRESETS.find((p) => n <= p.count) || DAILY_PRESETS.at(-1));
+}
+
+function fittingPlayerWindow(firstSeen) {
+  if (nowSec() - firstSeen <= 86400) return presetWindow(PLAYER_PRESETS[0]);
+  const n = daysCovered(firstSeen);
+  return presetWindow(PLAYER_PRESETS.find((p) => p.unit === 'day' && n <= p.count) || PLAYER_PRESETS.at(-1));
 }
 
 // Smallest leaderboard range that covers all the data.
@@ -1036,19 +1375,29 @@ function renderTiles() {
   setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, animate);
 }
 
-function renderServerHeatmap() {
-  const days = new Map();
-  const peaks = new Map();
-  for (const [ts, , , sum, pk] of state.hourly) {
-    const d = hourInfo(ts).date;
-    days.set(d, (days.get(d) || 0) + sum / 60);
-    peaks.set(d, Math.max(peaks.get(d) || 0, pk));
+async function renderServerDaily(animate = false) {
+  const w = dailyCtl.get();
+  const r = resolveWindow(w);
+  dailyCtl.sync();
+  $('#daily-label').textContent = `player-hours per day · ${windowLabel(w, r, DAILY_PRESETS)}`;
+  const rows = await getHourlyRange(r.from, r.to);
+  const index = new Map(r.buckets.map((b, i) => [b.date, i]));
+  const vals = r.buckets.map(() => 0);
+  const peaks = r.buckets.map(() => 0);
+  for (const [ts, , , sum, pk] of rows) {
+    const i = index.get(hourInfo(ts).date);
+    if (i === undefined) continue;
+    vals[i] += sum / 60;
+    peaks[i] = Math.max(peaks[i], pk);
   }
-  // Bars for the last 14 days while history is short; renderHeatmap(days, …) is the year view.
-  renderDailyBars($('#heatmap'), days, (d, v) => [
-    { value: v ? `${fmtHours(v)} player-hours` : 'No activity' },
-    { label: `${fmtDay(d)}${peaks.get(d) ? ` · peak ${peaks.get(d)} online` : ''}` },
-  ], { fmtTick: (v) => `${v}h`, animate: live() });
+  renderBars($('#heatmap'), {
+    buckets: r.buckets, vals, windowKey: windowKey(w), labels: 'day',
+    fmtTick: (v) => `${v}h`, dataStart: state.dataStart,
+    describe: (i) => [
+      { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
+      { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
+    ],
+  }, { animate });
 }
 
 function renderServerWeekGrid() {
@@ -1069,16 +1418,18 @@ function renderServerWeekGrid() {
 }
 
 async function loadTimeline() {
-  const days = TL_DAYS[state.tlRange];
-  const to = nowSec();
-  const from = to - days * 86400;
+  const w = tlCtl.get();
+  const r = resolveWindow(w);
+  const { from, to } = r;
+  tlCtl.sync();
+  $('#tl-label').textContent = windowLabel(w, r, TL_PRESETS);
   const c1 = cssVar('--series-1');
   const c2 = cssVar('--series-2');
   const legend = $('#tl-legend');
   let opts;
 
-  if (days <= 7) {
-    const rows = await loadSnapshots(from);
+  if (to - from <= 8 * 86400) {
+    const rows = r.live ? await loadSnapshots(from) : (await memoApi(`/api/snapshots?from=${from}&to=${to}`)).rows;
     opts = {
       from, to, step: POLL,
       series: [{ name: 'online', cls: '1', color: c1, area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
@@ -1087,7 +1438,7 @@ async function loadTimeline() {
     };
     legend.replaceChildren();
   } else {
-    const rows = state.hourly.filter((r) => r[0] >= from);
+    const rows = await getHourlyRange(from, to);
     opts = {
       from, to, step: 3600,
       series: [
@@ -1102,7 +1453,7 @@ async function loadTimeline() {
       el('span', {}, el('span', { class: 'key', style: `background:${c2}` }), 'Peak online')
     );
   }
-  opts.key = state.tlRange;
+  opts.key = windowKey(w);
   opts.dataStart = state.dataStart;
   renderLineChart($('#timeline'), opts, { animate: live() });
 }
@@ -1188,9 +1539,9 @@ async function loadStatus() {
   state.dataStart = state.status.data_start;
   if (!state.rangesChosen) {
     state.rangesChosen = true;
-    state.tlRange = fittingTimelineRange();
     state.lbRange = fittingLeaderboardRange();
-    tlSeg.set(state.tlRange);
+    tlCtl.set(fittingTimelineWindow());
+    dailyCtl.set(fittingDailyWindow());
     lbSeg.set(state.lbRange);
   }
   renderLive();
@@ -1199,6 +1550,7 @@ async function loadStatus() {
 // After the first load, only rows from the latest (still-filling) hour onward are re-fetched.
 async function loadHourly() {
   const since = nowSec() - HOURLY_DAYS * 86400;
+  state.hourlyFrom = since;
   if (!state.hourly.length) {
     state.hourly = (await api(`/api/hourly?from=${since}`)).rows;
     return;
@@ -1206,6 +1558,22 @@ async function loadHourly() {
   const from = state.hourly.at(-1)[0];
   const fresh = (await api(`/api/hourly?from=${from}`)).rows;
   state.hourly = state.hourly.filter((r) => r[0] >= since && r[0] < from).concat(fresh);
+}
+
+// Responses for windows in the past don't change, so keep a few around.
+const memo = new Map();
+async function memoApi(path) {
+  if (!memo.has(path)) {
+    if (memo.size >= 8) memo.delete(memo.keys().next().value);
+    memo.set(path, await api(path));
+  }
+  return memo.get(path);
+}
+
+// Hourly rows in [from, to): from the cache when it covers them, otherwise fetched.
+async function getHourlyRange(from, to) {
+  if (state.hourly.length && from >= state.hourlyFrom) return state.hourly.filter((r) => r[0] >= from && r[0] < to);
+  return (await memoApi(`/api/hourly?from=${from}&to=${to - 1}`)).rows;
 }
 
 // Minute rows, fetching only what's newer than the cache unless the range grew.
@@ -1228,9 +1596,8 @@ async function showHome() {
   await loadHourly();
   renderTiles();
   renderOnlineChips();
-  renderServerHeatmap();
   renderServerWeekGrid();
-  await Promise.all([loadTimeline(), loadLeaderboard()]);
+  await Promise.all([loadTimeline(), renderServerDaily(live()), loadLeaderboard()]);
 }
 
 /* ---------- player page ---------- */
@@ -1258,7 +1625,6 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   const isOnline = lastTs != null && r.sessions.length && r.sessions.at(-1)[1] === lastTs;
 
   let total = 0, longest = [0, null];
-  const perDay = new Map();
   const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
   for (const [s, e] of sessions) {
     const len = e - s;
@@ -1266,7 +1632,6 @@ async function showPlayer(uuid, { refresh = false } = {}) {
     if (len > longest[0]) longest = [len, s];
     eachHourChunk(s, e, (h, secs) => {
       const info = hourInfo(h);
-      perDay.set(info.date, (perDay.get(info.date) || 0) + secs);
       grid[info.dow][info.hour] += secs;
     });
   }
@@ -1281,7 +1646,9 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   for (const [s, e] of sessions) if (e > weekAgo) week += e - Math.max(s, weekAgo);
 
   const animate = live() && state.playerShown === player.uuid;
+  if (state.playerShown !== player.uuid) pCtl.set(fittingPlayerWindow(player.first_seen));
   state.playerShown = player.uuid;
+  state.playerData = { sessions, liveSession: isOnline ? sessions.at(-1) : null };
   setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the last 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
@@ -1291,11 +1658,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   $('#p-first').textContent = fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' });
   $('#p-last').textContent = fmt(player.first_seen, { hour: 'numeric', minute: '2-digit' });
 
-  const perDayHours = new Map([...perDay].map(([d, secs]) => [d, secs / 3600]));
-  renderDailyBars($('#p-heatmap'), perDayHours, (d, v) => [
-    { value: v ? dur(v * 3600) : 'Didn’t play' },
-    { label: fmtDay(d) },
-  ], { fmtTick: (v) => `${v}h`, animate });
+  renderPlayerActivity(animate);
   renderWeekGrid($('#p-weekgrid'), grid, (v, label) => [
     { value: v ? dur(v) : 'Never', label: v ? 'total' : null },
     { label },
@@ -1323,6 +1686,58 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   ));
 }
 
+// Bars of time played per hour or day, with the when-online strip underneath.
+function renderPlayerActivity(animate = false) {
+  const d = state.playerData;
+  if (!d) return;
+  const w = pCtl.get();
+  const r = resolveWindow(w);
+  pCtl.sync();
+  $('#pa-label').textContent = windowLabel(w, r, PLAYER_PRESETS);
+
+  const hourly = w.unit === 'hour';
+  const inWindow = d.sessions.filter(([a, e]) => e > r.from && a < r.to);
+  const secs = r.buckets.map((b) => {
+    let total = 0;
+    for (const [a, e] of inWindow) {
+      const overlap = Math.min(e, b.end) - Math.max(a, b.start);
+      if (overlap > 0) total += overlap;
+    }
+    return total;
+  });
+  const hm = { hour: 'numeric', minute: '2-digit' };
+
+  renderBars($('#p-heatmap'), {
+    buckets: r.buckets,
+    vals: secs.map((x) => (hourly ? x / 60 : x / 3600)),
+    windowKey: windowKey(w),
+    labels: hourly ? 'hour' : 'day',
+    fmtTick: (v) => (hourly ? `${v}m` : `${v}h`),
+    dataStart: state.dataStart,
+    describe: (i) => {
+      const b = r.buckets[i];
+      const when = hourly
+        ? `${fmt(b.start, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(b.start).hour)}–${hourName(hourInfo(b.end).hour)}`
+        : fmtDay(b.date);
+      return [{ value: secs[i] ? dur(secs[i]) : 'Didn’t play' }, { label: when }];
+    },
+    strip: {
+      intervals: inWindow,
+      describe: (t, iv) => {
+        const when = fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        if (state.dataStart && t < state.dataStart) return [{ value: 'No data' }, { label: when }];
+        if (!iv) return [{ value: 'Offline' }, { label: when }];
+        const end = iv === d.liveSession ? 'now' : fmt(iv[1], hm);
+        return [
+          { value: 'Online', color: cssVar('--series-1') },
+          { label: when },
+          { label: `Session ${fmt(iv[0], hm)} – ${end} · ${dur(iv[1] - iv[0])}` },
+        ];
+      },
+    },
+  }, { animate });
+}
+
 /* ---------- routing & refresh ---------- */
 
 async function route() {
@@ -1342,7 +1757,21 @@ async function route() {
   }
 }
 
-const tlSeg = segmented($('#tl-range'), state.tlRange, (v) => { state.tlRange = v; loadTimeline().catch((e) => showError(e.message)); });
+const tlCtl = rangeControl($('#tl-ctl'), {
+  presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds,
+  onChange: () => loadTimeline().catch((e) => showError(e.message)),
+});
+const dailyCtl = rangeControl($('#daily-ctl'), {
+  presets: DAILY_PRESETS, picker: 'date', fromPicker: pickDays(DAILY_PRESETS),
+  onChange: () => renderServerDaily().catch((e) => showError(e.message)),
+});
+const pCtl = rangeControl($('#pa-ctl'), {
+  presets: PLAYER_PRESETS, picker: 'datetime', fromPicker: pickPlayerRange,
+  onChange: () => renderPlayerActivity(),
+});
+tlCtl.set(presetWindow(TL_PRESETS[1]));
+dailyCtl.set(presetWindow(DAILY_PRESETS[0]));
+pCtl.set(presetWindow(PLAYER_PRESETS[0]));
 const lbSeg = segmented($('#lb-range'), state.lbRange, (v) => { state.lbRange = v; loadLeaderboard().catch((e) => showError(e.message)); });
 
 window.addEventListener('hashchange', route);

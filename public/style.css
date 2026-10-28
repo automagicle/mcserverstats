@@ -375,3 +375,74 @@ tr.link:hover td { background: var(--hover); }
 .nodata-fill { fill: var(--surface-2); opacity: 0.55; }
 .nodata-line { stroke: var(--axis); stroke-width: 1; opacity: 0.7; }
 .nodata-text { fill: var(--muted); opacity: 0.8; }
+
+/* ---------- range controls ---------- */
+
+.range-ctl {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--grid); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.seg button[hidden] { display: none; }
+
+.range-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 15;
+  width: 270px;
+  max-width: calc(100vw - 32px);
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--ring), 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+.range-pop label { display: grid; gap: 4px; font-size: 12px; color: var(--ink-2); }
+.range-pop input {
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--grid);
+  border-radius: 8px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+.range-error { font-size: 12px; color: var(--critical); }
+.range-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+.btn-primary { background: var(--series-1); color: #fff; font-weight: 600; }
+
+/* when-online strip under the player activity bars */
+.chart-strip { height: 250px; }
+.strip-bg { fill: var(--surface-2); }
+.strip-on { fill: var(--series-1); }
+.strip-tick { stroke: var(--axis); stroke-width: 1; }
