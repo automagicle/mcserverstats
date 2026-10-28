@@ -11,6 +11,7 @@
   --ring: rgba(11, 11, 11, 0.10);
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-3: #eda100;
   --good: #0ca30c;
   --critical: #d03b3b;
   --warning: #fab219;
@@ -38,6 +39,7 @@
     --ring: rgba(255, 255, 255, 0.10);
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #c98500;
     --lv0: #2c2c2a;
     --lv1: #104281;
     --lv2: #256abf;
@@ -219,6 +221,7 @@ main {
 .line-1 { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .area-1 { fill: var(--series-1); opacity: 0.14; }
 .line-2 { fill: none; stroke: var(--series-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line-3 { fill: none; stroke: var(--series-3); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .crosshair { stroke: var(--axis); stroke-width: 1; }
 .marker { stroke: var(--surface); stroke-width: 2; }
 .empty-chart { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 14px; }
@@ -446,3 +449,9 @@ tr.link:hover td { background: var(--hover); }
 .strip-bg { fill: var(--surface-2); }
 .strip-on { fill: var(--series-1); }
 .strip-tick { stroke: var(--axis); stroke-width: 1; }
+
+/* who was online, inside chart tooltips */
+.tip-players { display: grid; gap: 3px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--grid); }
+.tip-player { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.tip-player img { width: 14px; height: 14px; border-radius: 3px; image-rendering: pixelated; flex: none; }
+.tip-more { font-size: 11px; color: var(--muted); }

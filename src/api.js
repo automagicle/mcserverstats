@@ -79,6 +79,16 @@ export async function handleApi(request, env, url) {
     return json({ from, to, cols: ['hour_ts', 'samples', 'up_samples', 'online_sum', 'peak'], rows });
   }
 
+  if (path === '/api/sessions') {
+    // Everyone's sessions overlapping a window, for "who was online" lookups.
+    const [from, to] = range(url, 1, 120);
+    const rows = await db.prepare(
+      `SELECT s.uuid, p.name, s.start_ts, s.end_ts FROM sessions s JOIN players p ON p.uuid = s.uuid
+       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 ORDER BY s.start_ts`
+    ).bind(from, to, POLL_SECONDS).raw();
+    return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
+  }
+
   const m = path.match(/^\/api\/player\/([^/]+)$/);
   if (m) {
     const uuid = decodeURIComponent(m[1]);

@@ -158,6 +158,7 @@ const tip = $('#tooltip');
 function showTip(x, y, rows) {
   tip.replaceChildren(
     ...rows.map((r) => {
+      if (r.players) return playerList(r.players);
       const row = el('div', { class: 'row' });
       if (r.color) row.append(el('span', { class: 'key', style: `background:${r.color}` }));
       if (r.value != null) row.append(el('span', { class: 'tv', text: r.value }));
@@ -176,6 +177,18 @@ function showTip(x, y, rows) {
   tip.style.top = `${top}px`;
 }
 const hideTip = () => { tip.hidden = true; };
+
+const TIP_PLAYERS = 10;
+const tipHeads = new Map(); // reused across tooltip redraws so heads don't blink while moving
+function playerList(names) {
+  const list = el('div', { class: 'tip-players' });
+  for (const name of names.slice(0, TIP_PLAYERS)) {
+    if (!tipHeads.has(name)) tipHeads.set(name, headImg(name, 14, { width: 14, height: 14, loading: 'eager' }));
+    list.append(el('div', { class: 'tip-player' }, tipHeads.get(name), el('span', { text: name })));
+  }
+  if (names.length > TIP_PLAYERS) list.append(el('div', { class: 'tip-more', text: `+${names.length - TIP_PLAYERS} more` }));
+  return list;
+}
 
 function attachCellTips(root, selector, getRows) {
   const handler = (e) => {
@@ -724,6 +737,8 @@ function drawLineChart(root, opts, f) {
       color: series.length > 1 ? s.color : null,
     }));
     rows.push({ label: opts.fmtTime(p.t) });
+    const who = opts.whoAt?.(p.t);
+    if (who?.length) rows.push({ players: who });
     showTip(e.clientX, e.clientY, rows);
   };
   const leave = () => {
@@ -1417,6 +1432,19 @@ function renderServerWeekGrid() {
   ], { animate: live() });
 }
 
+// Centered moving average over `window` seconds, at the same timestamps as pts.
+function rollingAverage(pts, window) {
+  const half = window / 2;
+  const out = [];
+  let lo = 0, hi = 0, sum = 0;
+  for (const p of pts) {
+    while (hi < pts.length && pts[hi].t <= p.t + half) sum += pts[hi++].v;
+    while (pts[lo].t < p.t - half) sum -= pts[lo++].v;
+    out.push({ t: p.t, v: sum / (hi - lo) });
+  }
+  return out;
+}
+
 async function loadTimeline() {
   const w = tlCtl.get();
   const r = resolveWindow(w);
@@ -1425,33 +1453,55 @@ async function loadTimeline() {
   $('#tl-label').textContent = windowLabel(w, r, TL_PRESETS);
   const c1 = cssVar('--series-1');
   const c2 = cssVar('--series-2');
+  const c3 = cssVar('--series-3');
   const legend = $('#tl-legend');
+  const key = (color, text) => el('span', {}, el('span', { class: 'key', style: `background:${color}` }), text);
   let opts;
 
-  if (to - from <= 8 * 86400) {
-    const rows = r.live ? await loadSnapshots(from) : (await memoApi(`/api/snapshots?from=${from}&to=${to}`)).rows;
+  const minuteData = to - from <= 8 * 86400;
+  const [rows, sessionsRes] = await Promise.all([
+    minuteData
+      ? (r.live ? loadSnapshots(from) : memoApi(`/api/snapshots?from=${from}&to=${to}`).then((x) => x.rows))
+      : getHourlyRange(from, to),
+    r.live ? api(`/api/sessions?from=${from}&to=${to}`) : memoApi(`/api/sessions?from=${from}&to=${to}`),
+  ]);
+  const sessions = sessionsRes.rows.map(([, name, a, b]) => [name, a, b + sessionsRes.poll_seconds]);
+  // names online at t (minute data), or at any point in the hour starting at t (hourly data)
+  const whoAt = (t) => {
+    const end = minuteData ? t + 1 : t + 3600;
+    return [...new Set(sessions.filter(([, a, b]) => a < end && b > t).map(([name]) => name))];
+  };
+
+  if (minuteData) {
+    const pts = rows.map(([t, up, v]) => ({ t, v, down: !up }));
+    const series = [{ name: 'online', cls: '1', color: c1, area: true, pts }];
+    // Trend line for ranges longer than 6h: 30-minute average up to a day and a half, hourly beyond.
+    const span = to - from;
+    const avgWindow = span > 6 * 3600 + 60 ? (span <= 36 * 3600 ? 1800 : 3600) : 0;
+    const avgName = avgWindow === 1800 ? 'avg (30 min)' : 'avg (1 hour)';
+    if (avgWindow) series.push({ name: avgName, cls: '2', color: c2, pts: rollingAverage(pts, avgWindow) });
     opts = {
-      from, to, step: POLL,
-      series: [{ name: 'online', cls: '1', color: c1, area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
-      fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
+      from, to, step: POLL, series, whoAt,
+      fmtValue: (v) => (Number.isInteger(v) ? `${v} ${v === 1 ? 'player' : 'players'}` : v.toFixed(1)),
       fmtTime: (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     };
-    legend.replaceChildren();
+    legend.replaceChildren(...(avgWindow ? [
+      key(c1, 'Players online'),
+      key(c2, `Average online (${avgWindow === 1800 ? '30 min' : '1 hour'})`),
+    ] : []));
   } else {
     const rows = await getHourlyRange(from, to);
     opts = {
       from, to, step: 3600,
       series: [
         { name: 'average', cls: '1', color: c1, area: true, pts: rows.map(([t, n, , s]) => ({ t, v: n ? s / n : 0 })) },
-        { name: 'peak', cls: '2', color: c2, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) },
+        { name: 'peak', cls: '3', color: c3, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) },
       ],
+      whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
       fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(t).hour)}`,
     };
-    legend.replaceChildren(
-      el('span', {}, el('span', { class: 'key', style: `background:${c1}` }), 'Average online'),
-      el('span', {}, el('span', { class: 'key', style: `background:${c2}` }), 'Peak online')
-    );
+    legend.replaceChildren(key(c1, 'Average online'), key(c3, 'Peak online'));
   }
   opts.key = windowKey(w);
   opts.dataStart = state.dataStart;
