@@ -602,7 +602,7 @@ function lineTarget(opts) {
   let vmax = 0;
   for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
   const ystep = niceStep(Math.max(1, vmax / 4));
-  const ymax = Math.max(ystep * 4, Math.ceil(vmax / ystep) * ystep);
+  const ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
   return { from: opts.from, to: opts.to, ymax, ystep, vals: opts.series.map((s) => s.pts.map((p) => p.v)) };
 }
 
