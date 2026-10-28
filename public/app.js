@@ -498,6 +498,30 @@ function tween(root, draw) {
   tweens.set(root, requestAnimationFrame(step));
 }
 
+// Paging with ‹ ›: the old drawing scrolls out as the new one scrolls in from the side it came from.
+const SLIDE_MS = 600;
+const sliding = new Map(); // root -> slides in progress
+function slideIn(root, old, dir) {
+  const cur = root.firstElementChild;
+  if (!old || !cur || reducedMotion()) return;
+  const W = root.clientWidth;
+  Object.assign(old.style, { position: 'absolute', left: '0', top: '0', pointerEvents: 'none' });
+  root.style.overflow = 'hidden';
+  sliding.set(root, (sliding.get(root) || 0) + 1);
+  root.append(old);
+  const opts = { duration: SLIDE_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)' };
+  // Earlier (dir -1) moves content right, like scrolling back along a timeline.
+  old.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${-dir * W}px)` }], opts);
+  cur.animate([{ transform: `translateX(${dir * W}px)` }, { transform: 'translateX(0)' }], opts).finished
+    .catch(() => {})
+    .finally(() => {
+      old.remove();
+      const n = sliding.get(root) - 1;
+      if (n) sliding.set(root, n);
+      else { sliding.delete(root); root.style.overflow = ''; }
+    });
+}
+
 /* ---------- hour × weekday grid ---------- */
 
 const weekPrev = new Map();
@@ -584,8 +608,9 @@ function lineTarget(opts) {
 
 // opts: { key, from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime }
 // With animate, morphs from the previous drawing of the same range (domain, scale and values).
-function renderLineChart(root, opts, { animate = false } = {}) {
+function renderLineChart(root, opts, { animate = false, slide = 0 } = {}) {
   const prev = chartPrev.get(root);
+  const old = slide ? root.firstElementChild : null;
   const target = lineTarget(opts);
   chartPrev.set(root, { key: opts.key, opts, frame: target });
   redraws.set(root, () => drawLineChart(root, opts, target));
@@ -595,6 +620,7 @@ function renderLineChart(root, opts, { animate = false } = {}) {
   if (!canTween) {
     stopTween(root);
     drawLineChart(root, opts, target);
+    slideIn(root, old, slide);
     return;
   }
 
@@ -769,7 +795,8 @@ function barScale(vals) {
 //   dataStart   hatch everything before it
 //   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
 // }
-function renderBars(root, spec, { animate = false } = {}) {
+function renderBars(root, spec, { animate = false, slide = 0 } = {}) {
+  const old = slide ? root.firstElementChild : null;
   const target = { vals: spec.vals, ...barScale(spec.vals) };
   const prev = chartPrev.get(root);
   chartPrev.set(root, { windowKey: spec.windowKey, byKey: new Map(spec.buckets.map((b, i) => [b.key, spec.vals[i]])) });
@@ -780,6 +807,7 @@ function renderBars(root, spec, { animate = false } = {}) {
   if (!animate || !startVals || same) {
     stopTween(root);
     drawBars(root, spec, target);
+    slideIn(root, old, slide);
     return;
   }
   const start = barScale(startVals);
@@ -1123,8 +1151,8 @@ function rangeControl(host, { presets, picker, fromPicker, onChange }) {
   seg.append(custom);
   const prev = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Earlier', title: 'Earlier' }, chevronIcon(-1));
   const next = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Later', title: 'Later' }, chevronIcon(1));
-  prev.addEventListener('click', () => set(shiftWindow(w, -1), true));
-  next.addEventListener('click', () => set(shiftWindow(w, 1), true));
+  prev.addEventListener('click', () => set(shiftWindow(w, -1), true, -1));
+  next.addEventListener('click', () => set(shiftWindow(w, 1), true, 1));
   cal.addEventListener('click', () => toggle());
   host.replaceChildren(cal, seg, prev, next);
 
@@ -1138,11 +1166,12 @@ function rangeControl(host, { presets, picker, fromPicker, onChange }) {
     prev.disabled = state.dataStart != null && resolveWindow(w).from <= state.dataStart;
   }
 
-  function set(nw, notify) {
+  // dir: -1 / 1 when stepping with ‹ ›, so charts can scroll that way
+  function set(nw, notify, dir = 0) {
     w = nw;
     close();
     sync();
-    if (notify) onChange(w);
+    if (notify) onChange(w, dir);
   }
 
   function close() {
@@ -1378,7 +1407,7 @@ function renderTiles() {
   setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, animate);
 }
 
-async function renderServerDaily(animate = false) {
+async function renderServerDaily(animate = false, slide = 0) {
   const w = dailyCtl.get();
   const r = resolveWindow(w);
   dailyCtl.sync();
@@ -1400,7 +1429,7 @@ async function renderServerDaily(animate = false) {
       { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
       { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
     ],
-  }, { animate });
+  }, { animate, slide });
 }
 
 function renderServerWeekGrid() {
@@ -1433,7 +1462,7 @@ function rollingAverage(pts, window) {
   return out;
 }
 
-async function loadTimeline() {
+async function loadTimeline(slide = 0) {
   const w = tlCtl.get();
   const r = resolveWindow(w);
   const { from, to } = r;
@@ -1493,7 +1522,7 @@ async function loadTimeline() {
   }
   opts.key = windowKey(w);
   opts.dataStart = state.dataStart;
-  renderLineChart($('#timeline'), opts, { animate: live() });
+  renderLineChart($('#timeline'), opts, { animate: live(), slide });
 }
 
 // "Data starts on …" beside the heading; red with a warning icon when the range reaches back before it.
@@ -1561,8 +1590,8 @@ async function loadLeaderboard() {
   const blue = cssVar('--series-1');
   for (const tr of changed) {
     pixelTiles({
-      host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.1),
-      tile: 4, hold: 0, duration: 900, sweep: 0.3,
+      host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.07),
+      tile: 4, hold: 0, duration: 750, sweep: 0.3,
       spark: { chance: 0.04, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
     });
   }
@@ -1722,7 +1751,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
 }
 
 // Bars of time played per hour or day, with the when-online strip underneath.
-function renderPlayerActivity(animate = false) {
+function renderPlayerActivity(animate = false, slide = 0) {
   const d = state.playerData;
   if (!d) return;
   const w = pCtl.get();
@@ -1770,7 +1799,7 @@ function renderPlayerActivity(animate = false) {
         ];
       },
     },
-  }, { animate });
+  }, { animate, slide });
 }
 
 /* ---------- routing & refresh ---------- */
@@ -1794,15 +1823,15 @@ async function route() {
 
 const tlCtl = rangeControl($('#tl-ctl'), {
   presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds(TL_PRESETS),
-  onChange: () => loadTimeline().catch((e) => showError(e.message)),
+  onChange: (w, dir) => loadTimeline(dir).catch((e) => showError(e.message)),
 });
 const dailyCtl = rangeControl($('#daily-ctl'), {
   presets: DAILY_PRESETS, picker: 'date', fromPicker: pickDays(DAILY_PRESETS),
-  onChange: () => renderServerDaily().catch((e) => showError(e.message)),
+  onChange: (w, dir) => renderServerDaily(false, dir).catch((e) => showError(e.message)),
 });
 const pCtl = rangeControl($('#pa-ctl'), {
   presets: PLAYER_PRESETS, picker: 'datetime', fromPicker: pickPlayerRange,
-  onChange: () => renderPlayerActivity(),
+  onChange: (w, dir) => renderPlayerActivity(false, dir),
 });
 tlCtl.set(presetWindow(TL_PRESETS[1]));
 dailyCtl.set(presetWindow(DAILY_PRESETS[0]));
