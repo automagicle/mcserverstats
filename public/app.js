@@ -1525,9 +1525,9 @@ async function loadLeaderboard() {
   const blue = cssVar('--series-1');
   for (const tr of changed) {
     pixelTiles({
-      host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.2),
-      tile: 4, hold: 120, duration: 900, sweep: 0.3,
-      spark: { chance: 0.06, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
+      host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.1),
+      tile: 4, hold: 0, duration: 900, sweep: 0.3,
+      spark: { chance: 0.04, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
     });
   }
 }
