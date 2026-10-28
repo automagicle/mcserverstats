@@ -499,7 +499,7 @@ function tween(root, draw) {
 }
 
 // Paging with ‹ ›: the old drawing scrolls out as the new one scrolls in from the side it came from.
-const SLIDE_MS = 600;
+const SLIDE_MS = 450;
 const sliding = new Map(); // root -> slides in progress
 function slideIn(root, old, dir) {
   const cur = root.firstElementChild;
@@ -794,11 +794,13 @@ function barScale(vals) {
 //   windowKey   tween only between drawings of the same window
 //   dataStart   hatch everything before it
 //   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
+//   scale?      { ymax, ystep } — fixed y-axis instead of fitting the values
 // }
 // grow: bars rise from zero (first drawing for a newly opened page).
 function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {}) {
   const old = slide ? root.firstElementChild : null;
-  const target = { vals: spec.vals, ...barScale(spec.vals) };
+  const scale = (vals) => spec.scale || barScale(vals);
+  const target = { vals: spec.vals, ...scale(spec.vals) };
   const prev = chartPrev.get(root);
   chartPrev.set(root, { windowKey: spec.windowKey, byKey: new Map(spec.buckets.map((b, i) => [b.key, spec.vals[i]])) });
   redraws.set(root, () => drawBars(root, spec, target));
@@ -813,7 +815,7 @@ function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {
     slideIn(root, old, slide);
     return;
   }
-  const start = grow ? target : barScale(startVals);
+  const start = grow ? target : scale(startVals);
   tween(root, (e) => drawBars(root, spec, {
     vals: spec.vals.map((v, i) => lerp(startVals[i], v, e)),
     ymax: lerp(start.ymax, target.ymax, e),
@@ -1267,7 +1269,7 @@ const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
 const presetByKey = (presets, v) => presets.find((p) => p.v === v);
 
 function fittingTimelineWindow() {
-  return presetWindow(presetByKey(TL_PRESETS, dataSpan() <= 6 * 3600 ? '6h' : '24h')); // capped at 24h
+  return presetWindow(presetByKey(TL_PRESETS, '24h'));
 }
 
 function daysCovered(since) {
@@ -1289,10 +1291,14 @@ function fittingPlayerWindow(firstSeen) {
 }
 
 // Smallest leaderboard range that covers all the data.
+// Smallest preset that covers all the data; wider ones get the red "Data starts on" note.
 function fittingLeaderboardRange() {
   const span = dataSpan();
   return LB_PRESETS.find((p) => p.unit === 'all' || span <= p.count);
 }
+
+// Default leaderboard range: 24h until there's a full week of data, then 7d.
+const defaultLeaderboardRange = () => presetByKey(LB_PRESETS, dataSpan() >= 7 * 86400 ? '7d' : '24h');
 
 function showError(msg) {
   const e = $('#error');
@@ -1526,6 +1532,51 @@ async function loadTimeline(slide = 0) {
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
 }
 
+const lbRowsBySize = new Map(); // range size -> most rows seen
+const ROW_MOVE_MS = 380;
+
+function reserveRows(root, n) {
+  const row = root.querySelector('tbody tr');
+  const head = root.querySelector('thead');
+  const rowH = row ? row.getBoundingClientRect().height : 39;
+  const headH = head ? head.getBoundingClientRect().height : 24;
+  root.style.minHeight = `${Math.ceil(headH + n * rowH)}px`;
+}
+
+function rowTops(root) {
+  const tops = new Map();
+  for (const tr of root.querySelectorAll('tr[data-uuid]')) {
+    const b = tr.querySelector('.bar');
+    tops.set(tr.dataset.uuid, { top: tr.getBoundingClientRect().top, bar: b?.style.width });
+  }
+  return tops;
+}
+
+// Rows glide from where they were to their new rank; newcomers fade in; bars stretch to their new length.
+function moveRows(root, oldTops) {
+  if (reducedMotion() || !oldTops.size) return false;
+  const ease = 'cubic-bezier(0.2, 0.8, 0.3, 1)';
+  let moved = false;
+  root.querySelectorAll('tr[data-uuid]').forEach((tr, i) => {
+    const old = oldTops.get(tr.dataset.uuid);
+    if (!old) {
+      tr.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }],
+        { duration: ROW_MOVE_MS, delay: Math.min(i, 10) * 15, easing: ease, fill: 'backwards' });
+      return;
+    }
+    const dy = old.top - tr.getBoundingClientRect().top;
+    if (Math.abs(dy) > 0.5) {
+      moved = true;
+      tr.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: ROW_MOVE_MS, easing: ease });
+    }
+    const bar = tr.querySelector('.bar');
+    if (bar && old.bar && old.bar !== bar.style.width) {
+      bar.animate([{ width: old.bar }, { width: bar.style.width }], { duration: ROW_MOVE_MS, easing: ease });
+    }
+  });
+  return moved;
+}
+
 // "Data starts on …" beside the heading; red with a warning icon when the range reaches back before it.
 function renderLeaderboardNote() {
   const note = $('#lb-note');
@@ -1554,8 +1605,15 @@ async function loadLeaderboard() {
   const path = `/api/leaderboard?from=${from}&to=${win.to}`;
   const r = win.live ? await api(path) : await memoApi(path);
   const root = $('#leaderboard');
+  // Keep the card as tall as the most rows seen for this range size, so paging doesn't make the page jump.
+  const sizeKey = `${w.unit}:${w.count}`;
+  const rows = Math.min(25, r.players.length);
+  const reserve = Math.max(rows, lbRowsBySize.get(sizeKey) || 0);
+  lbRowsBySize.set(sizeKey, reserve);
+  const oldTops = rowTops(root);
   if (!r.players.length) {
     root.replaceChildren(el('div', { class: 'empty', text: 'Nobody seen in this range yet.' }));
+    reserveRows(root, reserve);
     return;
   }
   const top = r.players[0].secs || 1;
@@ -1566,7 +1624,7 @@ async function loadLeaderboard() {
   const tbody = el('tbody');
   r.players.slice(0, 25).forEach((p, i) => {
     const link = el('a', { href: `#/player/${p.uuid}`, text: p.name });
-    const tr = el('tr', { class: 'link' },
+    const tr = el('tr', { class: 'link', 'data-uuid': p.uuid },
       el('td', { class: 'rank', text: String(i + 1) }),
       el('td', {},
         el('div', { class: 'pname' }, headImg(p.name, 22), link),
@@ -1588,17 +1646,17 @@ async function loadLeaderboard() {
     )),
     tbody
   ));
+  reserveRows(root, reserve);
+  const moved = moveRows(root, oldTops);
 
-  // Updated rows get a blue tint that dissolves away in sparkly pixels.
+  // Updated rows get a blue tint that dissolves away in sparkly pixels (after any reordering settles).
   if (!live()) return;
   const blue = cssVar('--series-1');
-  for (const tr of changed) {
-    pixelTiles({
+  for (const tr of changed) setTimeout(() => tr.isConnected && pixelTiles({
       host: root, target: tr, mode: 'clear', color: withAlpha(blue, 0.07),
       tile: 4, hold: 0, duration: 750, sweep: 0.3,
       spark: { chance: 0.04, colors: FX.blue, vx: [-15, 15], vy: [-45, -10], life: [400, 800], size: [1, 2] },
-    });
-  }
+    }), moved ? ROW_MOVE_MS : 0);
 }
 
 async function loadStatus() {
@@ -1610,7 +1668,7 @@ async function loadStatus() {
     state.rangesChosen = true;
     tlCtl.set(fittingTimelineWindow());
     dailyCtl.set(fittingDailyWindow());
-    lbCtl.set(presetWindow(fittingLeaderboardRange()));
+    lbCtl.set(presetWindow(defaultLeaderboardRange()));
   }
   renderLive();
 }
@@ -1764,7 +1822,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
 
   const status = $('#p-status');
   status.replaceChildren();
-  if (isOnline) status.append(el('span', { class: 'badge', text: 'Online now' }), ` since ${fmt(r.sessions.at(-1)[0], { hour: 'numeric', minute: '2-digit' })}`);
+  if (isOnline) status.append(el('span', { class: 'badge', text: 'Online' }), `since ${fmt(r.sessions.at(-1)[0], { hour: 'numeric', minute: '2-digit' })}`);
   else if (r.sessions.length) status.append(`Last seen ${ago(r.sessions.at(-1)[1])}`);
 
   const weekAgo = nowSec() - 7 * 86400;
@@ -1850,6 +1908,7 @@ function renderPlayerActivity(animate = false, slide = 0, grow = false) {
     windowKey: windowKey(w),
     labels: hourly ? 'hour' : 'day',
     fmtTick: (v) => (hourly ? `${v}m` : `${v}h`),
+    scale: hourly ? { ymax: 60, ystep: 15 } : null, // minutes per hour: always the full hour, for fair comparison
     dataStart: state.dataStart,
     describe: (i) => {
       const b = r.buckets[i];

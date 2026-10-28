@@ -38,12 +38,15 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   leaderboard, and busiest hours by weekday. The players online chart adds a 1-hour moving-average trend line
   for ranges over 6 hours, switches to hourly average/peak for longer ranges, and its
   tooltip lists who was online.
-- **Player pages**: totals, an activity chart (hourly bars for 24h, daily bars for longer ranges) with a
+- **Player pages**: totals, an activity chart (hourly bars on a fixed 0–60 min scale for 24h, daily bars for longer ranges) with a
   when-online strip underneath, when they usually play, and recent sessions. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
-  and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Defaults are the smallest preset that covers all
-  the data collected so far, and anything before tracking began is hatched out.
+  and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
+  defaults to 24h, the leaderboard to 24h until there's a week of data (then 7d), and the other charts to the
+  smallest preset that covers all the data so far. Anything before tracking began is hatched out.
+- **Leaderboard**: keeps the height of the most rows seen for the current range size, so paging doesn't
+  shift the page, and rows glide to their new ranks.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
   tab is visible), with animations that are skipped when the system's reduce-motion setting is on.
 - Times are shown in `TZ_NAME` from `wrangler.jsonc` (Pacific by default).
