@@ -59,16 +59,11 @@
       <div class="grid2">
         <section class="card">
           <div class="card-head">
-            <div class="card-title">
+            <div class="card-title card-title-stacked">
               <h2>Leaderboard</h2>
-              <span id="lb-note" class="data-note"></span>
+              <span id="lb-note" class="card-sub"></span>
             </div>
-            <div class="seg" id="lb-range" role="group" aria-label="Leaderboard range">
-              <button data-v="24h">24h</button>
-              <button data-v="7d">7d</button>
-              <button data-v="30d" aria-pressed="true">30d</button>
-              <button data-v="all">All</button>
-            </div>
+            <div class="range-ctl" id="lb-ctl"></div>
           </div>
           <div id="leaderboard"></div>
         </section>

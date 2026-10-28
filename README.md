@@ -40,7 +40,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   tooltip lists who was online.
 - **Player pages**: totals, an activity chart (hourly bars for 24h, daily bars for longer ranges) with a
   when-online strip underneath, when they usually play, and recent sessions.
-- **Time ranges**: each chart has presets, a date picker (custom ranges show a temporary "Custom" option),
+- **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range. Defaults are the smallest preset that covers all
   the data collected so far, and anything before tracking began is hatched out.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the

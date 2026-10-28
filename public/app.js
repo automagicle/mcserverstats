@@ -956,25 +956,6 @@ function withAlpha(hex, a) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
-/* ---------- segmented controls ---------- */
-
-function segmented(root, initial, onChange) {
-  let value = initial;
-  const mark = () => {
-    for (const b of root.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === value));
-  };
-  for (const b of root.querySelectorAll('button')) {
-    b.addEventListener('click', () => {
-      if (b.dataset.v === value) return;
-      value = b.dataset.v;
-      mark();
-      onChange(value);
-    });
-  }
-  mark();
-  return { set(v) { value = v; mark(); } };
-}
-
 /* ---------- time windows ---------- */
 
 // A chart's window is `count` units ending at `end`, where end = null follows "now" (live).
@@ -1013,6 +994,7 @@ function localInput(ts) {
 const currentHourEnd = () => (Math.floor(nowSec() / 3600) + 1) * 3600;
 
 function resolveWindow(w) {
+  if (w.unit === 'all') return { from: state.dataStart ?? 0, to: nowSec(), live: true };
   if (w.unit === 'day') {
     const last = w.end ?? todayStr();
     const buckets = [];
@@ -1035,6 +1017,7 @@ function resolveWindow(w) {
 }
 
 function shiftWindow(w, dir) {
+  if (w.unit === 'all') return w;
   if (w.unit === 'day') {
     const last = addDays(w.end ?? todayStr(), dir * w.count);
     return { ...w, end: last >= todayStr() ? null : last };
@@ -1080,10 +1063,12 @@ const PLAYER_PRESETS = [
 ];
 
 // Custom ranges from the date picker. Each returns a window, or an error message.
-function pickSeconds(from, to) {
-  if (to - from < 600) return 'Pick a range of at least 10 minutes.';
-  const count = to - from;
-  return { unit: 'sec', count, end: to >= nowSec() - 90 ? null : to, preset: matchPreset(TL_PRESETS, 'sec', count) };
+function pickSeconds(presets) {
+  return (from, to) => {
+    if (to - from < 600) return 'Pick a range of at least 10 minutes.';
+    const count = to - from;
+    return { unit: 'sec', count, end: to >= nowSec() - 90 ? null : to, preset: matchPreset(presets, 'sec', count) };
+  };
 }
 
 function pickDays(presets) {
@@ -1232,14 +1217,17 @@ const state = {
   hourly: [], // [hour_ts, samples, up_samples, online_sum, peak]
   hourlyFrom: 0, // state.hourly covers hourlyFrom..now
   snaps: { since: 0, rows: [] }, // cached minute rows [ts, up, online] from `since` to now
-  lbRange: '30d',
   dataStart: null, // first recorded check (unix seconds)
   rangesChosen: false,
 };
 
-const LB_DAYS = { '24h': 1, '7d': 7, '30d': 30, all: null };
 const HOURLY_DAYS = 92; // longest range anything on the page needs
-const LB_ORDER = ['24h', '7d', '30d', 'all'];
+const LB_PRESETS = [
+  { v: '24h', label: '24h', unit: 'sec', count: 86400, long: 'Last 24 hours' },
+  { v: '7d', label: '7d', unit: 'sec', count: 7 * 86400, long: 'Last 7 days' },
+  { v: '30d', label: '30d', unit: 'sec', count: 30 * 86400, long: 'Last 30 days' },
+  { v: 'all', label: 'All', unit: 'all', count: 0, long: 'All time' },
+];
 
 const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
 
@@ -1271,7 +1259,7 @@ function fittingPlayerWindow(firstSeen) {
 // Smallest leaderboard range that covers all the data.
 function fittingLeaderboardRange() {
   const span = dataSpan();
-  return LB_ORDER.find((k) => LB_DAYS[k] == null || span <= LB_DAYS[k] * 86400);
+  return LB_PRESETS.find((p) => p.unit === 'all' || span <= p.count);
 }
 
 function showError(msg) {
@@ -1515,28 +1503,26 @@ function renderLeaderboardNote() {
     note.replaceChildren();
     return;
   }
-  const text = `Data starts on ${fmt(state.dataStart, { month: 'short', day: 'numeric' })}`;
-  const warn = LB_ORDER.indexOf(state.lbRange) > LB_ORDER.indexOf(fittingLeaderboardRange());
-  note.classList.toggle('warn', warn);
-  note.title = warn ? 'This range reaches back further than the data does, so totals cover less time than it suggests.' : '';
-  note.replaceChildren(...(warn ? [warningIcon()] : []), text);
-}
-
-function warningIcon() {
-  const svg = sv('svg', { width: 13, height: 13, viewBox: '0 0 16 16', 'aria-hidden': 'true', class: 'warn-icon' });
-  svg.append(
-    sv('path', { d: 'M8 1.8 15 14.2H1z', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }),
-    sv('path', { d: 'M8 6.2v3.6', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round' }),
-    sv('circle', { cx: 8, cy: 11.9, r: 0.95, fill: 'currentColor' })
-  );
-  return svg;
+  const w = lbCtl.get();
+  const r = resolveWindow(w);
+  const fit = fittingLeaderboardRange();
+  // Red when the range is wider than the smallest preset that covers all the data and reaches back before it.
+  const warn = w.unit === 'all'
+    ? fit.unit !== 'all'
+    : fit.unit !== 'all' && r.from < state.dataStart && r.to - r.from > fit.count;
+  const start = el('span', { class: `data-note${warn ? ' warn' : ''}`, text: `Data starts on ${fmt(state.dataStart, { month: 'short', day: 'numeric' })}` });
+  if (warn) start.title = 'This range reaches back further than the data does, so totals cover less time than it suggests.';
+  note.replaceChildren(`${windowLabel(w, r, LB_PRESETS)} · `, start);
 }
 
 async function loadLeaderboard() {
+  const w = lbCtl.get();
+  const win = resolveWindow(w);
+  lbCtl.sync();
   renderLeaderboardNote();
-  const days = LB_DAYS[state.lbRange];
-  const from = days ? nowSec() - days * 86400 : 1;
-  const r = await api(`/api/leaderboard?from=${from}`);
+  const from = w.unit === 'all' ? 1 : win.from;
+  const path = `/api/leaderboard?from=${from}&to=${win.to}`;
+  const r = win.live ? await api(path) : await memoApi(path);
   const root = $('#leaderboard');
   if (!r.players.length) {
     root.replaceChildren(el('div', { class: 'empty', text: 'Nobody seen in this range yet.' }));
@@ -1544,8 +1530,8 @@ async function loadLeaderboard() {
   }
   const top = r.players[0].secs || 1;
   const onlineNow = new Set(state.status.online.map((p) => p.uuid));
-  const prev = state.lbPrev?.range === state.lbRange ? state.lbPrev.secs : null;
-  state.lbPrev = { range: state.lbRange, secs: new Map(r.players.map((p) => [p.uuid, p.secs])) };
+  const prev = state.lbPrev?.range === windowKey(w) ? state.lbPrev.secs : null;
+  state.lbPrev = { range: windowKey(w), secs: new Map(r.players.map((p) => [p.uuid, p.secs])) };
   const changed = [];
   const tbody = el('tbody');
   r.players.slice(0, 25).forEach((p, i) => {
@@ -1589,10 +1575,9 @@ async function loadStatus() {
   state.dataStart = state.status.data_start;
   if (!state.rangesChosen) {
     state.rangesChosen = true;
-    state.lbRange = fittingLeaderboardRange();
     tlCtl.set(fittingTimelineWindow());
     dailyCtl.set(fittingDailyWindow());
-    lbSeg.set(state.lbRange);
+    lbCtl.set(presetWindow(fittingLeaderboardRange()));
   }
   renderLive();
 }
@@ -1808,7 +1793,7 @@ async function route() {
 }
 
 const tlCtl = rangeControl($('#tl-ctl'), {
-  presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds,
+  presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds(TL_PRESETS),
   onChange: () => loadTimeline().catch((e) => showError(e.message)),
 });
 const dailyCtl = rangeControl($('#daily-ctl'), {
@@ -1822,7 +1807,11 @@ const pCtl = rangeControl($('#pa-ctl'), {
 tlCtl.set(presetWindow(TL_PRESETS[1]));
 dailyCtl.set(presetWindow(DAILY_PRESETS[0]));
 pCtl.set(presetWindow(PLAYER_PRESETS[0]));
-const lbSeg = segmented($('#lb-range'), state.lbRange, (v) => { state.lbRange = v; loadLeaderboard().catch((e) => showError(e.message)); });
+const lbCtl = rangeControl($('#lb-ctl'), {
+  presets: LB_PRESETS, picker: 'datetime', fromPicker: pickSeconds(LB_PRESETS),
+  onChange: () => loadLeaderboard().catch((e) => showError(e.message)),
+});
+lbCtl.set(presetWindow(LB_PRESETS[2]));
 
 window.addEventListener('hashchange', route);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
