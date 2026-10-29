@@ -56,4 +56,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - If the server reports more players than it names, the dashboard shows a warning. Set
   `enable-query=true` in `server.properties` so mcstatus.io can read the full player list.
 - Time played is counted in 1-minute steps. A player missing for up to 3.5 minutes stays in the same session.
+- Occasionally a check wrongly reports nobody online for a minute. When the same players are seen again within
+  3.5 minutes, that empty (or offline) reading is replaced by the number of players whose sessions span it.
+  Smaller dips are left alone, since someone may really have relogged.
 - Usage on Cloudflare's free tier: about 1,440 Cron runs per day, plus a few D1 rows written per check (1 per player).

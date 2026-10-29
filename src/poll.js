@@ -79,4 +79,30 @@ export async function poll(env, nowSeconds) {
   }
 
   await db.batch(stmts);
+  if (seen.size) await repairBlips(db, ts);
+}
+
+// Occasionally a check reports nobody online for a minute while everyone is still playing.
+// Once players are seen again within SESSION_GAP, their sessions span that check, so an empty
+// (or offline) reading in between is replaced by the number of players bridged across it.
+// Only fully empty readings are touched: a smaller dip could be someone really relogging.
+async function repairBlips(db, ts) {
+  const res = await db.prepare(
+    `UPDATE snapshots
+     SET up = 1,
+         online = (SELECT COUNT(*) FROM sessions x WHERE x.start_ts < snapshots.ts AND x.end_ts > snapshots.ts)
+     WHERE ts > ?1 AND ts < ?2 AND (online = 0 OR up = 0)
+       AND EXISTS (SELECT 1 FROM sessions x WHERE x.start_ts < snapshots.ts AND x.end_ts > snapshots.ts)
+     RETURNING ts`
+  ).bind(ts - SESSION_GAP, ts).all();
+  const hours = new Set(res.results.map((r) => Math.floor(r.ts / 3600) * 3600));
+  if (!hours.size) return;
+  await db.batch([...hours].map((h) => db.prepare(
+    `INSERT INTO hourly (hour_ts, samples, up_samples, online_sum, peak)
+     SELECT ?1, COUNT(*), SUM(up), SUM(online), MAX(online) FROM snapshots WHERE ts >= ?1 AND ts < ?1 + 3600
+     ON CONFLICT(hour_ts) DO UPDATE SET
+       samples = excluded.samples, up_samples = excluded.up_samples,
+       online_sum = excluded.online_sum, peak = excluded.peak`
+  ).bind(h)));
+  console.log(`repaired ${res.results.length} empty reading(s)`);
 }
