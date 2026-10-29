@@ -43,7 +43,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
-  and the leaderboard default to 1d (today, midnight to midnight; ‹ › steps a day at a time), and the other
+  defaults to the last 24 hours, and stepping back with ‹ pages through whole days (midnight to midnight).
+  The leaderboard defaults to 1d (today since midnight; ‹ › steps a day at a time), and the other
   charts to the smallest preset that covers all the data so far. Anything before tracking began is hatched out.
 - **Leaderboard**: keeps the height of the most rows seen for the current range size, so paging doesn't
   shift the page, and rows glide to their new ranks.

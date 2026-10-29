@@ -1051,6 +1051,12 @@ function resolveWindow(w) {
 
 function shiftWindow(w, dir) {
   if (w.unit === 'all') return w;
+  if (w.byDay) {
+    // live 24h -> yesterday -> the day before ...; stepping forward past yesterday returns to live 24h
+    const last = w.unit === 'day' ? addDays(w.end, dir) : dir < 0 ? addDays(todayStr(), -1) : null;
+    if (last == null || last >= todayStr()) return { unit: 'sec', count: 86400, end: null, preset: w.preset, byDay: true };
+    return { unit: 'day', count: 1, end: last, preset: w.preset, byDay: true };
+  }
   if (w.unit === 'day') {
     const last = addDays(w.end ?? todayStr(), dir * w.count);
     return { ...w, end: last >= todayStr() ? null : last };
@@ -1062,7 +1068,7 @@ function shiftWindow(w, dir) {
   return { ...w, end: end >= liveEnd ? null : end };
 }
 
-const presetWindow = (p) => ({ unit: p.unit, count: p.count, end: null, preset: p.v });
+const presetWindow = (p) => ({ unit: p.unit, count: p.count, end: null, preset: p.v, ...(p.byDay && { byDay: true }) });
 const windowKey = (w) => `${w.unit}:${w.count}:${w.end ?? 'live'}`;
 const matchPreset = (presets, unit, count) => presets.find((p) => p.unit === unit && p.count === count)?.v ?? 'custom';
 
@@ -1083,7 +1089,8 @@ function windowLabel(w, r, presets) {
 
 const TL_PRESETS = [
   { v: '6h', label: '6h', unit: 'sec', count: 6 * 3600, long: 'Last 6 hours' },
-  { v: '1d', label: '1d', unit: 'day', count: 1, long: 'Today' }, // midnight to midnight
+  // Live it's the last 24 hours; stepping back pages through whole days (midnight to midnight).
+  { v: '24h', label: '24h', unit: 'sec', count: 86400, long: 'Last 24 hours', byDay: true },
   { v: '7d', label: '7d', unit: 'sec', count: 7 * 86400, long: 'Last 7 days' },
   { v: '30d', label: '30d', unit: 'sec', count: 30 * 86400, long: 'Last 30 days' },
   { v: '90d', label: '90d', unit: 'sec', count: 90 * 86400, long: 'Last 90 days' },
@@ -1269,7 +1276,7 @@ const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
 const presetByKey = (presets, v) => presets.find((p) => p.v === v);
 
 function fittingTimelineWindow() {
-  return presetWindow(presetByKey(TL_PRESETS, '1d'));
+  return presetWindow(presetByKey(TL_PRESETS, '24h'));
 }
 
 function daysCovered(since) {
