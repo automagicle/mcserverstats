@@ -729,7 +729,7 @@ function drawLineChart(root, opts, f) {
 
   // crosshair + tooltip
   const cross = sv('line', { y1: m.t, y2: m.t + ph, class: 'crosshair', visibility: 'hidden' });
-  const markers = series.map((s) => sv('circle', { r: 4, fill: s.color, class: 'marker', visibility: 'hidden' }));
+  const markers = series.map((s) => sv('circle', { r: 4, style: `fill:${s.color}`, class: 'marker', visibility: 'hidden' }));
   svg.append(cross, ...markers);
   const hit = sv('rect', { x: m.l, y: 0, width: pw, height: H, fill: 'transparent' });
   svg.append(hit);
@@ -1083,7 +1083,7 @@ function windowLabel(w, r, presets) {
 
 const TL_PRESETS = [
   { v: '6h', label: '6h', unit: 'sec', count: 6 * 3600, long: 'Last 6 hours' },
-  { v: '24h', label: '24h', unit: 'sec', count: 86400, long: 'Last 24 hours' },
+  { v: '1d', label: '1d', unit: 'day', count: 1, long: 'Today' }, // midnight to midnight
   { v: '7d', label: '7d', unit: 'sec', count: 7 * 86400, long: 'Last 7 days' },
   { v: '30d', label: '30d', unit: 'sec', count: 30 * 86400, long: 'Last 30 days' },
   { v: '90d', label: '90d', unit: 'sec', count: 90 * 86400, long: 'Last 90 days' },
@@ -1257,9 +1257,9 @@ const state = {
 
 const HOURLY_DAYS = 92; // longest range anything on the page needs
 const LB_PRESETS = [
+  { v: '1d', label: '1d', unit: 'day', count: 1, long: 'Today' },
   { v: '24h', label: '24h', unit: 'sec', count: 86400, long: 'Last 24 hours' },
   { v: '7d', label: '7d', unit: 'sec', count: 7 * 86400, long: 'Last 7 days' },
-  { v: '30d', label: '30d', unit: 'sec', count: 30 * 86400, long: 'Last 30 days' },
   { v: 'all', label: 'All', unit: 'all', count: 0, long: 'All time' },
 ];
 
@@ -1269,7 +1269,7 @@ const dataSpan = () => (state.dataStart ? nowSec() - state.dataStart : 0);
 const presetByKey = (presets, v) => presets.find((p) => p.v === v);
 
 function fittingTimelineWindow() {
-  return presetWindow(presetByKey(TL_PRESETS, '24h'));
+  return presetWindow(presetByKey(TL_PRESETS, '1d'));
 }
 
 function daysCovered(since) {
@@ -1294,11 +1294,10 @@ function fittingPlayerWindow(firstSeen) {
 // Smallest preset that covers all the data; wider ones get the red "Data starts on" note.
 function fittingLeaderboardRange() {
   const span = dataSpan();
-  return LB_PRESETS.find((p) => p.unit === 'all' || span <= p.count);
+  return LB_PRESETS.find((p) => p.unit === 'all' || (p.unit === 'sec' && span <= p.count));
 }
 
-// Default leaderboard range: 24h until there's a full week of data, then 7d.
-const defaultLeaderboardRange = () => presetByKey(LB_PRESETS, dataSpan() >= 7 * 86400 ? '7d' : '24h');
+const defaultLeaderboardRange = () => presetByKey(LB_PRESETS, '1d');
 
 function showError(msg) {
   const e = $('#error');
@@ -1480,9 +1479,9 @@ async function loadTimeline(slide = 0) {
   const { from, to } = r;
   tlCtl.sync();
   $('#tl-label').textContent = windowLabel(w, r, TL_PRESETS);
-  const c1 = cssVar('--series-1');
-  const c2 = cssVar('--series-2');
-  const c3 = cssVar('--series-3');
+  const c1 = 'var(--series-1)';
+  const c2 = 'var(--series-2)';
+  const c3 = 'var(--series-3)';
   const legend = $('#tl-legend');
   const key = (color, text) => el('span', {}, el('span', { class: 'key', style: `background:${color}` }), text);
   let opts;
@@ -1512,7 +1511,7 @@ async function loadTimeline(slide = 0) {
       fmtValue: (v) => (Number.isInteger(v) ? `${v} ${v === 1 ? 'player' : 'players'}` : v.toFixed(1)),
       fmtTime: (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     };
-    legend.replaceChildren(...(trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
+    legend.replaceChildren(...(trend && pts.length ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
     const rows = await getHourlyRange(from, to);
     opts = {
@@ -1925,7 +1924,7 @@ function renderPlayerActivity(animate = false, slide = 0, grow = false) {
         if (!iv) return [{ value: 'Offline' }, { label: when }];
         const end = iv === d.liveSession ? 'now' : fmt(iv[1], hm);
         return [
-          { value: 'Online', color: cssVar('--series-1') },
+          { value: 'Online', color: 'var(--series-1)' },
           { label: when },
           { label: `Session ${fmt(iv[0], hm)} – ${end} · ${dur(iv[1] - iv[0])}` },
         ];
@@ -1953,6 +1952,29 @@ async function route() {
   }
 }
 
+/* ---------- light / dark ---------- */
+
+// Follows the system until the switch is used, then remembers the choice.
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+const themeToggle = $('#theme-toggle');
+const isDark = () => (document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light')) === 'dark';
+const syncThemeToggle = () => themeToggle.setAttribute('aria-checked', String(isDark()));
+
+themeToggle.addEventListener('click', () => {
+  const next = isDark() ? 'light' : 'dark';
+  const apply = () => {
+    document.documentElement.dataset.theme = next;
+    syncThemeToggle();
+  };
+  // Cross-fade the whole page where supported.
+  if (document.startViewTransition && !reducedMotion()) document.startViewTransition(apply);
+  else apply();
+  try { localStorage.setItem('theme', next); } catch {}
+});
+darkQuery.addEventListener('change', syncThemeToggle);
+syncThemeToggle();
+requestAnimationFrame(() => requestAnimationFrame(() => themeToggle.classList.add('ready'))); // no slide on page load
+
 const tlCtl = rangeControl($('#tl-ctl'), {
   presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds(TL_PRESETS),
   onChange: (w, dir) => loadTimeline(dir).catch((e) => showError(e.message)),
@@ -1972,7 +1994,7 @@ const lbCtl = rangeControl($('#lb-ctl'), {
   presets: LB_PRESETS, picker: 'datetime', fromPicker: pickSeconds(LB_PRESETS),
   onChange: () => loadLeaderboard().catch((e) => showError(e.message)),
 });
-lbCtl.set(presetWindow(LB_PRESETS[2]));
+lbCtl.set(presetWindow(LB_PRESETS[0]));
 
 window.addEventListener('hashchange', route);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

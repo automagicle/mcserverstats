@@ -7,6 +7,10 @@
   <title>Server Stats</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b5a2b'/%3E%3Crect width='16' height='6' rx='3' fill='%235cb85c'/%3E%3Crect y='3' width='16' height='3' fill='%235cb85c'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply a saved theme before first paint, so there's no flash of the other one.
+    try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+  </script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -15,7 +19,14 @@
       <span class="logo" aria-hidden="true"></span>
       <span>Server Stats</span>
     </a>
-    <div id="live" class="live" aria-live="polite"><span class="dot"></span><span id="live-text">Loading…</span></div>
+    <div class="top-right">
+      <div id="live" class="live" aria-live="polite"><span class="dot"></span><span id="live-text">Loading…</span></div>
+      <button id="theme-toggle" class="theme-toggle" type="button" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
+        <span class="theme-knob"></span>
+        <svg class="icon-sun" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9"/></svg>
+        <svg class="icon-moon" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M13.2 10.1A5.6 5.6 0 0 1 5.9 2.8a5.6 5.6 0 1 0 7.3 7.3z"/></svg>
+      </button>
+    </div>
   </header>
 
   <main>

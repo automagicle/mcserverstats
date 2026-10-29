@@ -43,12 +43,14 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
-  defaults to 24h, the leaderboard to 24h until there's a week of data (then 7d), and the other charts to the
-  smallest preset that covers all the data so far. Anything before tracking began is hatched out.
+  and the leaderboard default to 1d (today, midnight to midnight; ‹ › steps a day at a time), and the other
+  charts to the smallest preset that covers all the data so far. Anything before tracking began is hatched out.
 - **Leaderboard**: keeps the height of the most rows seen for the current range size, so paging doesn't
   shift the page, and rows glide to their new ranks.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
   tab is visible), with animations that are skipped when the system's reduce-motion setting is on.
+- **Theme**: the switch at the top picks light or dark and is remembered in the browser; until it's used,
+  the page follows the system setting.
 - Times are shown in `TZ_NAME` from `wrangler.jsonc` (Pacific by default).
 
 ## Notes
