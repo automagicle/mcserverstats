@@ -1,10 +1,9 @@
 node_modules/
 .wrangler/
+.claude/
 .dev.vars
-mod/build/
-mod/.gradle/
-mod/.wrangler/
-mod/.dev.vars/
-mod/.claude/
-mod/run/
 mcstatus-chat.properties
+mod/run/
+mod/build/
+mod/.gradle
+.DS_Store
