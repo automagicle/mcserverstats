@@ -29,6 +29,7 @@
   ],
 
   // MC_SERVER is a secret (wrangler secret put MC_SERVER), never put it here.
+  // So is CHAT_INGEST_TOKEN, which the chat mod sends (see mod/README.md).
   "vars": {
     "TZ_NAME": "America/Los_Angeles",
     // Filled in after enabling Cloudflare Access on the workers.dev URL.

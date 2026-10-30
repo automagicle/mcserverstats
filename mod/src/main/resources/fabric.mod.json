@@ -1,0 +1,17 @@
+{
+	"schemaVersion": 1,
+	"id": "mcstats_chat",
+	"version": "${version}",
+	"name": "mcstats chat log",
+	"description": "Sends chat, joins, leaves, deaths and advancements to an mcstats dashboard.",
+	"license": "MIT",
+	"environment": "server",
+	"entrypoints": {
+		"server": ["dev.mcserverstats.chatlog.ChatLogMod"]
+	},
+	"depends": {
+		"fabricloader": ">=0.18.4",
+		"minecraft": "~26.2",
+		"java": ">=25"
+	}
+}

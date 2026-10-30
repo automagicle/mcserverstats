@@ -1,0 +1,37 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+base {
+	archivesName = 'mcstats-chat'
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+	// Only the Fabric API pieces this mod uses, bundled inside its jar,
+	// so the server doesn't need Fabric API installed separately.
+	for (name in ['fabric-api-base', 'fabric-message-api-v1', 'fabric-lifecycle-events-v1']) {
+		def dep = fabricApi.module(name, project.fabric_api_version)
+		implementation dep
+		include dep
+	}
+}
+
+processResources {
+	def version = project.version
+	inputs.property 'version', version
+	filesMatching('fabric.mod.json') {
+		expand 'version': version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}

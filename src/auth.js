@@ -61,7 +61,9 @@ export async function isAuthorized(request, env, url) {
 
     const now = Math.floor(Date.now() / 1000);
     const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-    return auds.includes(aud) && payload.iss === `https://${team}` && payload.exp > now;
+    if (!(auds.includes(aud) && payload.iss === `https://${team}` && payload.exp > now)) return false;
+    // A service token (the chat mod's way past Access) may only post chat, not read the dashboard.
+    return !(payload.common_name && !payload.email);
   } catch (err) {
     console.error('Access token check failed:', err.message);
     return false;
