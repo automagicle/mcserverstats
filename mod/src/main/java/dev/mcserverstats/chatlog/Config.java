@@ -1,7 +1,7 @@
 package dev.mcserverstats.chatlog;
 
 import java.io.IOException;
-import java.io.Reader;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,10 +42,12 @@ record Config(String url, String token, String accessClientId, String accessClie
 			Files.writeString(file, TEMPLATE, StandardCharsets.UTF_8);
 			ChatLogMod.LOG.warn("Created {}. Fill in url and token to start sending chat.", file);
 		}
+		// Files saved by some web panels and Windows editors start with a byte-order mark,
+		// which would otherwise become part of the first key.
+		String text = Files.readString(file, StandardCharsets.UTF_8);
+		if (text.startsWith("\uFEFF")) text = text.substring(1);
 		Properties p = new Properties();
-		try (Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-			p.load(r);
-		}
+		p.load(new StringReader(text));
 		return new Config(
 				get(p, "url"), get(p, "token"), get(p, "access_client_id"), get(p, "access_client_secret"),
 				!get(p, "system_messages").equalsIgnoreCase("false"));

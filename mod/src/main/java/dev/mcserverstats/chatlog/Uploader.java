@@ -56,6 +56,7 @@ final class Uploader {
 	private String lastWarning;
 	private long lastWarningAt;
 	private int dropped;
+	private boolean connected;
 
 	Uploader(Path configFile, Path pendingFile, String version) {
 		this.configFile = configFile;
@@ -184,6 +185,8 @@ final class Uploader {
 
 		if (status >= 200 && status < 300) {
 			if (lastWarning != null) ChatLogMod.LOG.info("Chat log is reaching the dashboard again");
+			else if (!connected) ChatLogMod.LOG.info("Chat log connected; messages are reaching the dashboard");
+			connected = true;
 			lastWarning = null;
 			backoff = 0;
 			remove(batch);

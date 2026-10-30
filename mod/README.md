@@ -54,7 +54,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.0.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.0.1.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -72,7 +72,18 @@ retried batch is never stored twice.
    on the Chat log page within about 15 seconds. If anything is wrong, the console says what
    (wrong token, Access blocking it, wrong url), at most once every 10 minutes.
 
-## Settings
+## Troubleshooting
+
+Search the server console (latest.log) for `mcstats-chat`:
+
+| Console says | Meaning |
+| --- | --- |
+| nothing at all | The mod didn't load. Check that the jar is in `mods/`, that the server runs Fabric (not Paper/Forge), and look for a Fabric error naming `mcstats_chat` near the top of the log. |
+| `Created …/mcstats-chat.properties` on every start | The filled-in file isn't where the mod looks, or has a different name. It must be exactly `config/mcstats-chat.properties`. |
+| `Not sending chat: url is blank` (or `token`) | The file was found but that value is empty. Check spelling of the keys (`url=`, `token=`). |
+| `Sending chat to …` then `Chat log connected` | Working. |
+| `Couldn't send chat: …` | The rest of the line says which part is wrong (token, Access, or url). |
+
 
 | Key | |
 | --- | --- |
@@ -87,7 +98,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.0.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.0.1.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`
