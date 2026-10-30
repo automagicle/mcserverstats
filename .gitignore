@@ -4,3 +4,4 @@ node_modules/
 mod/build/
 mod/.gradle/
 mod/run/
+mcstatus-chat.properties
