@@ -787,6 +787,17 @@ a.msg-name:hover { text-decoration: underline; }
 .sys-text { min-width: 0; overflow-wrap: anywhere; }
 .sys-join .msg-lead { color: var(--good); }
 .sys-death .msg-lead { color: var(--critical); }
+/* deaths are easy to miss in a busy log: a red band with a bar on the left */
+.msg-sys.sys-death {
+  margin-top: 4px;
+  margin-bottom: 1px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  background: color-mix(in srgb, var(--critical) 11%, transparent);
+  box-shadow: inset 3px 0 0 var(--critical);
+  color: var(--ink);
+}
+.msg-sys.sys-death:hover { background: color-mix(in srgb, var(--critical) 17%, transparent); }
 .sys-advancement .msg-lead { color: var(--series-3); }
 .sys-server { color: var(--muted); }
 .msg-new { animation: rise-in 0.35s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
