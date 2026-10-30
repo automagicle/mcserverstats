@@ -6,6 +6,7 @@ CREATE TABLE chat (
   kind      TEXT NOT NULL,          -- chat, emote, say, join, leave, death, advancement, server, system
   uuid      TEXT,                   -- the player it's from or about, when known
   name      TEXT,
+  display   TEXT,                   -- the name as chat shows it: JSON [{ t, c? }] with team prefix and colors
   text      TEXT NOT NULL
 );
 CREATE INDEX chat_ts ON chat(ts_ms, id);

@@ -5,6 +5,7 @@ It's one jar with no other dependencies (the bits of Fabric API it uses are bund
 Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anything.
 
 **Recorded:** public chat, `/say`, `/me`, joins, leaves, deaths, advancements, and server start/stop.
+Names are sent as chat shows them (team prefix and colors), so the dashboard can match.
 **Never recorded:** private messages (`/msg`, `/tell`, `/w`, `/teammsg`) and commands. Let players know chat is logged.
 
 ## How it gets to the dashboard

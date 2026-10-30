@@ -1369,7 +1369,7 @@ function makeChip(p) {
   knownNames.set(p.uuid, p.name);
   const chip = el('a', { class: 'chip', href: `#/player/${p.uuid}` },
     headImg(p.name, 24),
-    el('span', { class: 'chip-name', text: p.name }),
+    colorName(el('span', { class: 'chip-name', text: p.name }), p.uuid),
     el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
   );
   chip.dataset.uuid = p.uuid;
@@ -1411,7 +1411,7 @@ function syncChips(list, players, bg = '--page') {
   for (const p of players) {
     const existing = current.get(p.uuid);
     if (existing) {
-      existing.querySelector('.chip-name').textContent = p.name;
+      colorName(existing.querySelector('.chip-name'), p.uuid).textContent = p.name;
       continue;
     }
     const chip = makeChip(p);
@@ -1999,7 +1999,9 @@ const chat = {
   pinned: null, // a time picked on the graph; it stays the chat's time until the reader scrolls
   quietUntil: 0, // scroll events before this come from the page moving things, not the reader
   bottomGap: 0, // distance from the bottom, kept when the log's height changes
-  unread: 0,
+  unread: 0, // player messages newer than the last one seen at the bottom of the log, per the server
+  seenId: (() => { try { const v = Number(localStorage.getItem('chatSeen')); return v > 0 ? v : null; } catch { return null; } })(),
+  newFrom: null, // messages after this id get a "New" divider (unread when the page was opened)
   t: null, // the time the chat is scrolled to (seconds)
   win: null, // the graph's window: the live 24h, or one whole day
   sessions: [],
@@ -2033,11 +2035,50 @@ function linkify(text) {
   return out;
 }
 
+// Names as chat shows them, in their team colors. Minecraft's colors are made for its dark chat box,
+// so each one gets a version that reads on the light page and one for the dark page (the CSS picks).
+const nameColors = new Map(); // uuid -> color of the name itself, for chips and lists elsewhere
+const mcCache = new Map();
+
+function luminance([r, g, b]) {
+  const lin = (v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+const contrast = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+const toHex = (rgb) => `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
+
+function mcStyle(hex) {
+  let v = mcCache.get(hex);
+  if (!v) {
+    const n = parseInt(hex.slice(1), 16);
+    const rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    let light = rgb, dark = rgb;
+    // light page: darken until it stands out from near-white; dark page: lighten away from near-black
+    for (let k = 1; k > 0 && contrast(luminance(light), 0.96) < 3.2; k -= 0.05) light = rgb.map((c) => c * k);
+    for (let k = 0; k <= 1 && contrast(luminance(dark), 0.01) < 4; k += 0.05) dark = rgb.map((c) => c + (255 - c) * k);
+    v = `--cl:${toHex(light)};--cd:${toHex(dark)}`;
+    mcCache.set(hex, v);
+  }
+  return v;
+}
+
+function colorName(node, uuid) {
+  const c = nameColors.get(uuid);
+  if (c) { node.classList.add('mc'); node.setAttribute('style', mcStyle(c)); }
+  return node;
+}
+
+const displayText = (m) => (m.display ? m.display.map((p) => p.t).join('') : m.name || 'Server');
+
 function chatName(m) {
-  const name = m.name || 'Server';
-  if (!m.uuid) return el('span', { class: 'msg-name', text: name });
-  knownNames.set(m.uuid, name);
-  const a = el('a', { class: 'msg-name', href: `#/player/${m.uuid}`, text: name });
+  const parts = m.display
+    ? m.display.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
+    : [m.name || 'Server'];
+  if (!m.uuid) return el('span', { class: 'msg-name' }, ...parts);
+  knownNames.set(m.uuid, m.name);
+  const own = m.display?.find((p) => p.c && p.t.includes(m.name));
+  if (own) nameColors.set(m.uuid, own.c);
+  const a = el('a', { class: 'msg-name', href: `#/player/${m.uuid}` }, ...parts);
   a.addEventListener('pointerenter', () => prefetchPlayer(m.uuid));
   return a;
 }
@@ -2060,7 +2101,8 @@ function sysRow(m) {
   const lead = m.kind === 'emote' ? chatAvatar(m, 16) : icon(SYS_ICONS[m.kind] || SYS_ICONS.system, 14);
   const body = el('div', { class: 'sys-text' });
   if (m.kind === 'emote') body.append(chatName(m), ' ', el('i', {}, ...linkify(m.text)));
-  else if (m.name && m.text.startsWith(m.name)) body.append(chatName(m), m.text.slice(m.name.length));
+  else if (m.name && m.text.startsWith(displayText(m))) body.append(chatName(m), m.text.slice(displayText(m).length));
+  else if (m.name && m.text.startsWith(m.name)) body.append(chatName({ ...m, display: null }), m.text.slice(m.name.length));
   else body.append(m.text);
   return el('div', { class: `msg-sys sys-${m.kind}` },
     el('span', { class: 'msg-lead' }, lead), body, el('time', { class: 'msg-time', text: clock(m.ts / 1000) }));
@@ -2068,7 +2110,7 @@ function sysRow(m) {
 
 // A run of messages from one player: head and name once, then their lines.
 function msgGroup(m) {
-  const head = chatAvatar(m, 28);
+  const head = chatAvatar(m, 24);
   const lead = m.uuid
     ? el('a', { class: 'msg-lead', href: `#/player/${m.uuid}`, tabindex: '-1', 'aria-hidden': 'true' }, head)
     : el('span', { class: 'msg-lead' }, head);
@@ -2093,6 +2135,11 @@ function renderChat(fresh = new Set()) {
       frag.append(el('div', { class: 'chat-day', role: 'separator' },
         el('span', { text: relativeDay(d, { weekday: 'long', month: 'long', day: 'numeric' }) })));
       day = d;
+      group = null;
+    }
+    // what was unread when the page opened starts under a "New" line
+    if (chat.newFrom != null && prev && prev.id <= chat.newFrom && m.id > chat.newFrom) {
+      frag.append(el('div', { class: 'chat-new', role: 'separator' }, el('span', { text: 'New' })));
       group = null;
     }
     let node;
@@ -2163,7 +2210,7 @@ async function loadChatLatest() {
   const res = await api(`/api/chat?limit=${CHAT_PAGE}`);
   Object.assign(chat, {
     messages: res.messages, moreBefore: res.more_before, moreAfter: false,
-    maxId: res.max_id, loaded: true, pinned: null, unread: 0,
+    maxId: res.max_id, loaded: true, pinned: null,
   });
   renderChat();
   setScroll(chatScroll.scrollHeight);
@@ -2231,7 +2278,7 @@ async function jumpChatTo(t) {
     const res = await api(`/api/chat?at=${Math.round(t * 1000)}&limit=${CHAT_PAGE}`);
     Object.assign(chat, {
       messages: res.messages, moreBefore: res.more_before, moreAfter: res.more_after,
-      maxId: Math.max(chat.maxId, res.max_id), unread: 0,
+      maxId: Math.max(chat.maxId, res.max_id),
     });
     renderChat();
     line = chat.lines.findLast((l) => l.ts <= t * 1000) || null;
@@ -2252,11 +2299,55 @@ async function jumpChatTo(t) {
 
 // New messages since the last look. They're added at the bottom when the newest are loaded,
 // and followed if the reader is already at the bottom.
+const TALK = new Set(['chat', 'say', 'emote']); // what counts as unread
+
+// Everything up to the newest message counts as seen once the reader is at the bottom of the log.
+function markSeen() {
+  if ($('#view-chat').hidden || document.hidden || !chat.loaded || chat.moreAfter || fromBottom() > 60) return;
+  if (chat.seenId == null || chat.maxId > chat.seenId) {
+    chat.seenId = chat.maxId;
+    remember('chatSeen', String(chat.maxId));
+  }
+  if (chat.unread) {
+    chat.unread = 0;
+    renderUnread();
+  }
+}
+
+// Unread count in the Chat log tab, the page title and the jump button.
+function renderUnread() {
+  const n = chat.unread;
+  const label = n > 99 ? '99+' : String(n);
+  const badge = $('#tab-chat-badge');
+  badge.hidden = !n;
+  badge.textContent = label;
+  $('#tab-chat').setAttribute('aria-label', n ? `Chat log, ${label} unread` : 'Chat log');
+  document.title = `${n ? `(${label}) ` : ''}${document.title.replace(/^\(\d+\+?\) /, '')}`;
+  if (!$('#view-chat').hidden) updateChatJump();
+}
+
+// From the other pages: just the count, every 30 seconds.
+async function checkUnread() {
+  if (chat.seenId == null) {
+    const res = await api(`/api/chat?since_id=${Number.MAX_SAFE_INTEGER}&limit=1`);
+    chat.seenId = res.max_id;
+    remember('chatSeen', String(res.max_id));
+    return;
+  }
+  const res = await api(`/api/chat?since_id=${Number.MAX_SAFE_INTEGER}&limit=1&unread_since=${chat.seenId}`);
+  if (res.unread !== chat.unread) {
+    chat.unread = res.unread;
+    renderUnread();
+  }
+}
+
 async function pollChat() {
   if (!chat.loaded || chat.loading || document.hidden || $('#view-chat').hidden) return;
-  const res = await api(`/api/chat?since_id=${chat.maxId}&limit=200`);
+  const res = await api(`/api/chat?since_id=${chat.maxId}&limit=200&unread_since=${chat.seenId ?? chat.maxId}`);
   if (res.more_after && !chat.moreAfter) return loadChatLatest().then(syncChatTime); // fell far behind
   chat.maxId = Math.max(chat.maxId, res.max_id);
+  chat.unread = res.unread ?? 0;
+  renderUnread();
   if (!res.messages.length || chat.moreAfter || chat.loading) return;
   const known = new Set(chat.messages.map((m) => m.id));
   const fresh = res.messages.filter((m) => !known.has(m.id));
@@ -2274,22 +2365,22 @@ async function pollChat() {
     chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
   } else {
     restoreAnchor(anchor);
-    chat.unread += fresh.length;
   }
+  markSeen();
   updateChatJump();
   syncChatTime();
 }
 
 function updateChatJump() {
   const btn = $('#chat-jump');
-  if (!chat.moreAfter && fromBottom() < 60) chat.unread = 0;
-  btn.hidden = !chat.unread && !chat.moreAfter && fromBottom() < 400;
-  btn.textContent = chat.unread ? `${chat.unread} new message${chat.unread === 1 ? '' : 's'} ↓` : 'Jump to latest ↓';
+  const n = chat.unread;
+  btn.hidden = !n && !chat.moreAfter && fromBottom() < 400;
+  btn.classList.toggle('unread', n > 0);
+  btn.textContent = n ? `${n > 99 ? '99+' : n} unread ↓` : 'Jump to latest ↓';
 }
 
 $('#chat-jump').addEventListener('click', async () => {
   chat.pinned = null;
-  chat.unread = 0;
   if (chat.moreAfter) await loadChatLatest().catch((e) => showError(e.message));
   else chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
   updateChatJump();
@@ -2301,6 +2392,7 @@ chatScroll.addEventListener('scroll', () => {
   if (performance.now() > chat.quietUntil) chat.pinned = null;
   chat.bottomGap = fromBottom();
   fillChat();
+  markSeen();
   updateChatJump();
   syncChatTime();
 }, { passive: true });
@@ -2415,7 +2507,7 @@ function renderOnlineThen(force = false) {
   }
   list.replaceChildren(...people.map((p) => {
     if (!onlineHeads.has(p.name)) onlineHeads.set(p.name, headImg(p.name, 16, { width: 16, height: 16, loading: 'eager' }));
-    const a = el('a', { class: 'cg-person', href: `#/player/${p.uuid}` }, onlineHeads.get(p.name), el('span', { text: p.name }));
+    const a = el('a', { class: 'cg-person', href: `#/player/${p.uuid}` }, onlineHeads.get(p.name), colorName(el('span', { text: p.name }), p.uuid));
     a.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
     return a;
   }));
@@ -2486,8 +2578,10 @@ async function showChat({ refresh = false } = {}) {
   }
   chat.loaded = false;
   chat.messages = [];
+  chat.newFrom = chat.unread ? chat.seenId : null;
   renderChat();
   await loadChatLatest();
+  markSeen();
   const line = lastVisibleLine();
   chat.t = line ? line.ts / 1000 : nowSec();
   chat.win = chatWindowFor(chat.t, liveDayWindow());
@@ -2497,7 +2591,12 @@ async function showChat({ refresh = false } = {}) {
   fillChat();
 }
 
-setInterval(() => pollChat().catch(() => {}), CHAT_POLL_MS);
+let chatTicks = 0;
+setInterval(() => {
+  if (document.hidden) return;
+  if (!$('#view-chat').hidden) pollChat().catch(() => {});
+  else if (chatTicks++ % 3 === 0) checkUnread().catch(() => {});
+}, CHAT_POLL_MS);
 
 /* ---------- routing & refresh ---------- */
 
@@ -2509,6 +2608,7 @@ async function route() {
     if (m) await showPlayer(m[1]);
     else if (location.hash === '#/chat') await showChat();
     else await showHome();
+    renderUnread();
   } catch (err) {
     console.error(err);
     if (err instanceof AuthError) {
@@ -2591,6 +2691,7 @@ async function refresh() {
     if (m) await showPlayer(m[1], { refresh: true });
     else if (location.hash === '#/chat') await showChat({ refresh: true });
     else await showHome();
+    renderUnread();
     showError('');
   } catch (err) {
     if (err instanceof AuthError) showError('Your login expired. Reload the page to sign in again.');
@@ -2609,8 +2710,10 @@ function scheduleRefresh() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   refresh();
-  pollChat().catch(() => {});
+  if (!$('#view-chat').hidden) pollChat().catch(() => {});
+  else checkUnread().catch(() => {});
 });
 scheduleRefresh();
 
 route();
+checkUnread().catch(() => {});

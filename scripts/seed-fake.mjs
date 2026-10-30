@@ -78,30 +78,42 @@ const DEATHS = ['was slain by Zombie', 'was blown up by Creeper', 'fell from a h
   'tried to swim in lava', 'was shot by Skeleton', 'hit the ground too hard'];
 const ADV = ['has made the advancement [Diamonds!]', 'has made the advancement [We Need to Go Deeper]',
   'has made the advancement [Monster Hunter]', 'has completed the challenge [Return to Sender]'];
+// Names as chat shows them, for players on a team (prefix and colors).
+const DISPLAY = {
+  Notch_Fan99: [{ t: '[Admin] ', c: '#ff5555' }, { t: 'Notch_Fan99', c: '#ffaa00' }],
+  BuilderBee: [{ t: 'BuilderBee', c: '#55ffff' }],
+  redstone_rae: [{ t: '[VIP] ', c: '#55ff55' }, { t: 'redstone_rae', c: '#ffff55' }],
+  EnderEli: [{ t: 'EnderEli', c: '#ffffff' }],
+  Mossy: [{ t: 'Mossy', c: '#0000aa' }],
+};
+const shown = (p) => (DISPLAY[p.name] ? DISPLAY[p.name].map((x) => x.t).join('') : p.name);
 const chat = [];
 let n = 0;
-const msg = (ts, kind, p, text) => chat.push(`('seed-${++n}', ${ts}, '${kind}', ${p ? `'${p.uuid}'` : 'NULL'}, ${p ? `'${p.name}'` : 'NULL'}, '${text.replace(/'/g, "''")}')`);
+const sql = (v) => (v == null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`);
+const msg = (ts, kind, p, text) => chat.push([ts, (id) => `('seed-${id}', ${ts}, '${kind}', ${sql(p?.uuid)}, ${sql(p?.name)}, ${sql(text)}, ${sql(p && DISPLAY[p.name] ? JSON.stringify(DISPLAY[p.name]) : null)})`]);
 const chatFrom = now - 14 * 86400;
 for (const [p, s, e] of allSessions) {
   if (e < chatFrom) continue;
-  msg(s * 1000 + Math.floor(rand() * 20000), 'join', p, `${p.name} joined the game`);
+  msg(s * 1000 + Math.floor(rand() * 20000), 'join', p, `${shown(p)} joined the game`);
   for (let t = s + 30 + rand() * 600; t < e; t += 60 + rand() * 900) {
     const r = rand();
     const ms = Math.floor(t * 1000);
-    if (r < 0.06) msg(ms, 'death', p, `${p.name} ${DEATHS[Math.floor(rand() * DEATHS.length)]}`);
-    else if (r < 0.09) msg(ms, 'advancement', p, `${p.name} ${ADV[Math.floor(rand() * ADV.length)]}`);
+    if (r < 0.06) msg(ms, 'death', p, `${shown(p)} ${DEATHS[Math.floor(rand() * DEATHS.length)]}`);
+    else if (r < 0.09) msg(ms, 'advancement', p, `${shown(p)} ${ADV[Math.floor(rand() * ADV.length)]}`);
     else if (r < 0.11) msg(ms, 'emote', p, `waves`);
     else {
       msg(ms, 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
       if (rand() < 0.4) msg(ms + 3000 + Math.floor(rand() * 8000), 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
     }
   }
-  if (e < now - 120) msg(e * 1000 + 30000, 'leave', p, `${p.name} left the game`);
+  if (e < now - 120) msg(e * 1000 + 30000, 'leave', p, `${shown(p)} left the game`);
 }
 msg((now - 3 * 86400) * 1000, 'server', null, 'Server stopped');
 msg((now - 3 * 86400 + 90) * 1000, 'server', null, 'Server started');
-for (let i = 0; i < chat.length; i += 200) {
-  out.push(`INSERT INTO chat (event_id, ts_ms, kind, uuid, name, text) VALUES ${chat.slice(i, i + 200).join(',')};`);
+// stored in time order, like the mod sends them
+const rows = chat.sort((a, b) => a[0] - b[0]).map(([, row]) => row(++n));
+for (let i = 0; i < rows.length; i += 200) {
+  out.push(`INSERT INTO chat (event_id, ts_ms, kind, uuid, name, text, display) VALUES ${rows.slice(i, i + 200).join(',')};`);
 }
 
 console.log(out.join('\n'));

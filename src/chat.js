@@ -5,6 +5,7 @@ const ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const MAX_BODY = 512 * 1024;
 const MAX_EVENTS = 200;
 const MAX_TEXT = 1000;
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const MAX_AGE_MS = 60 * 86400_000; // older messages (e.g. saved during a very long outage) are skipped
 
 // Constant-time comparison; hashing first makes both sides the same length.
@@ -16,6 +17,19 @@ async function sameSecret(a, b) {
 
 // Control characters and leftover § color codes out; newlines stay.
 const clean = (s, max) => s.replace(/[\u0000-\u0009\u000b-\u001f\u007f]|§[0-9a-fk-or]/gi, '').trim().slice(0, max);
+
+// The styled name: up to 8 pieces of text, each with an optional color. Anything else is dropped.
+function cleanDisplay(d) {
+  if (!Array.isArray(d) || !d.length || d.length > 8) return null;
+  const out = [];
+  for (const p of d) {
+    if (!p || typeof p.t !== 'string') return null;
+    const t = p.t.replace(/[\u0000-\u001f\u007f]|§[0-9a-fk-or]/gi, '').slice(0, 64);
+    if (!t) continue;
+    out.push(typeof p.c === 'string' && COLOR_RE.test(p.c) ? { t, c: p.c.toLowerCase() } : { t });
+  }
+  return out.length ? JSON.stringify(out) : null;
+}
 
 // POST /api/ingest/chat from the server mod: { events: [{ id, ts, kind, uuid?, name?, text }] }.
 // Cloudflare Access only lets it through with the service token; the bearer token is checked here too.
@@ -53,28 +67,29 @@ export async function ingestChat(request, env) {
     if (!valid) continue;
     const text = clean(e.text, MAX_TEXT);
     if (!text) continue;
-    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text]);
+    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display)]);
   }
 
   if (rows.length) {
     // Server messages name a player without a UUID sometimes; fill it in from the players we know.
     const stmt = env.DB.prepare(
-      `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text)
-       VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6)`
+      `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text, display)
+       VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7)`
     );
     await env.DB.batch(rows.map((r) => stmt.bind(...r)));
   }
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }
 
-const COLS = 'id, ts_ms AS ts, kind, uuid, name, text';
+const COLS = 'id, ts_ms AS ts, kind, uuid, name, text, display';
+const withDisplay = (rows) => rows.map((r) => ({ ...r, display: r.display ? JSON.parse(r.display) : null }));
 const BIG = Number.MAX_SAFE_INTEGER;
 
 // GET /api/chat — messages in time order, `limit` at a time:
 //   (nothing)         the latest
 //   before=TS:ID      older than a message      after=TS:ID   newer than a message
 //   at=TS             up to and just after a moment (unix ms)
-//   since_id=ID       stored after that id (live updates), whatever their time
+//   since_id=ID       stored after that id (live updates), whatever their time; add unread_since=ID for a count
 export async function readChat(env, url) {
   const q = url.searchParams;
   const db = env.DB;
@@ -97,8 +112,16 @@ export async function readChat(env, url) {
       db.prepare(`SELECT ${COLS} FROM chat WHERE id > ? ORDER BY id LIMIT ?`).bind(since, limit + 1),
       maxId,
     ]);
-    const messages = rows.results.slice(0, limit).sort((a, b) => a.ts - b.ts || a.id - b.id);
-    return json({ messages, more_after: rows.results.length > limit, max_id: max.results[0].id ?? 0 });
+    const messages = withDisplay(rows.results.slice(0, limit)).sort((a, b) => a.ts - b.ts || a.id - b.id);
+    const body = { messages, more_after: rows.results.length > limit, max_id: max.results[0].id ?? 0 };
+    // unread_since=ID: how many player messages (not joins, deaths…) came after it, up to 1000
+    if (q.has('unread_since')) {
+      const seen = Math.max(0, Math.floor(Number(q.get('unread_since'))) || 0);
+      body.unread = (await db.prepare(
+        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM chat WHERE id > ? AND kind IN ('chat', 'say', 'emote') LIMIT 1000)`
+      ).bind(seen).first()).n;
+    }
+    return json(body);
   }
 
   let back = null, fwd = null;
@@ -126,7 +149,7 @@ export async function readChat(env, url) {
   const bn = back && !q.has('after') ? limit : 0;
   const fn = q.has('after') ? limit : Math.ceil(limit / 2);
   return json({
-    messages: [...b.slice(0, bn).reverse(), ...f.slice(0, fn)],
+    messages: withDisplay([...b.slice(0, bn).reverse(), ...f.slice(0, fn)]),
     more_before: b.length > bn,
     // "after" isn't asked for when loading the latest, so nothing newer is assumed.
     more_after: fwd ? f.length > fn : false,
