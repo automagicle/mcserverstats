@@ -3,5 +3,8 @@ node_modules/
 .dev.vars
 mod/build/
 mod/.gradle/
+mod/.wrangler/
+mod/.dev.vars/
+mod/.claude/
 mod/run/
 mcstatus-chat.properties
