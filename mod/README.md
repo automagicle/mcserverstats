@@ -84,6 +84,11 @@ Search the server console (latest.log) for `mcstats-chat`:
 | `Sending chat to …` then `Chat log connected` | Working. |
 | `Couldn't send chat: …` | The rest of the line says which part is wrong (token, Access, or url). |
 
+To test a config file from your own computer, put a copy named `mcstats-chat.properties` in the repo root
+(it's gitignored) and run `node scripts/test-chat-ingest.mjs`. It sends one test message the same way the
+mod does and says what's wrong, without printing the secrets. Add `--check` to test without storing anything,
+or pass another file's path.
+
 
 | Key | |
 | --- | --- |
