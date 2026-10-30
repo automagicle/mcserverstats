@@ -88,15 +88,18 @@ try {
 }
 
 const s = res.status;
+// Access answers with its own HTML error page; the Worker answers with JSON.
+const fromAccess = !(res.headers.get('content-type') || '').includes('application/json');
 console.log(`\nHTTP ${s}`);
 const verdict =
   s >= 200 && s < 300
     ? check
       ? 'OK: Access and the token both accept this file. Nothing was stored.'
       : `OK: stored ${body}. A "Test message" line should now be on the Chat log page.`
+    : s === 401 && fromAccess ? 'Cloudflare Access doesn\'t recognise this access_client_id/secret pair (deleted token, or a wrong or mistyped secret).'
     : s === 401 ? 'Got past Access, but token doesn\'t match the Worker\'s CHAT_INGEST_TOKEN secret.'
     : s === 503 ? 'Got past Access, but the Worker has no CHAT_INGEST_TOKEN secret.'
-    : s === 403 ? 'Cloudflare Access refused it: the access_client_id/secret aren\'t a service token allowed by a Service Auth policy on this app.'
+    : s === 403 ? 'Cloudflare Access recognises this service token, but no Service Auth policy on this app allows it.'
     : s >= 300 && s < 400
       ? `Cloudflare Access redirected it to the login page${id ? ' (the service token wasn\'t accepted)' : ' (no access_client_id given)'}.`
     : s === 404 ? 'Wrong url: it should end in /api/ingest/chat.'

@@ -54,7 +54,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.0.1.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.0.2.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -82,7 +82,7 @@ Search the server console (latest.log) for `mcstats-chat`:
 | `Created …/mcstats-chat.properties` on every start | The filled-in file isn't where the mod looks, or has a different name. It must be exactly `config/mcstats-chat.properties`. |
 | `Not sending chat: url is blank` (or `token`) | The file was found but that value is empty. Check spelling of the keys (`url=`, `token=`). |
 | `Sending chat to …` then `Chat log connected` | Working. |
-| `Couldn't send chat: …` | The rest of the line says which part is wrong (token, Access, or url). |
+| `Couldn't send chat: …` | The rest of the line says which part is wrong. Note that Cloudflare Access answers 401 for a service token it doesn't recognise and 403 for one it knows but no Service Auth policy allows. |
 
 To test a config file from your own computer, put a copy named `mcstats-chat.properties` in the repo root
 (it's gitignored) and run `node scripts/test-chat-ingest.mjs`. It sends one test message the same way the
@@ -103,7 +103,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.0.1.jar
+./gradlew build      # → build/libs/mcstats-chat-1.0.2.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

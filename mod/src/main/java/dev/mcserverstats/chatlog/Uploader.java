@@ -160,6 +160,7 @@ final class Uploader {
 		Config c = config;
 		int status;
 		String reply;
+		boolean fromAccess; // Access answers with its own HTML page; the Worker answers with JSON
 		try {
 			HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(c.url()))
 					.timeout(timeout)
@@ -174,6 +175,7 @@ final class Uploader {
 			HttpResponse<String> res = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
 			status = res.statusCode();
 			reply = res.body();
+			fromAccess = !res.headers().firstValue("Content-Type").orElse("").contains("application/json");
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			return false;
@@ -199,10 +201,13 @@ final class Uploader {
 			return size() > 0;
 		}
 		fail(switch (status) {
-			case 401 -> "the token doesn't match CHAT_INGEST_TOKEN on the Worker";
+			case 401 -> fromAccess
+					? "Cloudflare Access doesn't recognise access_client_id / access_client_secret (deleted token or wrong secret)"
+					: "the token doesn't match CHAT_INGEST_TOKEN on the Worker";
 			case 503 -> "the Worker doesn't have a CHAT_INGEST_TOKEN secret yet";
-			case 301, 302, 303, 307, 308, 403 -> "Cloudflare Access turned it away (HTTP " + status
-					+ "); check access_client_id / access_client_secret and the Service Auth policy";
+			case 403 -> "Cloudflare Access knows this service token, but no Service Auth policy on the app allows it";
+			case 301, 302, 303, 307, 308 -> "Cloudflare Access sent it to the login page (HTTP " + status
+					+ "); check access_client_id / access_client_secret";
 			case 404 -> "the url isn't right (HTTP 404); it should end in /api/ingest/chat";
 			default -> "the dashboard answered HTTP " + status;
 		});
