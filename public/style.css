@@ -714,7 +714,7 @@ body.chat-mode .foot { display: none; }
 .cg-online-none { font-size: 12px; color: var(--muted); }
 
 /* the log and who's online now, in one card */
-.chat-card { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; margin: 0; overflow: hidden; }
+.chat-card { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; margin: 0; overflow: hidden; }
 .chat-scroll {
   position: relative;
   flex: 1;
@@ -811,42 +811,50 @@ a.msg-name:hover { text-decoration: underline; }
   animation: rise-in 0.25s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 
-/* who's online now: one slim row of chips under a line, or folded into a pill */
+/* who's online now: one row of chips under a line, or folded into a floating count */
 .chat-online {
   flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: 56px;
   max-height: 74px;
-  padding: 6px 10px 6px 14px;
+  padding: 8px 12px 8px 16px;
   border-top: 1px solid var(--grid);
 }
-.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 6px; margin: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
-.chat-chips .chip { flex: none; gap: 6px; padding: 2px 10px 2px 2px; font-size: 12px; background: var(--surface-2); box-shadow: none; }
+.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 8px; margin: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
+.chat-chips .chip { flex: none; gap: 7px; padding: 3px 12px 3px 3px; font-size: 13px; background: var(--surface-2); box-shadow: none; }
 .chat-chips .chip:hover { background: var(--grid); }
-.chat-chips .chip img { width: 20px; height: 20px; }
+.chat-chips .chip img { width: 24px; height: 24px; }
 .chat-chips .since { display: none; }
 .chat-online-empty { flex: 1; font-size: 13px; }
-.chat-online-close { flex: none; width: 26px; height: 26px; margin-left: auto; }
-.chat-online.collapsed { min-height: 0; padding-top: 6px; padding-bottom: 6px; }
+.chat-online-close { flex: none; width: 28px; height: 28px; margin-left: auto; }
+.chat-online.collapsed { display: contents; }
+/* room under the last message so the floating count never covers it */
+.chat-card:has(.chat-online.collapsed) .chat-scroll { padding-bottom: 50px; }
 .chat-online.collapsed > :not(.online-pill) { display: none; }
 .online-pill {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 11px 3px 9px;
-  border: 0;
+  padding: 6px 13px 6px 11px;
+  border: 1px solid var(--grid);
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--ink-2);
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
   cursor: pointer;
+  animation: rise-in 0.25s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 .online-pill[hidden] { display: none; }
-.online-pill:hover { color: var(--ink); background: var(--grid); }
+.online-pill:hover { color: var(--ink); background: var(--surface-2); }
 .online-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
 .online-pill.none .dot { background: var(--muted); }
 
@@ -877,7 +885,7 @@ a.msg-name:hover { text-decoration: underline; }
 @media (max-width: 420px) { .hide-xs { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   .cg-body, .cg-chev, .cg-cursor.sliding, .cg-cursor.sliding .cg-dot { transition: none; }
-  .msg-new, .chat-jump { animation: none; }
+  .msg-new, .chat-jump, .online-pill { animation: none; }
 }
 
 /* "New" line above what was unread when the chat was opened */
