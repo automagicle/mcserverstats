@@ -702,6 +702,7 @@ function drawLineChart(root, opts, f) {
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 240;
   const m = { l: 30, r: 10, t: 10, b: 24 };
+  root.plotBox = { l: m.l, r: m.r }; // for pinch zoom
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
 
   const x = (t) => m.l + ((t - from) / (to - from)) * pw;
@@ -901,7 +902,8 @@ function drawBars(root, spec, f) {
   const n = buckets.length;
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 200;
-  const m = { l: chatStrip ? 46 : 34, r: 4, t: 10, b: strip ? (chatStrip ? 70 : 48) : 24 };
+  const m = { l: chatStrip ? 46 : 34, r: 4, t: 10, b: strip ? (chatStrip ? 80 : 48) : 24 };
+  root.plotBox = { l: m.l, r: m.r }; // for pinch zoom
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   const { ymax, ystep } = f;
   const y = (v) => m.t + ph - (v / ymax) * ph;
@@ -999,10 +1001,10 @@ function drawBars(root, spec, f) {
 
     // chat strip: a line per message, a red diamond per death, a yellow star per advancement
     if (chatStrip) {
-      const cy = sy + sh + 6, ch = 14, mid = cy + ch / 2;
+      const cy = sy + sh + 6, ch = 24, mid = cy + ch / 2;
       bottom = cy + ch;
       for (const [label, y0, cls] of [['Online', sy, 'strip-label-on'], ['Chat', cy, 'strip-label-chat']]) {
-        const t = sv('text', { x: m.l - 6, y: y0 + ch / 2 + 3.5, 'text-anchor': 'end', class: `axis-text strip-label ${cls}` });
+        const t = sv('text', { x: m.l - 6, y: y0 + (y0 === sy ? sh : ch) / 2 + 3.5, 'text-anchor': 'end', class: `axis-text strip-label ${cls}` });
         t.textContent = label;
         svg.append(t);
       }
@@ -1012,9 +1014,9 @@ function drawBars(root, spec, f) {
       for (const ev of chatStrip.events) {
         const x = xAt(ev[1] / 1000);
         chatMarks.push({ ev, x });
-        if (ev[2] === 'death') marks.push(sv('path', { d: `M${x},${mid - 5}L${x + 5},${mid}L${x},${mid + 5}L${x - 5},${mid}Z`, class: 'chat-death' }));
-        else if (ev[2] === 'advancement') marks.push(sv('path', { d: starPath(x, mid, 5.5), class: 'chat-adv' }));
-        else talk.push(`M${x},${cy + 2}V${cy + ch - 2}`);
+        if (ev[2] === 'death') marks.push(sv('path', { d: `M${x},${mid - 7}L${x + 6},${mid}L${x},${mid + 7}L${x - 6},${mid}Z`, class: 'chat-death' }));
+        else if (ev[2] === 'advancement') marks.push(sv('path', { d: starPath(x, mid, 7.5), class: 'chat-adv' }));
+        else talk.push(`M${x},${cy + 3}V${cy + ch - 3}`);
       }
       if (talk.length) svg.append(sv('path', { d: talk.join(''), class: 'chat-tick' }));
       svg.append(...marks); // symbols on top of the lines
@@ -1252,6 +1254,7 @@ const TL_PRESETS = [
 const dayPreset = (n) => ({ v: `${n}d`, label: `${n}d`, unit: 'day', count: n, long: `Last ${n} days` });
 const DAILY_PRESETS = [7, 14, 30, 90].map(dayPreset);
 const PLAYER_PRESETS = [
+  { v: '6h', label: '6h', unit: 'hour', count: 6, long: 'Last 6 hours' },
   { v: '24h', label: '24h', unit: 'hour', count: 24, long: 'Last 24 hours' },
   ...[7, 14, 30].map(dayPreset),
 ];
@@ -1446,11 +1449,7 @@ function fittingDailyWindow() {
   return presetWindow(DAILY_PRESETS.find((p) => n <= p.count) || DAILY_PRESETS.at(-1));
 }
 
-function fittingPlayerWindow(firstSeen) {
-  if (nowSec() - firstSeen <= 86400) return presetWindow(PLAYER_PRESETS[0]);
-  const n = daysCovered(firstSeen);
-  return presetWindow(PLAYER_PRESETS.find((p) => p.unit === 'day' && n <= p.count) || PLAYER_PRESETS.at(-1));
-}
+const playerDefaultWindow = () => presetWindow(presetByKey(PLAYER_PRESETS, '24h'));
 
 // Smallest leaderboard range that covers all the data.
 // Smallest preset that covers all the data; wider ones get the red "Data starts on" note.
@@ -1601,6 +1600,7 @@ async function renderServerDaily(animate = false, slide = 0) {
   dailyCtl.sync();
   $('#daily-label').textContent = `player-hours per day · ${windowLabel(w, r, DAILY_PRESETS)}`;
   const rows = await getHourlyRange(r.from, r.to);
+  if (dailyCtl.get() !== w) return; // another range was picked meanwhile
   const index = new Map(r.buckets.map((b, i) => [b.date, i]));
   const vals = r.buckets.map(() => 0);
   const peaks = r.buckets.map(() => 0);
@@ -1670,6 +1670,7 @@ async function loadTimeline(slide = 0) {
       : getHourlyRange(from, to),
     r.live ? api(`/api/sessions?from=${from}&to=${to}`) : memoApi(`/api/sessions?from=${from}&to=${to}`),
   ]);
+  if (tlCtl.get() !== w) return; // another range was picked meanwhile
   const sessions = sessionsRes.rows.map(([, name, a, b]) => [name, a, b + sessionsRes.poll_seconds]);
   // names online at t (minute data), or at any point in the hour starting at t (hourly data)
   const whoAt = (t) => {
@@ -1691,6 +1692,7 @@ async function loadTimeline(slide = 0) {
     legend.replaceChildren(...(trend && pts.length ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
     const rows = await getHourlyRange(from, to);
+    if (tlCtl.get() !== w) return;
     opts = {
       from, to, step: 3600,
       series: [
@@ -2023,7 +2025,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   for (const [s, e] of sessions) if (e > weekAgo) week += e - Math.max(s, weekAgo);
 
   const animate = live() && state.playerShown === player.uuid;
-  if (state.playerShown !== player.uuid) pCtl.set(fittingPlayerWindow(player.first_seen));
+  if (state.playerShown !== player.uuid) pCtl.set(playerDefaultWindow());
   state.playerShown = player.uuid;
   state.playerData = { sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo };
   setCounter($('#p-total'), dur(total), total, animate);
@@ -2210,8 +2212,8 @@ function linkify(text) {
   return out;
 }
 
-// Names as chat shows them, in their team colors. Minecraft's colors are made for its dark chat box,
-// so each one gets a version that reads on the light page and one for the dark page (the CSS picks).
+// Names as chat shows them, in their team colors: exact on the light page (pale ones get a shadow),
+// lightened where needed on the dark page (the CSS picks).
 const nameColors = new Map(); // uuid -> color of the name itself, for chips and lists elsewhere
 const mcCache = new Map();
 
@@ -2227,11 +2229,13 @@ function mcStyle(hex) {
   if (!v) {
     const n = parseInt(hex.slice(1), 16);
     const rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    let light = rgb, dark = rgb;
-    // light page: darken until it stands out from near-white; dark page: lighten away from near-black
-    for (let k = 1; k > 0 && contrast(luminance(light), 0.96) < 3.2; k -= 0.05) light = rgb.map((c) => c * k);
+    let dark = rgb;
+    // dark page: lighten away from near-black
     for (let k = 0; k <= 1 && contrast(luminance(dark), 0.01) < 4; k += 0.05) dark = rgb.map((c) => c + (255 - c) * k);
-    v = `--cl:${toHex(light)};--cd:${toHex(dark)}`;
+    // light page: the exact color; ones too pale to read on white (white, yellow, aqua) get
+    // Minecraft's own text shadow, the same color at a quarter brightness
+    const shadow = contrast(luminance(rgb), 0.96) < 2 ? `1px 1px 0 ${toHex(rgb.map((c) => c / 4))}` : 'none';
+    v = `--cl:${hex};--cs:${shadow};--cd:${toHex(dark)}`;
     mcCache.set(hex, v);
   }
   return v;
@@ -3246,6 +3250,88 @@ function pageShift(prev, w, dir) {
   return Math.max(-1, Math.min(1, shift)) || dir;
 }
 
+// Pinch to zoom a chart's time range around the point under the fingers: a trackpad pinch
+// (Ctrl+wheel in most browsers, gesture events in Safari), Ctrl+scroll with a mouse, or two fingers.
+// Each step is worked out from where the gesture started, so ranges that snap to whole hours
+// or days don't drift. toWindow(from, to) gives the window for a span (or an error string).
+function pinchZoom(root, { ctl, toWindow, render, min, max }) {
+  let g = null;
+  let idle = 0, timer = 0;
+  const begin = (clientX) => {
+    if (g) return;
+    const r = resolveWindow(ctl.get());
+    const box = root.getBoundingClientRect();
+    const { l, r: right } = root.plotBox || { l: 0, r: 0 };
+    const f = (clientX - box.left - l) / Math.max(1, box.width - l - right);
+    g = { from: r.from, to: Math.min(r.to, nowSec()), f: Math.min(1, Math.max(0, f)), scale: 1 };
+    hideTip();
+  };
+  const apply = () => {
+    timer = 0;
+    if (!g) return;
+    const span = Math.min(max, Math.max(min, (g.to - g.from) * g.scale));
+    const at = g.from + g.f * (g.to - g.from);
+    let from = at - g.f * span, to = from + span;
+    const now = nowSec();
+    if (to > now) { from -= to - now; to = now; }
+    const w = toWindow(Math.round(from), Math.round(to));
+    if (typeof w === 'string' || windowKey(w) === windowKey(ctl.get())) return;
+    ctl.set(w);
+    render();
+  };
+  const zoomTo = (scale) => {
+    const span = g.to - g.from;
+    g.scale = Math.min(max / span, Math.max(min / span, scale));
+    if (!timer) timer = setTimeout(apply, 60);
+  };
+  const end = () => {
+    if (timer) { clearTimeout(timer); apply(); }
+    g = null;
+  };
+
+  root.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    begin(e.clientX);
+    zoomTo(g.scale * Math.exp(Math.max(-50, Math.min(50, e.deltaY)) * 0.01));
+    clearTimeout(idle);
+    idle = setTimeout(end, 300);
+  }, { passive: false });
+
+  root.addEventListener('gesturestart', (e) => {
+    e.preventDefault();
+    begin(e.clientX);
+  });
+  root.addEventListener('gesturechange', (e) => {
+    e.preventDefault();
+    if (g) zoomTo(1 / e.scale);
+  });
+  root.addEventListener('gestureend', (e) => {
+    e.preventDefault();
+    end();
+  });
+
+  let startDist = 0;
+  const dist = ([a, b]) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  root.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2) return;
+    g = null;
+    begin((e.touches[0].clientX + e.touches[1].clientX) / 2);
+    startDist = dist(e.touches);
+  }, { passive: true });
+  root.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 2 || !g || !startDist) return;
+    e.preventDefault();
+    zoomTo(startDist / Math.max(1, dist(e.touches)));
+  }, { passive: false });
+  root.addEventListener('touchend', (e) => {
+    if (e.touches.length < 2 && startDist) {
+      startDist = 0;
+      end();
+    }
+  });
+}
+
 const tlCtl = rangeControl($('#tl-ctl'), {
   presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds(TL_PRESETS),
   onChange: (w, dir, prev) => loadTimeline(pageShift(prev, w, dir)).catch((e) => showError(e.message)),
@@ -3260,12 +3346,26 @@ const pCtl = rangeControl($('#pa-ctl'), {
 });
 tlCtl.set(presetWindow(TL_PRESETS[1]));
 dailyCtl.set(presetWindow(DAILY_PRESETS[0]));
-pCtl.set(presetWindow(PLAYER_PRESETS[0]));
+pCtl.set(playerDefaultWindow());
 const lbCtl = rangeControl($('#lb-ctl'), {
   presets: LB_PRESETS, picker: 'datetime', fromPicker: pickSeconds(LB_PRESETS),
   onChange: () => loadLeaderboard().catch((e) => showError(e.message)),
 });
 lbCtl.set(presetWindow(LB_PRESETS[0]));
+
+pinchZoom($('#timeline'), {
+  ctl: tlCtl, toWindow: pickSeconds(TL_PRESETS), min: 30 * 60, max: 90 * 86400,
+  render: () => loadTimeline().catch((e) => showError(e.message)),
+});
+pinchZoom($('#heatmap'), {
+  ctl: dailyCtl, min: 86400, max: 90 * 86400,
+  toWindow: (from, to) => pickDays(DAILY_PRESETS)(hourInfo(from).date, hourInfo(to - 1).date),
+  render: () => renderServerDaily().catch((e) => showError(e.message)),
+});
+pinchZoom($('#p-heatmap'), {
+  ctl: pCtl, toWindow: pickPlayerRange, min: 2 * 3600, max: 365 * 86400,
+  render: () => renderPlayerActivity(),
+});
 
 window.addEventListener('hashchange', route);
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

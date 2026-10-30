@@ -354,7 +354,7 @@ tr.link:hover td { background: var(--hover); }
 
 .tooltip {
   position: fixed;
-  z-index: 10;
+  z-index: 40; /* above the player card and search */
   pointer-events: none;
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--ring), 0 6px 20px rgba(0, 0, 0, 0.18);
@@ -532,11 +532,11 @@ tr.link:hover td { background: var(--hover); }
 .btn-primary { background: var(--series-1); color: #fff; font-weight: 600; }
 
 /* when-online strip under the player activity bars */
-.chart-strip { height: 272px; }
+.chart-strip { height: 282px; }
 .strip-label { font-weight: 600; }
 .strip-label-on { fill: var(--series-1); }
 .strip-label-chat { fill: var(--series-2); }
-.chat-tick { stroke: var(--series-2); stroke-width: 1.5; opacity: 0.85; }
+.chat-tick { stroke: var(--series-2); stroke-width: 2; opacity: 0.85; }
 .chat-death { fill: var(--critical); stroke: var(--surface); stroke-width: 1; }
 .chat-adv { fill: var(--warning); stroke: var(--surface); stroke-width: 0.8; }
 .chat-hit { cursor: pointer; }
@@ -926,9 +926,9 @@ a.msg-name:hover { text-decoration: underline; }
 .chat-new::before { content: ''; flex: 1; height: 1px; background: var(--critical); opacity: 0.6; }
 
 /* team colors on names: --cl reads on the light page, --cd on the dark one */
-.mc { color: var(--cl); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mc { color: var(--cd); } }
-:root[data-theme="dark"] .mc { color: var(--cd); }
+.mc { color: var(--cl); text-shadow: var(--cs, none); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mc { color: var(--cd); text-shadow: none; } }
+:root[data-theme="dark"] .mc { color: var(--cd); text-shadow: none; }
 
 /* player card: a click on a name */
 .pcard {

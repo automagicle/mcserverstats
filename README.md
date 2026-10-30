@@ -46,7 +46,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Player pages**: the name as chat shows it, totals, chat messages sent (total or today), an activity chart (hourly bars
   on a fixed 0–60 min scale for 24h, daily bars for longer ranges) with an Online strip and a Chat strip underneath, when they
   usually play, and recent sessions. The Chat strip has an orange line per message, a red diamond per death and a yellow star
-  per advancement; clicking one previews it, with a button to open the chat log there. Player data is fetched when you
+  per advancement; clicking one previews it, with a button to open the chat log there. It opens on the last 24 hours. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 - **Player cards**: clicking a player's name or head (in the chat log, the online chips, who was online) opens a small card:
   their name as chat shows it, online or last seen, messages and time played today, time played this week, a little
@@ -57,6 +57,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   defaults to the last 24 hours, and stepping back with ‹ pages through whole days (midnight to midnight).
   The leaderboard defaults to 1d (today since midnight; ‹ › steps a day at a time), and the other
   charts to the smallest preset that covers all the data so far. Anything before tracking began is hatched out.
+- **Pinch to zoom**: on Players online, Daily activity and a player's Activity chart, a trackpad pinch (or Ctrl+scroll,
+  or two fingers on a phone) zooms the time range in or out around the point under the fingers.
 - **Leaderboard**: keeps the height of the most rows seen for the current range size, so paging doesn't
   shift the page, and rows glide to their new ranks.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
@@ -65,7 +67,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   10 seconds. Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
   and the graph pages back a day when that time leaves its left edge. Beside it is who was online at that moment.
   Clicking the graph jumps the chat to that time. Names show as they do in game chat, with team prefixes and colors
-  (adjusted so they stay readable on the light and dark pages). Deaths and advancements show the whole message in its
+  (exact on the light page, with a Minecraft-style shadow on pale ones; lightened where needed on the dark page). Deaths and advancements show the whole message in its
   game colors: a killer's name, a named weapon, the advancement's title. Deaths are highlighted in red, as are leaves.
   **Search** (the button at the top, or ⌘F / Ctrl+F on the chat page) finds messages and names as you type; its filters
   narrow it to message text or names only, one player, or one kind of message (chat, deaths, advancements, joins and
