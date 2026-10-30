@@ -513,12 +513,15 @@ function slideIn(root, old, shift) {
   sliding.set(root, (sliding.get(root) || 0) + 1);
   root.append(old);
   const opts = { duration: SLIDE_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)' };
+  morphAxis(old, cur, opts);
   // Earlier (negative shift) moves content right, like scrolling back along a timeline.
-  old.animate([
+  const oldBody = old.querySelector(':scope > .slide') || old;
+  const curBody = cur.querySelector(':scope > .slide') || cur;
+  oldBody.animate([
     { transform: 'translateX(0)', opacity: 1 },
     { transform: `translateX(${-shift * W}px)`, opacity: fade ? 0 : 1 },
   ], opts);
-  cur.animate([
+  curBody.animate([
     { transform: `translateX(${shift * W}px)`, opacity: fade ? 0 : 1 },
     { transform: 'translateX(0)', opacity: 1 },
   ], opts).finished
@@ -529,6 +532,37 @@ function slideIn(root, old, shift) {
       if (n) sliding.set(root, n);
       else { sliding.delete(root); root.style.overflow = ''; }
     });
+}
+
+// When a slide changes the y scale, the gridlines glide from where their values sat on the old
+// scale to the new one (a 10 line moves from the top to the middle when the peak doubles).
+// Lines only on the old scale fade out; lines only on the new one fade in.
+function morphAxis(old, cur, opts) {
+  const a = old.querySelector(':scope > .yaxis'), b = cur.querySelector(':scope > .yaxis');
+  if (!a || !b) return;
+  const top = Number(cur.dataset.top), ph = Number(cur.dataset.ph);
+  const oldMax = Number(old.dataset.ymax), newMax = Number(cur.dataset.ymax);
+  if (oldMax === newMax || Number(old.dataset.ph) !== ph) return;
+  const yOld = (v) => top + ph - (v / oldMax) * ph;
+  const yNew = (v) => top + ph - (v / newMax) * ph;
+  const ticks = (g) => [...g.querySelectorAll('.ytick')];
+  const newVals = new Set(ticks(b).map((t) => t.dataset.v));
+  const oldVals = new Set(ticks(a).map((t) => t.dataset.v));
+  for (const t of ticks(a)) {
+    const v = Number(t.dataset.v);
+    if (newVals.has(t.dataset.v)) { t.style.visibility = 'hidden'; continue; } // the new one covers it
+    t.animate([
+      { transform: 'translateY(0)', opacity: 1 },
+      { transform: `translateY(${yNew(v) - yOld(v)}px)`, opacity: 0 },
+    ], opts);
+  }
+  for (const t of ticks(b)) {
+    const v = Number(t.dataset.v);
+    t.animate([
+      { transform: `translateY(${yOld(v) - yNew(v)}px)`, opacity: oldVals.has(t.dataset.v) ? 1 : 0 },
+      { transform: 'translateY(0)', opacity: 1 },
+    ], opts);
+  }
 }
 
 /* ---------- hour × weekday grid ---------- */
@@ -675,13 +709,23 @@ function drawLineChart(root, opts, f) {
 
   const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Players online over time' });
 
+  // The y-axis stays put while paging slides the rest (.slide) sideways; see slideIn.
+  const yaxis = sv('g', { class: 'yaxis' });
+  const body = sv('g', { class: 'slide' });
+  svg.append(yaxis, body);
+  svg.dataset.top = m.t;
+  svg.dataset.ph = ph;
+  svg.dataset.ymax = ymax;
   for (let v = 0; v <= ymax + 1e-9; v += ystep) {
-    if (v > 0) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
+    const tick = sv('g', { class: 'ytick' });
+    tick.dataset.v = v;
+    if (v > 0) tick.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
     const t = sv('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis-text' });
     t.textContent = Number.isInteger(v) ? v : v.toFixed(1);
-    svg.append(t);
+    tick.append(t);
+    yaxis.append(tick);
   }
-  svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
+  yaxis.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
   // x ticks: local hours for short ranges, local midnights for long ones
   const days = (to - from) / 86400;
@@ -698,16 +742,16 @@ function drawLineChart(root, opts, f) {
     t.textContent = days <= 1.5 ? hourName(hourInfo(h).hour, false)
       : days <= 8 ? fmt(h, { weekday: 'short' })
       : fmt(h, { month: 'short', day: 'numeric' });
-    svg.append(t);
+    body.append(t);
   });
 
   // lines, broken wherever there is missing data; clipped to the plot while the domain slides
   const clipId = `${root.id}-clip`;
   const clip = sv('clipPath', { id: clipId });
   clip.append(sv('rect', { x: m.l, y: 0, width: pw, height: m.t + ph + 1 }));
-  svg.append(clip);
+  body.append(clip);
   const plot = sv('g', { 'clip-path': `url(#${clipId})` });
-  svg.append(plot);
+  body.append(plot);
 
   // hatched block for the time before tracking started
   if (opts.dataStart && opts.dataStart > from) {
@@ -742,9 +786,9 @@ function drawLineChart(root, opts, f) {
   // crosshair + tooltip
   const cross = sv('line', { y1: m.t, y2: m.t + ph, class: 'crosshair', visibility: 'hidden' });
   const markers = series.map((s) => sv('circle', { r: 4, style: `fill:${s.color}`, class: 'marker', visibility: 'hidden' }));
-  svg.append(cross, ...markers);
+  body.append(cross, ...markers);
   const hit = sv('rect', { x: m.l, y: 0, width: pw, height: H, fill: 'transparent' });
-  svg.append(hit);
+  body.append(hit);
 
   const nearest = (t) => {
     let lo = 0, hi = pts0.length - 1;
@@ -2460,7 +2504,7 @@ async function loadChatGraph(slide = 0) {
     loadChatGraph.slideTimer = setTimeout(() => cursor.classList.remove('sliding'), SLIDE_MS);
   }
   renderLineChart($('#chat-chart'), {
-    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, yMin: state.status?.peak_ever, whoAt,
+    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, whoAt,
     series: [{ name: 'online', cls: '1', color: 'var(--series-1)', area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
     fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
     fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · click to read`,
