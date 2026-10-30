@@ -58,7 +58,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   10 seconds. Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
   and the graph pages back a day when that time leaves its left edge. Beside it is who was online at that moment.
   Clicking the graph jumps the chat to that time. Names show as they do in game chat, with team prefixes and colors
-  (adjusted so they stay readable on the light and dark pages). Player messages you haven't seen yet are counted in red
+  (adjusted so they stay readable on the light and dark pages). Chat, deaths and advancements you haven't seen yet are counted in red
   on the Chat log tab and in the page title, and on the jump button while you're scrolled up. The count is remembered in
   the browser, and a "New" line marks where they start when you open the page. Both the graph and the bar of who's online now
   (along the bottom) fold away, and the page remembers that.

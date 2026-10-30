@@ -2299,7 +2299,6 @@ async function jumpChatTo(t) {
 
 // New messages since the last look. They're added at the bottom when the newest are loaded,
 // and followed if the reader is already at the bottom.
-const TALK = new Set(['chat', 'say', 'emote']); // what counts as unread
 
 // Everything up to the newest message counts as seen once the reader is at the bottom of the log.
 function markSeen() {
