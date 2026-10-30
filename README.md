@@ -5,7 +5,11 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 
 - **Collector**: a Cron-triggered Worker asks [mcstatus.io](https://mcstatus.io) about the server every minute and records the player count plus each named player's session in D1 (SQLite).
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
+- **Chat log** (optional): a small Fabric server mod in `mod/` posts public chat to the Worker, which stores it in D1.
+  See [mod/README.md](mod/README.md) for setup.
 - **Privacy**: the server address is a Worker secret. Every `/api/*` request must carry a valid Cloudflare Access login token. Until Access is configured, the API refuses everyone.
+  The one exception is `POST /api/ingest/chat`, which takes the chat mod's `CHAT_INGEST_TOKEN` instead (and still needs the
+  Access service token to get past Access). Service tokens can't read the dashboard.
 
 ## Deploy
 
@@ -26,9 +30,9 @@ and `ACCESS_AUD` in `wrangler.jsonc`, then run `npm run deploy` again.
 ## Local development
 
 ```bash
-printf 'DEV_NO_AUTH=1\nMC_SERVER=demo.mcstatus.io\n' > .dev.vars
+printf 'DEV_NO_AUTH=1\nMC_SERVER=demo.mcstatus.io\nCHAT_INGEST_TOKEN=local-dev-token-0123456789abcdef0123456789\n' > .dev.vars
 npm run db:migrate:local
-npm run seed:local        # optional: 200 days of fake data
+npm run seed:local        # optional: 200 days of fake data, plus two weeks of fake chat
 npm run dev               # http://localhost:8787, trigger a check at /__scheduled
 ```
 
@@ -50,6 +54,11 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   shift the page, and rows glide to their new ranks.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
   tab is visible), with animations that are skipped when the system's reduce-motion setting is on.
+- **Chat log**: the server's chat, newest at the bottom, loading older messages as you scroll up and new ones every
+  10 seconds. Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
+  and the graph pages back a day when that time leaves its left edge. Beside it is who was online at that moment.
+  Clicking the graph jumps the chat to that time. Both the graph and the bar of who's online now
+  (along the bottom) fold away, and the page remembers that.
 - **Theme**: the switch at the top picks light or dark and is remembered in the browser; until it's used,
   the page follows the system setting.
 - Times are shown in `TZ_NAME` from `wrangler.jsonc` (Pacific by default).
@@ -63,3 +72,5 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   3.5 minutes, that empty (or offline) reading is replaced by the number of players whose sessions span it.
   Smaller dips are left alone, since someone may really have relogged.
 - Usage on Cloudflare's free tier: about 1,440 Cron runs per day, plus a few D1 rows written per check (1 per player).
+  The chat mod adds at most one request every 3 seconds while people are talking (one row per message), and an open
+  Chat log page checks for new messages every 10 seconds while it's visible.

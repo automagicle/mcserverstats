@@ -15,10 +15,16 @@
 </head>
 <body>
   <header class="top">
-    <a class="brand" href="#/">
-      <span class="logo" aria-hidden="true"></span>
-      <span>Server Stats</span>
-    </a>
+    <div class="top-left">
+      <a class="brand" href="#/">
+        <span class="logo" aria-hidden="true"></span>
+        <span>Server Stats</span>
+      </a>
+      <nav class="tabs" aria-label="Pages">
+        <a href="#/" id="tab-activity">Activity</a>
+        <a href="#/chat" id="tab-chat">Chat log</a>
+      </nav>
+    </div>
     <div class="top-right">
       <div id="live" class="live" aria-live="polite"><span class="dot"></span><span id="live-text">Loading…</span></div>
       <button id="theme-toggle" class="theme-toggle" type="button" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
@@ -128,6 +134,53 @@
           <div id="p-recent"></div>
         </section>
       </div>
+    </section>
+
+    <!-- Chat log -->
+    <section id="view-chat" hidden>
+      <section class="card cg" id="cg">
+        <div class="cg-main">
+          <div class="cg-head">
+            <button type="button" class="cg-toggle" id="cg-toggle" aria-expanded="true" aria-controls="cg-body">
+              <svg class="cg-chev" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6 8 10.5 12.5 6"/></svg>
+              <h2>Players<span class="hide-xs"> online</span></h2>
+            </button>
+            <span class="cg-time" id="cg-time" aria-live="polite">–</span>
+            <span class="cg-count card-sub" id="cg-count"></span>
+            <span class="cg-label card-sub" id="cg-label"></span>
+            <div class="range-ctl cg-pager">
+              <button type="button" class="icon-btn" id="cg-prev" aria-label="Earlier day" title="Earlier day"></button>
+              <button type="button" class="icon-btn" id="cg-next" aria-label="Later" title="Later"></button>
+            </div>
+          </div>
+          <div class="cg-body" id="cg-body">
+            <div class="cg-chart-wrap">
+              <div id="chat-chart" class="chart"></div>
+              <div class="cg-cursor" id="cg-cursor" aria-hidden="true"><span class="cg-dot"></span></div>
+            </div>
+          </div>
+        </div>
+        <aside class="cg-online" aria-label="Online at this time">
+          <div class="cg-online-title">Online then <span id="cg-online-n" class="muted"></span></div>
+          <div class="cg-online-list" id="cg-online-list"></div>
+        </aside>
+      </section>
+
+      <section class="card chat-card">
+        <div class="chat-scroll" id="chat-scroll" role="log" aria-label="Chat log" tabindex="0">
+          <div class="chat-edge" id="chat-top"></div>
+          <div id="chat-list"></div>
+          <div class="chat-jump-wrap"><button type="button" class="chat-jump" id="chat-jump" hidden></button></div>
+        </div>
+        <div class="chat-online" id="chat-online">
+          <div class="chips chat-chips" id="chat-chips"></div>
+          <div class="chat-online-empty muted" id="chat-online-empty" hidden></div>
+          <button type="button" class="icon-btn chat-online-close" id="chat-online-close" aria-label="Hide who's online" title="Hide who's online">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
+          <button type="button" class="online-pill" id="chat-online-pill" aria-label="Show who's online" hidden><span class="dot"></span><span id="chat-online-pill-text"></span></button>
+        </div>
+      </section>
     </section>
   </main>
 

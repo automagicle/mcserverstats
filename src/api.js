@@ -1,15 +1,9 @@
 import { isAuthorized } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
+import { ingestChat, readChat } from './chat.js';
+import { json, UUID_RE } from './util.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY = 86400;
-
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-  });
-}
 
 function range(url, defaultDays, maxDays) {
   const now = Math.floor(Date.now() / 1000);
@@ -20,6 +14,12 @@ function range(url, defaultDays, maxDays) {
 }
 
 export async function handleApi(request, env, url) {
+  // The server mod posts chat here; it authenticates with its own token, not a login.
+  if (url.pathname === '/api/ingest/chat') {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+    return ingestChat(request, env);
+  }
+
   if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
   if (!(await isAuthorized(request, env, url))) return json({ error: 'unauthorized' }, 401);
 
@@ -88,6 +88,8 @@ export async function handleApi(request, env, url) {
     ).bind(from, to, POLL_SECONDS).raw();
     return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
   }
+
+  if (path === '/api/chat') return readChat(env, url);
 
   const m = path.match(/^\/api\/player\/([^/]+)$/);
   if (m) {

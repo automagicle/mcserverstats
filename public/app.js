@@ -610,12 +610,13 @@ const redraws = new Map();
 function lineTarget(opts) {
   let vmax = 0;
   for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
-  const ystep = niceStep(Math.max(1, vmax / 4));
+  const ystep = niceStep(Math.max(1, Math.max(vmax, 4) / (opts.ticks || 4)));
   const ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
   return { from: opts.from, to: opts.to, ymax, ystep, vals: opts.series.map((s) => s.pts.map((p) => p.v)) };
 }
 
-// opts: { key, from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime }
+// opts: { key, from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime,
+//         ticks?, whoAt?(t), onPick?(t) when the plot is clicked, onDraw?(geometry) after every frame }
 // With animate, morphs from the previous drawing of the same range (domain, scale and values).
 function renderLineChart(root, opts, { animate = false, slide = 0 } = {}) {
   const prev = chartPrev.get(root);
@@ -659,6 +660,7 @@ function drawLineChart(root, opts, f) {
   const pts0 = series[0].pts;
   if (!pts0.length) {
     root.append(el('div', { class: 'empty-chart', text: 'No data in this range yet' }));
+    opts.onDraw?.(null);
     return;
   }
 
@@ -683,7 +685,7 @@ function drawLineChart(root, opts, f) {
   // x ticks: local hours for short ranges, local midnights for long ones
   const days = (to - from) / 86400;
   const candidates = [];
-  for (let h = Math.ceil(from / 3600) * 3600; h <= to; h += 3600) {
+  for (let h = Math.ceil(from / 3600) * 3600; h < to; h += 3600) { // the end itself would hang off the edge
     const info = hourInfo(h);
     if (days <= 0.6 || (days <= 1.5 ? info.hour % 3 === 0 : info.hour === 0)) candidates.push(h);
   }
@@ -784,8 +786,24 @@ function drawLineChart(root, opts, f) {
   hit.addEventListener('pointermove', move);
   hit.addEventListener('pointerdown', move);
   hit.addEventListener('pointerleave', leave);
+  if (opts.onPick) {
+    hit.style.cursor = 'pointer';
+    hit.addEventListener('click', (e) => {
+      const t = from + ((e.clientX - svg.getBoundingClientRect().left - m.l) / pw) * (to - from);
+      opts.onPick(Math.max(from, Math.min(to, t)));
+    });
+  }
 
   root.append(svg);
+  opts.onDraw?.({
+    from, to, top: m.t, height: ph, x,
+    // the line's height at t (nearest point), or null where there's no data
+    yAt: (t) => {
+      if (t < pts0[0].t - step || t > pts0.at(-1).t + step) return null;
+      const i = nearest(t);
+      return Math.abs(pts0[i].t - t) > step * 2.5 ? null : y(f.vals[0][i]);
+    },
+  });
 }
 
 /* ---------- bar chart over time buckets ---------- */
@@ -1361,12 +1379,12 @@ function makeChip(p) {
 }
 
 // The player disintegrates into the page in pixels, then the gap closes.
-function removeChip(chip) {
+function removeChip(chip, bg) {
   chip.classList.add('leaving');
   const list = chip.parentNode;
   const muted = [cssVar('--ink-2'), cssVar('--muted'), cssVar('--axis')];
   pixelTiles({
-    host: list, target: chip, mode: 'cover', color: cssVar('--page'),
+    host: list, target: chip, mode: 'cover', color: cssVar(bg),
     tile: 3, pad: 2, duration: 700, sweep: 0.6,
     spark: { chance: 0.12, colors: muted, vx: [10, 50], vy: [-35, -5], life: [400, 800], size: [1, 2] },
     onDone: () => {
@@ -1378,18 +1396,19 @@ function removeChip(chip) {
   });
 }
 
-function renderOnlineChips() {
-  const list = $('#online-list');
+// Keeps a row of chips in step with who's online; on live updates players pop in and pixel out.
+// bg: the color behind the row, which leaving chips dissolve into.
+function syncChips(list, players, bg = '--page') {
   const animate = live();
   const current = new Map([...list.querySelectorAll('.chip:not(.leaving)')].map((c) => [c.dataset.uuid, c]));
-  const wanted = new Set(state.status.online.map((p) => p.uuid));
+  const wanted = new Set(players.map((p) => p.uuid));
 
   for (const [uuid, chip] of current) {
     if (wanted.has(uuid)) continue;
-    if (animate) removeChip(chip);
+    if (animate) removeChip(chip, bg);
     else chip.remove();
   }
-  for (const p of state.status.online) {
+  for (const p of players) {
     const existing = current.get(p.uuid);
     if (existing) {
       existing.querySelector('.chip-name').textContent = p.name;
@@ -1399,7 +1418,10 @@ function renderOnlineChips() {
     list.append(chip);
     if (animate) chip.classList.add('chip-enter');
   }
+}
 
+function renderOnlineChips() {
+  syncChips($('#online-list'), state.status.online);
   const warn = $('#sample-warning');
   const last = state.status.last;
   if (last && last.up && last.online > last.listed) {
@@ -1730,9 +1752,19 @@ async function loadSnapshots(from) {
   return state.snaps.rows.filter((r) => r[0] >= from);
 }
 
+// Shows one of the views ('home', 'player', 'chat') and marks its tab.
+function showView(name) {
+  for (const v of ['home', 'player', 'chat']) $(`#view-${v}`).hidden = v !== name;
+  document.body.classList.toggle('chat-mode', name === 'chat');
+  const tab = name === 'chat' ? 'chat' : 'activity';
+  for (const t of ['activity', 'chat']) {
+    if (t === tab) $(`#tab-${t}`).setAttribute('aria-current', 'page');
+    else $(`#tab-${t}`).removeAttribute('aria-current');
+  }
+}
+
 async function showHome() {
-  $('#view-player').hidden = true;
-  $('#view-home').hidden = false;
+  showView('home');
   document.title = 'Server Stats';
   await loadStatus();
   await loadHourly();
@@ -1798,8 +1830,7 @@ function showPlayerLoading(uuid) {
 let playerReq = 0;
 
 async function showPlayer(uuid, { refresh = false } = {}) {
-  $('#view-home').hidden = true;
-  $('#view-player').hidden = false;
+  showView('player');
   if (!refresh) window.scrollTo(0, 0);
   const switching = !refresh && state.playerShown !== uuid;
   const req = ++playerReq;
@@ -1950,6 +1981,524 @@ function renderPlayerActivity(animate = false, slide = 0, grow = false) {
   }, { animate, slide, grow });
 }
 
+/* ---------- chat log ---------- */
+
+const CHAT_PAGE = 100; // messages per request
+const CHAT_KEEP = 1200; // most messages kept on the page; past this the far end is dropped (and reloads on demand)
+const CHAT_GROUP_MS = 5 * 60_000; // one player's lines within this of each other share a name header
+const CHAT_POLL_MS = 10_000;
+
+const chat = {
+  messages: [], // in time order: { id, ts (ms), kind, uuid, name, text }
+  lines: [], // one per message, in order: { el, ts, id } — for finding what's on screen
+  moreBefore: false,
+  moreAfter: false, // the newest messages aren't loaded (after jumping back in time)
+  maxId: 0, // newest message id seen, for live updates
+  loading: null, // 'older' | 'newer' | 'jump' while a request is out
+  loaded: false,
+  pinned: null, // a time picked on the graph; it stays the chat's time until the reader scrolls
+  quietUntil: 0, // scroll events before this come from the page moving things, not the reader
+  bottomGap: 0, // distance from the bottom, kept when the log's height changes
+  unread: 0,
+  t: null, // the time the chat is scrolled to (seconds)
+  win: null, // the graph's window: the live 24h, or one whole day
+  sessions: [],
+  geom: null, // the graph's geometry from its last drawing
+  graphReq: 0,
+  onlineKey: '',
+};
+const chatScroll = $('#chat-scroll');
+
+const clock = (t) => fmt(t, { hour: 'numeric', minute: '2-digit' });
+
+function relativeDay(date, opts) {
+  const today = todayStr();
+  if (date === today) return 'Today';
+  if (date === addDays(today, -1)) return 'Yesterday';
+  return fmtDay(date, opts);
+}
+const cursorLabel = (t) => `${relativeDay(hourInfo(t).date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${clock(t)}`;
+
+// Links in chat become clickable (http/https only).
+const URL_RE = /\bhttps?:\/\/[^\s<>"]*[^\s<>".,;:!?)\]'}]/gi;
+function linkify(text) {
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(el('a', { href: m[0], target: '_blank', rel: 'noopener noreferrer nofollow', text: m[0] }));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function chatName(m) {
+  const name = m.name || 'Server';
+  if (!m.uuid) return el('span', { class: 'msg-name', text: name });
+  knownNames.set(m.uuid, name);
+  const a = el('a', { class: 'msg-name', href: `#/player/${m.uuid}`, text: name });
+  a.addEventListener('pointerenter', () => prefetchPlayer(m.uuid));
+  return a;
+}
+
+const chatAvatar = (m, size) => (m.name && (m.uuid || m.kind !== 'say')
+  ? headImg(m.name, size, { width: size, height: size, class: 'chat-head' })
+  : el('span', { class: 'logo chat-logo', style: `width:${size}px;height:${size}px` }));
+
+const SYS_ICONS = {
+  join: ['M7 4.5 10.5 8 7 11.5', 'M2.5 8h8', 'M9.5 2.5h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3'],
+  leave: ['M10.5 4.5 14 8l-3.5 3.5', 'M6 8h8', 'M6.5 2.5h-3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3'],
+  death: ['M3 7.2a5 5 0 0 1 10 0v2.3l-1.5 1v2.5h-7v-2.5L3 9.5z', 'M6.2 7.8h.01', 'M9.8 7.8h.01', 'M7 13v-1.5M9 13v-1.5'],
+  advancement: ['M8 2.2l1.75 3.6 3.95.55-2.87 2.78.69 3.92L8 11.2l-3.52 1.85.69-3.92L2.3 6.35l3.95-.55z'],
+  server: ['M8 2.2v5.3', 'M4.6 4.4a5 5 0 1 0 6.8 0'],
+  system: ['M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11z', 'M8 7.4v3.6', 'M8 5.1h.01'],
+};
+
+// Joins, leaves, deaths, advancements, /me and server messages: one line each.
+function sysRow(m) {
+  const lead = m.kind === 'emote' ? chatAvatar(m, 16) : icon(SYS_ICONS[m.kind] || SYS_ICONS.system, 14);
+  const body = el('div', { class: 'sys-text' });
+  if (m.kind === 'emote') body.append(chatName(m), ' ', el('i', {}, ...linkify(m.text)));
+  else if (m.name && m.text.startsWith(m.name)) body.append(chatName(m), m.text.slice(m.name.length));
+  else body.append(m.text);
+  return el('div', { class: `msg-sys sys-${m.kind}` },
+    el('span', { class: 'msg-lead' }, lead), body, el('time', { class: 'msg-time', text: clock(m.ts / 1000) }));
+}
+
+// A run of messages from one player: head and name once, then their lines.
+function msgGroup(m) {
+  const head = chatAvatar(m, 28);
+  const lead = m.uuid
+    ? el('a', { class: 'msg-lead', href: `#/player/${m.uuid}`, tabindex: '-1', 'aria-hidden': 'true' }, head)
+    : el('span', { class: 'msg-lead' }, head);
+  return el('div', { class: 'msg-group' }, lead, el('div', { class: 'msg-body' },
+    el('div', { class: 'msg-meta' },
+      chatName(m),
+      m.kind === 'say' ? el('span', { class: 'msg-tag', text: '/say' }) : null,
+      el('time', { class: 'msg-time', text: clock(m.ts / 1000) }))));
+}
+
+const chatLine = (m) => el('div', { class: 'msg-line' },
+  el('time', { class: 'msg-gutter', 'aria-hidden': 'true', text: clock(m.ts / 1000).replace(/\s?[AP]M$/, '') }),
+  ...linkify(m.text));
+
+function renderChat(fresh = new Set()) {
+  const frag = document.createDocumentFragment();
+  chat.lines = [];
+  let prev = null, group = null, day = null;
+  for (const m of chat.messages) {
+    const d = hourInfo(m.ts / 1000).date;
+    if (d !== day) {
+      frag.append(el('div', { class: 'chat-day', role: 'separator' },
+        el('span', { text: relativeDay(d, { weekday: 'long', month: 'long', day: 'numeric' }) })));
+      day = d;
+      group = null;
+    }
+    let node;
+    if (m.kind === 'chat' || m.kind === 'say') {
+      if (!group || prev.kind !== m.kind || prev.name !== m.name || m.ts - prev.ts > CHAT_GROUP_MS) {
+        group = msgGroup(m);
+        frag.append(group);
+      }
+      node = chatLine(m);
+      group.lastChild.append(node);
+    } else {
+      group = null;
+      node = sysRow(m);
+      frag.append(node);
+    }
+    if (fresh.has(m.id)) node.classList.add('msg-new');
+    chat.lines.push({ el: node, ts: m.ts, id: m.id });
+    prev = m;
+  }
+  $('#chat-list').replaceChildren(frag);
+  renderChatEdge();
+}
+
+function renderChatEdge() {
+  const top = $('#chat-top');
+  if (!chat.loaded) top.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading chat…' }));
+  else if (!chat.messages.length) {
+    top.replaceChildren(el('div', { class: 'chat-empty' },
+      el('strong', { text: 'No chat yet' }),
+      el('div', { text: 'Messages show up here once the mcstats-chat mod is running on the server.' })));
+  } else if (chat.loading === 'older') top.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading older messages…' }));
+  else if (!chat.moreBefore) top.replaceChildren(el('div', { class: 'chat-note', text: 'This is the start of the chat log.' }));
+  else top.replaceChildren();
+}
+
+const fromBottom = () => chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight;
+
+// Scrolls made by the page itself don't count as the reader scrolling.
+function setScroll(top) {
+  chat.quietUntil = performance.now() + 250;
+  chatScroll.scrollTop = top;
+}
+
+// The last message at least partly on screen: the time the chat is scrolled to.
+function lastVisibleLine() {
+  const lines = chat.lines;
+  if (!lines.length) return null;
+  const bottom = chatScroll.scrollTop + chatScroll.clientHeight - 6;
+  let lo = 0, hi = lines.length - 1, found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (lines[mid].el.offsetTop < bottom) { found = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return lines[found];
+}
+
+// Keeps the bottom line where it is while messages are added or removed around it.
+function chatAnchor() {
+  const line = lastVisibleLine();
+  return line && { id: line.id, off: line.el.offsetTop - chatScroll.scrollTop };
+}
+function restoreAnchor(a) {
+  const line = a && chat.lines.find((l) => l.id === a.id);
+  if (line) setScroll(line.el.offsetTop - a.off);
+}
+
+async function loadChatLatest() {
+  const res = await api(`/api/chat?limit=${CHAT_PAGE}`);
+  Object.assign(chat, {
+    messages: res.messages, moreBefore: res.more_before, moreAfter: false,
+    maxId: res.max_id, loaded: true, pinned: null, unread: 0,
+  });
+  renderChat();
+  setScroll(chatScroll.scrollHeight);
+  chat.bottomGap = 0;
+}
+
+async function loadOlder() {
+  if (chat.loading || !chat.moreBefore || !chat.messages.length) return;
+  chat.loading = 'older';
+  renderChatEdge();
+  try {
+    const first = chat.messages[0];
+    const res = await api(`/api/chat?before=${first.ts}:${first.id}&limit=${CHAT_PAGE}`);
+    const anchor = chatAnchor();
+    chat.messages = res.messages.concat(chat.messages);
+    chat.moreBefore = res.more_before;
+    if (chat.messages.length > CHAT_KEEP) {
+      chat.messages.length = CHAT_KEEP;
+      chat.moreAfter = true;
+    }
+    chat.loading = null;
+    renderChat();
+    restoreAnchor(anchor);
+  } finally {
+    chat.loading = null;
+    renderChatEdge();
+  }
+  fillChat();
+}
+
+async function loadNewer() {
+  if (chat.loading || !chat.moreAfter || !chat.messages.length) return;
+  chat.loading = 'newer';
+  try {
+    const last = chat.messages.at(-1);
+    const res = await api(`/api/chat?after=${last.ts}:${last.id}&limit=${CHAT_PAGE}`);
+    const anchor = chatAnchor();
+    chat.messages = chat.messages.concat(res.messages);
+    chat.moreAfter = res.more_after;
+    chat.maxId = Math.max(chat.maxId, res.max_id);
+    if (chat.messages.length > CHAT_KEEP) {
+      chat.messages.splice(0, chat.messages.length - CHAT_KEEP);
+      chat.moreBefore = true;
+    }
+    renderChat();
+    restoreAnchor(anchor);
+  } finally {
+    chat.loading = null;
+  }
+  updateChatJump();
+}
+
+// Loads more while the log doesn't fill its box (or the reader is near an end).
+function fillChat() {
+  if (chatScroll.scrollTop < 600) loadOlder().catch((e) => showError(e.message));
+  if (fromBottom() < 600) loadNewer().catch((e) => showError(e.message));
+}
+
+// The graph jumps the chat: messages up to that moment end at the bottom of the log.
+async function jumpChatTo(t) {
+  if (chat.loading) return;
+  chat.loading = 'jump';
+  let line = null;
+  try {
+    const res = await api(`/api/chat?at=${Math.round(t * 1000)}&limit=${CHAT_PAGE}`);
+    Object.assign(chat, {
+      messages: res.messages, moreBefore: res.more_before, moreAfter: res.more_after,
+      maxId: Math.max(chat.maxId, res.max_id), unread: 0,
+    });
+    renderChat();
+    line = chat.lines.findLast((l) => l.ts <= t * 1000) || null;
+    setScroll(line ? line.el.offsetTop + line.el.offsetHeight - chatScroll.clientHeight + 10 : 0);
+    chat.bottomGap = fromBottom();
+    chat.pinned = t;
+  } finally {
+    chat.loading = null;
+    renderChatEdge();
+  }
+  if (line && !reducedMotion()) {
+    line.el.animate([{ background: withAlpha(cssVar('--series-2'), 0.22) }, { background: 'transparent' }], { duration: 1400, easing: 'ease-out' });
+  }
+  updateChatJump();
+  syncChatTime();
+  fillChat();
+}
+
+// New messages since the last look. They're added at the bottom when the newest are loaded,
+// and followed if the reader is already at the bottom.
+async function pollChat() {
+  if (!chat.loaded || chat.loading || document.hidden || $('#view-chat').hidden) return;
+  const res = await api(`/api/chat?since_id=${chat.maxId}&limit=200`);
+  if (res.more_after && !chat.moreAfter) return loadChatLatest().then(syncChatTime); // fell far behind
+  chat.maxId = Math.max(chat.maxId, res.max_id);
+  if (!res.messages.length || chat.moreAfter || chat.loading) return;
+  const known = new Set(chat.messages.map((m) => m.id));
+  const fresh = res.messages.filter((m) => !known.has(m.id));
+  if (!fresh.length) return;
+  const follow = fromBottom() < 60 && chat.pinned == null;
+  const anchor = chatAnchor();
+  chat.messages = chat.messages.concat(fresh).sort((a, b) => a.ts - b.ts || a.id - b.id);
+  if (chat.messages.length > CHAT_KEEP) {
+    chat.messages.splice(0, chat.messages.length - CHAT_KEEP);
+    chat.moreBefore = true;
+  }
+  renderChat(new Set(fresh.map((m) => m.id)));
+  if (follow) {
+    chat.quietUntil = performance.now() + 800;
+    chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  } else {
+    restoreAnchor(anchor);
+    chat.unread += fresh.length;
+  }
+  updateChatJump();
+  syncChatTime();
+}
+
+function updateChatJump() {
+  const btn = $('#chat-jump');
+  if (!chat.moreAfter && fromBottom() < 60) chat.unread = 0;
+  btn.hidden = !chat.unread && !chat.moreAfter && fromBottom() < 400;
+  btn.textContent = chat.unread ? `${chat.unread} new message${chat.unread === 1 ? '' : 's'} ↓` : 'Jump to latest ↓';
+}
+
+$('#chat-jump').addEventListener('click', async () => {
+  chat.pinned = null;
+  chat.unread = 0;
+  if (chat.moreAfter) await loadChatLatest().catch((e) => showError(e.message));
+  else chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  updateChatJump();
+  syncChatTime();
+});
+
+// Scroll events come at most once a frame, so everything that follows the scroll updates right here.
+chatScroll.addEventListener('scroll', () => {
+  if (performance.now() > chat.quietUntil) chat.pinned = null;
+  chat.bottomGap = fromBottom();
+  fillChat();
+  updateChatJump();
+  syncChatTime();
+}, { passive: true });
+
+// When the log's box changes height (the graph folding, the window resizing), the bottom stays put.
+new ResizeObserver(() => {
+  if ($('#view-chat').hidden || !chat.loaded) return;
+  setScroll(chatScroll.scrollHeight - chatScroll.clientHeight - chat.bottomGap);
+  syncChatTime();
+}).observe(chatScroll);
+
+/* chat graph: players online, locked to the live 24h or one whole day, following the chat */
+
+const liveDayWindow = () => presetWindow(presetByKey(TL_PRESETS, '24h'));
+
+// The window showing t: the current one if t is on it, else the live 24h or t's whole day.
+// The live window hands over to "yesterday" a little before t would slide off its left edge.
+function chatWindowFor(t, cur) {
+  const r = resolveWindow(cur);
+  const margin = 600;
+  if (cur.end == null ? t >= r.from + margin : t >= r.from && t < r.to) return cur;
+  if (t >= nowSec() - 86400 + margin) return liveDayWindow();
+  return { unit: 'day', count: 1, end: hourInfo(t).date, preset: '24h', byDay: true };
+}
+
+function syncChatPager() {
+  const r = resolveWindow(chat.win);
+  $('#cg-next').disabled = chat.win.end == null;
+  $('#cg-prev').disabled = state.dataStart != null && r.from <= state.dataStart;
+  $('#cg-label').textContent = windowLabel(chat.win, r, TL_PRESETS);
+}
+
+function setChatWindow(w, dir) {
+  const prev = chat.win;
+  chat.win = w;
+  syncChatPager();
+  loadChatGraph(pageShift(prev, w, dir)).catch((e) => showError(e.message));
+}
+
+$('#cg-prev').append(chevronIcon(-1));
+$('#cg-next').append(chevronIcon(1));
+$('#cg-prev').addEventListener('click', () => setChatWindow(shiftWindow(chat.win, -1), -1));
+$('#cg-next').addEventListener('click', () => setChatWindow(shiftWindow(chat.win, 1), 1));
+
+async function loadChatGraph(slide = 0) {
+  const w = chat.win;
+  const r = resolveWindow(w);
+  const { from, to } = r;
+  const req = ++chat.graphReq;
+  syncChatPager();
+  const [rows, ses] = await Promise.all([
+    r.live ? loadSnapshots(from) : memoApi(`/api/snapshots?from=${from}&to=${to}`).then((x) => x.rows),
+    r.live ? api(`/api/sessions?from=${from}&to=${to}`) : memoApi(`/api/sessions?from=${from}&to=${to}`),
+  ]);
+  if (req !== chat.graphReq) return; // the window moved on meanwhile
+  chat.sessions = ses.rows.map(([uuid, name, a, b]) => ({ uuid, name, from: a, to: b + ses.poll_seconds }));
+  const whoAt = (t) => [...new Set(chat.sessions.filter((s) => s.from < t + 1 && s.to > t).map((s) => s.name))];
+
+  // While the graph pages, the cursor glides with it.
+  const cursor = $('#cg-cursor');
+  if (slide) {
+    cursor.classList.add('sliding');
+    clearTimeout(loadChatGraph.slideTimer);
+    loadChatGraph.slideTimer = setTimeout(() => cursor.classList.remove('sliding'), SLIDE_MS);
+  }
+  renderLineChart($('#chat-chart'), {
+    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, whoAt,
+    series: [{ name: 'online', cls: '1', color: 'var(--series-1)', area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
+    fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
+    fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · click to read`,
+    onPick: (t) => jumpChatTo(t).catch((e) => showError(e.message)),
+    onDraw: (g) => { chat.geom = g; placeCursor(); },
+  }, { animate: live(), slide });
+  renderOnlineThen(true);
+}
+
+// The cursor: a bold line at the chat's time, with a dot where it meets the players line.
+function placeCursor() {
+  const c = $('#cg-cursor');
+  const g = chat.geom;
+  // The live graph is redrawn once a minute, so anything newer than its last drawing is "now".
+  const t = chat.win?.end == null && chat.t > (g?.to ?? 0) && chat.t <= nowSec() + 60 ? g.to : chat.t;
+  if (!g || t == null || t < g.from || t > g.to) {
+    c.classList.add('off');
+    return;
+  }
+  c.classList.remove('off');
+  c.style.transform = `translateX(${g.x(t)}px)`;
+  c.style.top = `${g.top}px`;
+  c.style.height = `${g.height}px`;
+  const y = g.yAt(t);
+  const dot = c.firstElementChild;
+  dot.hidden = y == null;
+  if (y != null) dot.style.top = `${y - g.top}px`;
+}
+
+const onlineHeads = new Map(); // reused so heads don't blink while scrolling
+function renderOnlineThen(force = false) {
+  const t = chat.t;
+  if (t == null) return;
+  const before = state.dataStart && t < state.dataStart;
+  const people = before ? [] : [...new Map(chat.sessions.filter((s) => s.from <= t && s.to > t).map((s) => [s.uuid, s])).values()];
+  const key = `${before}|${people.map((p) => p.uuid).join()}`;
+  if (!force && key === chat.onlineKey) return;
+  chat.onlineKey = key;
+  $('#cg-online-n').textContent = people.length ? `· ${people.length}` : '';
+  $('#cg-count').textContent = before ? '' : `${people.length} online`;
+  const list = $('#cg-online-list');
+  if (!people.length) {
+    list.replaceChildren(el('div', { class: 'cg-online-none', text: before ? 'No data yet' : 'Nobody' }));
+    return;
+  }
+  list.replaceChildren(...people.map((p) => {
+    if (!onlineHeads.has(p.name)) onlineHeads.set(p.name, headImg(p.name, 16, { width: 16, height: 16, loading: 'eager' }));
+    const a = el('a', { class: 'cg-person', href: `#/player/${p.uuid}` }, onlineHeads.get(p.name), el('span', { text: p.name }));
+    a.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
+    return a;
+  }));
+}
+
+// Works out the chat's time from the scroll position and moves everything that follows it.
+function syncChatTime() {
+  if ($('#view-chat').hidden || !chat.win) return;
+  const line = lastVisibleLine();
+  const t = chat.pinned ?? (line ? line.ts / 1000 : nowSec());
+  chat.t = t;
+  $('#cg-time').textContent = cursorLabel(t);
+  const w = chatWindowFor(t, chat.win);
+  if (windowKey(w) !== windowKey(chat.win)) setChatWindow(w, t < resolveWindow(chat.win).from ? -1 : 1);
+  placeCursor();
+  renderOnlineThen();
+}
+
+/* folding the graph and the who's-online bar (remembered in the browser) */
+
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+function recall(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function setGraphOpen(open) {
+  $('#cg').classList.toggle('collapsed', !open);
+  $('#cg-toggle').setAttribute('aria-expanded', String(open));
+  remember('chatGraph', open ? 'open' : 'closed');
+  if (open) requestAnimationFrame(() => redraws.get($('#chat-chart'))?.());
+}
+$('#cg-toggle').addEventListener('click', () => setGraphOpen($('#cg').classList.contains('collapsed')));
+setGraphOpen(recall('chatGraph') !== 'closed');
+
+function setOnlineBarOpen(open) {
+  $('#chat-online').classList.toggle('collapsed', !open);
+  $('#chat-online-pill').hidden = open;
+  remember('chatOnline', open ? 'open' : 'closed');
+}
+$('#chat-online-close').addEventListener('click', () => setOnlineBarOpen(false));
+$('#chat-online-pill').addEventListener('click', () => setOnlineBarOpen(true));
+setOnlineBarOpen(recall('chatOnline') !== 'closed');
+
+function renderChatOnline() {
+  const st = state.status;
+  const last = st.last;
+  const fresh = last && nowSec() - last.ts <= 300;
+  syncChips($('#chat-chips'), fresh ? st.online : [], '--surface');
+  const empty = $('#chat-online-empty');
+  empty.hidden = fresh && st.online.length > 0;
+  empty.textContent = !fresh ? 'No recent data' : !last.up ? 'Server offline' : 'Nobody online right now';
+  const n = fresh && last.up ? last.online : 0;
+  $('#chat-online-pill-text').textContent = !fresh ? 'No data' : !last.up ? 'Offline' : `${n} online`;
+  $('#chat-online-pill').classList.toggle('none', !n);
+}
+
+async function showChat({ refresh = false } = {}) {
+  showView('chat');
+  document.title = 'Chat log · Server Stats';
+  await loadStatus();
+  renderChatOnline();
+  if (refresh && chat.loaded) {
+    if (chat.win?.end == null) await loadChatGraph();
+    syncChatTime();
+    return;
+  }
+  chat.loaded = false;
+  chat.messages = [];
+  renderChat();
+  await loadChatLatest();
+  const line = lastVisibleLine();
+  chat.t = line ? line.ts / 1000 : nowSec();
+  chat.win = chatWindowFor(chat.t, liveDayWindow());
+  await loadChatGraph();
+  syncChatTime();
+  updateChatJump();
+  fillChat();
+}
+
+setInterval(() => pollChat().catch(() => {}), CHAT_POLL_MS);
+
 /* ---------- routing & refresh ---------- */
 
 async function route() {
@@ -1958,6 +2507,7 @@ async function route() {
   const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
   try {
     if (m) await showPlayer(m[1]);
+    else if (location.hash === '#/chat') await showChat();
     else await showHome();
   } catch (err) {
     console.error(err);
@@ -2039,6 +2589,7 @@ async function refresh() {
   try {
     const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
     if (m) await showPlayer(m[1], { refresh: true });
+    else if (location.hash === '#/chat') await showChat({ refresh: true });
     else await showHome();
     showError('');
   } catch (err) {
@@ -2055,7 +2606,11 @@ function scheduleRefresh() {
   setTimeout(async () => { await refresh(); scheduleRefresh(); }, wait);
 }
 
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  refresh();
+  pollChat().catch(() => {});
+});
 scheduleRefresh();
 
 route();

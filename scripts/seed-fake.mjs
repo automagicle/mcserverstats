@@ -19,7 +19,8 @@ const people = [
 
 const PT_OFFSET = 7 * 3600; // close enough for fake data
 const counts = new Map(); // minute ts -> online count
-const out = ['DELETE FROM snapshots;', 'DELETE FROM hourly;', 'DELETE FROM sessions;', 'DELETE FROM players;'];
+const out = ['DELETE FROM snapshots;', 'DELETE FROM hourly;', 'DELETE FROM sessions;', 'DELETE FROM players;', 'DELETE FROM chat;'];
+const allSessions = []; // [person, start, end]
 
 for (const person of people) {
   let first = null;
@@ -38,6 +39,7 @@ for (const person of people) {
       first ??= s;
       out.push(`INSERT INTO sessions (uuid, start_ts, end_ts) VALUES ('${person.uuid}', ${s}, ${e});`);
       for (let t = s; t <= e; t += POLL) counts.set(t, (counts.get(t) || 0) + 1);
+      allSessions.push([person, s, e]);
     }
   }
   if (first) out.push(`INSERT INTO players (uuid, name, first_seen) VALUES ('${person.uuid}', '${person.name}', ${first});`);
@@ -60,6 +62,46 @@ for (let i = 0; i < snapRows.length; i += 500) {
 const hourRows = [...hourly].map(([h, a]) => `(${h}, ${a.join(', ')})`);
 for (let i = 0; i < hourRows.length; i += 500) {
   out.push(`INSERT INTO hourly (hour_ts, samples, up_samples, online_sum, peak) VALUES ${hourRows.slice(i, i + 500).join(',')};`);
+}
+
+// Chat for the last two weeks: joins and leaves at session edges, chatter while people are on.
+const LINES = [
+  'hey all', 'anyone want to go to the nether?', 'brb', 'back', 'lol', 'nice', 'where is everyone',
+  'found diamonds!!', 'who took my pickaxe', 'gg', 'creeper blew up my house again', 'on my way',
+  'can someone help me with the farm', 'what are we building today', 'i need iron', 'coords?',
+  'the villagers are breeding finally', 'night night', 'skip the night pls', 'sleep pls',
+  'check out the new bridge at spawn', 'anyone have spare wool?', 'that was close', 'haha',
+  'ok heading to the end portal', 'trading hall is done', 'there is a witch hut near the swamp',
+  'who wants to raid an ocean monument later', 'my elytra broke', 'thanks!', 'np',
+];
+const DEATHS = ['was slain by Zombie', 'was blown up by Creeper', 'fell from a high place', 'drowned',
+  'tried to swim in lava', 'was shot by Skeleton', 'hit the ground too hard'];
+const ADV = ['has made the advancement [Diamonds!]', 'has made the advancement [We Need to Go Deeper]',
+  'has made the advancement [Monster Hunter]', 'has completed the challenge [Return to Sender]'];
+const chat = [];
+let n = 0;
+const msg = (ts, kind, p, text) => chat.push(`('seed-${++n}', ${ts}, '${kind}', ${p ? `'${p.uuid}'` : 'NULL'}, ${p ? `'${p.name}'` : 'NULL'}, '${text.replace(/'/g, "''")}')`);
+const chatFrom = now - 14 * 86400;
+for (const [p, s, e] of allSessions) {
+  if (e < chatFrom) continue;
+  msg(s * 1000 + Math.floor(rand() * 20000), 'join', p, `${p.name} joined the game`);
+  for (let t = s + 30 + rand() * 600; t < e; t += 60 + rand() * 900) {
+    const r = rand();
+    const ms = Math.floor(t * 1000);
+    if (r < 0.06) msg(ms, 'death', p, `${p.name} ${DEATHS[Math.floor(rand() * DEATHS.length)]}`);
+    else if (r < 0.09) msg(ms, 'advancement', p, `${p.name} ${ADV[Math.floor(rand() * ADV.length)]}`);
+    else if (r < 0.11) msg(ms, 'emote', p, `waves`);
+    else {
+      msg(ms, 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
+      if (rand() < 0.4) msg(ms + 3000 + Math.floor(rand() * 8000), 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
+    }
+  }
+  if (e < now - 120) msg(e * 1000 + 30000, 'leave', p, `${p.name} left the game`);
+}
+msg((now - 3 * 86400) * 1000, 'server', null, 'Server stopped');
+msg((now - 3 * 86400 + 90) * 1000, 'server', null, 'Server started');
+for (let i = 0; i < chat.length; i += 200) {
+  out.push(`INSERT INTO chat (event_id, ts_ms, kind, uuid, name, text) VALUES ${chat.slice(i, i + 200).join(',')};`);
 }
 
 console.log(out.join('\n'));
