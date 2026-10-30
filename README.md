@@ -43,9 +43,15 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   for ranges over 6 hours, switches to hourly average/peak for longer ranges, and its
   tooltip lists who was online. Its y-axis always reaches at least the most players ever online at once,
   so every range is drawn on the same scale.
-- **Player pages**: totals, an activity chart (hourly bars on a fixed 0–60 min scale for 24h, daily bars for longer ranges) with a
-  when-online strip underneath, when they usually play, and recent sessions. Player data is fetched when you
+- **Player pages**: the name as chat shows it, totals, chat messages sent (total or today), an activity chart (hourly bars
+  on a fixed 0–60 min scale for 24h, daily bars for longer ranges) with an Online strip and a Chat strip underneath, when they
+  usually play, and recent sessions. The Chat strip has an orange line per message, a red diamond per death and a yellow star
+  per advancement; clicking one previews it, with a button to open the chat log there. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
+- **Player cards**: clicking a player's name or head (in the chat log, the online chips, who was online) opens a small card:
+  their name as chat shows it, online or last seen, messages and time played today, time played this week, a little
+  graph of when they're usually on (the last two weeks, by hour), and a button to their page. The leaderboard still
+  opens player pages directly, and ⌘/Ctrl-click opens the page in a new tab.
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
   defaults to the last 24 hours, and stepping back with ‹ pages through whole days (midnight to midnight).
@@ -59,7 +65,12 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   10 seconds. Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
   and the graph pages back a day when that time leaves its left edge. Beside it is who was online at that moment.
   Clicking the graph jumps the chat to that time. Names show as they do in game chat, with team prefixes and colors
-  (adjusted so they stay readable on the light and dark pages). Chat, deaths and advancements you haven't seen yet are counted in red
+  (adjusted so they stay readable on the light and dark pages). Deaths and advancements show the whole message in its
+  game colors: a killer's name, a named weapon, the advancement's title. Deaths are highlighted in red, as are leaves.
+  **Search** (the button at the top, or ⌘F / Ctrl+F on the chat page) finds messages and names as you type; its filters
+  narrow it to message text or names only, one player, or one kind of message (chat, deaths, advancements, joins and
+  leaves). Picking a result opens the chat there. When the server shuts down (the mod logs "Server stopped"), the status
+  at the top says **Paused** until it's back. Chat, deaths and advancements you haven't seen yet are counted in red
   on the Chat log tab and in the page title, and on the jump button while you're scrolled up. The count is remembered in
   the browser, and a "New" line marks where they start when you open the page. Both the graph and the bar of who's online now
   (along the bottom) fold away, and the page remembers that.

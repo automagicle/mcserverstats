@@ -897,11 +897,11 @@ function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {
 
 function drawBars(root, spec, f) {
   root.replaceChildren();
-  const { buckets, fmtTick, strip } = spec;
+  const { buckets, fmtTick, strip, chatStrip } = spec;
   const n = buckets.length;
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 200;
-  const m = { l: 34, r: 4, t: 10, b: strip ? 48 : 24 };
+  const m = { l: chatStrip ? 46 : 34, r: 4, t: 10, b: strip ? (chatStrip ? 70 : 48) : 24 };
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
   const { ymax, ystep } = f;
   const y = (v) => m.t + ph - (v / ymax) * ph;
@@ -984,7 +984,7 @@ function drawBars(root, spec, f) {
   svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
   // when-online strip, sharing the bars' time scale
-  let stripCross = null;
+  let stripCross = null, chatCross = null, chatMarks = [];
   if (strip) {
     const sy = m.t + ph + 8, sh = 14;
     svg.append(sv('rect', { x: m.l, y: sy, width: pw, height: sh, rx: 3, class: 'strip-bg' }));
@@ -993,24 +993,78 @@ function drawBars(root, spec, f) {
       const x0 = xAt(Math.max(a, from));
       svg.append(sv('rect', { x: x0, y: sy, width: Math.max(1.5, xAt(Math.min(e, to)) - x0), height: sh, class: 'strip-on' }));
     }
+    let bottom = sy + sh;
+    stripCross = sv('line', { y1: sy - 3, y2: sy + sh + 3, class: 'crosshair strip-cross', visibility: 'hidden' });
+    const stripHit = sv('rect', { x: m.l, y: sy - 4, width: pw, height: sh + 7, fill: 'transparent', class: 'strip-hit' });
+
+    // chat strip: a line per message, a red diamond per death, a yellow star per advancement
+    if (chatStrip) {
+      const cy = sy + sh + 6, ch = 14, mid = cy + ch / 2;
+      bottom = cy + ch;
+      for (const [label, y0, cls] of [['Online', sy, 'strip-label-on'], ['Chat', cy, 'strip-label-chat']]) {
+        const t = sv('text', { x: m.l - 6, y: y0 + ch / 2 + 3.5, 'text-anchor': 'end', class: `axis-text strip-label ${cls}` });
+        t.textContent = label;
+        svg.append(t);
+      }
+      svg.append(sv('rect', { x: m.l, y: cy, width: pw, height: ch, rx: 3, class: 'strip-bg' }));
+      if (chatStrip.dataStart && chatStrip.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(chatStrip.dataStart), cy, ch, { label: false });
+      const talk = [], marks = [];
+      for (const ev of chatStrip.events) {
+        const x = xAt(ev[1] / 1000);
+        chatMarks.push({ ev, x });
+        if (ev[2] === 'death') marks.push(sv('path', { d: `M${x},${mid - 5}L${x + 5},${mid}L${x},${mid + 5}L${x - 5},${mid}Z`, class: 'chat-death' }));
+        else if (ev[2] === 'advancement') marks.push(sv('path', { d: starPath(x, mid, 5.5), class: 'chat-adv' }));
+        else talk.push(`M${x},${cy + 2}V${cy + ch - 2}`);
+      }
+      if (talk.length) svg.append(sv('path', { d: talk.join(''), class: 'chat-tick' }));
+      svg.append(...marks); // symbols on top of the lines
+      chatCross = sv('line', { y1: cy - 3, y2: cy + ch + 3, class: 'crosshair strip-cross', visibility: 'hidden' });
+      svg.append(chatCross, sv('rect', { x: m.l, y: cy - 3, width: pw, height: ch + 6, fill: 'transparent', class: 'chat-hit' }));
+    }
     if (slot >= 4) {
       for (let i = 0; i <= n; i++) {
         const tx = m.l + slot * i;
-        svg.append(sv('line', { x1: tx, x2: tx, y1: sy + sh + 1, y2: sy + sh + 5, class: 'strip-tick' }));
+        svg.append(sv('line', { x1: tx, x2: tx, y1: bottom + 1, y2: bottom + 5, class: 'strip-tick' }));
       }
     }
-    stripCross = sv('line', { y1: sy - 3, y2: sy + sh + 3, class: 'crosshair strip-cross', visibility: 'hidden' });
-    const stripHit = sv('rect', { x: m.l, y: sy - 5, width: pw, height: sh + 10, fill: 'transparent', class: 'strip-hit' });
     svg.append(stripCross, stripHit);
   }
+
+  // the chat mark nearest the pointer (symbols win when close, since they're bigger targets)
+  const chatAt = (px) => {
+    let best = null, bestD = 9;
+    for (const c of chatMarks) {
+      const d = Math.abs(c.x - px) - (c.ev[2] === 'death' || c.ev[2] === 'advancement' ? 3 : 0);
+      if (d < bestD) { best = c; bestD = d; }
+    }
+    return best;
+  };
 
   let hovered = null;
   const clearHover = () => {
     hovered?.classList.remove('hover');
     hovered = null;
     stripCross?.setAttribute('visibility', 'hidden');
+    chatCross?.setAttribute('visibility', 'hidden');
   };
   const move = (e) => {
+    if (e.target.classList.contains('chat-hit')) {
+      clearHover();
+      const c = chatAt(e.clientX - svg.getBoundingClientRect().left);
+      if (!c) return hideTip();
+      chatCross.setAttribute('x1', c.x);
+      chatCross.setAttribute('x2', c.x);
+      chatCross.setAttribute('visibility', 'visible');
+      const [, ts, kind, text] = c.ev;
+      const what = CHAT_KINDS[kind] || CHAT_KINDS.chat;
+      showTip(e.clientX, e.clientY, [
+        { value: what.label, color: what.color },
+        { label: fmt(ts / 1000, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) },
+        { label: text.length > 70 ? `${text.slice(0, 70)}…` : text },
+        { label: 'Click to preview' },
+      ]);
+      return;
+    }
     if (e.target.classList.contains('strip-hit')) {
       clearHover();
       const px = e.clientX - svg.getBoundingClientRect().left;
@@ -1039,8 +1093,36 @@ function drawBars(root, spec, f) {
   svg.addEventListener('pointermove', move);
   svg.addEventListener('pointerdown', move);
   svg.addEventListener('pointerleave', () => { clearHover(); hideTip(); });
+  if (chatStrip) {
+    svg.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('chat-hit')) return;
+      const c = chatAt(e.clientX - svg.getBoundingClientRect().left);
+      if (!c) return;
+      hideTip();
+      const box = svg.getBoundingClientRect();
+      chatStrip.onPick(c.ev, box.left + c.x, Number(chatCross.getAttribute('y2')) + box.top);
+    });
+  }
 
   root.append(svg);
+}
+
+const CHAT_KINDS = {
+  chat: { label: 'Chat message', color: 'var(--series-2)' },
+  say: { label: '/say', color: 'var(--series-2)' },
+  emote: { label: '/me', color: 'var(--series-2)' },
+  death: { label: 'Died', color: 'var(--critical)' },
+  advancement: { label: 'Advancement', color: 'var(--warning)' },
+};
+
+function starPath(cx, cy, r) {
+  let d = '';
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rr = i % 2 ? r * 0.45 : r;
+    d += `${i ? 'L' : 'M'}${(cx + rr * Math.cos(a)).toFixed(2)},${(cy + rr * Math.sin(a)).toFixed(2)}`;
+  }
+  return `${d}Z`;
 }
 
 let resizeTimer;
@@ -1387,14 +1469,27 @@ function showError(msg) {
 
 /* ---------- live status ---------- */
 
+// The server stops while nobody's on; the mod's last word before that is "Server stopped".
+function pausedSince() {
+  const st = state.status;
+  const ev = st?.server_event;
+  if (ev?.text !== 'Server stopped' || (st.last?.up && st.last.online > 0)) return null;
+  return Math.floor(ev.ts / 1000);
+}
+
 function renderLive() {
   const st = state.status;
   const live = $('#live');
   const text = $('#live-text');
   const last = st.last;
+  const paused = pausedSince();
+  live.title = paused ? `Server stopped ${ago(paused)}` : '';
   if (!last) {
     live.dataset.state = 'none';
     text.textContent = 'Waiting for first check';
+  } else if (paused) {
+    live.dataset.state = 'paused';
+    text.textContent = 'Paused';
   } else if (nowSec() - last.ts > 300) {
     live.dataset.state = 'none';
     text.textContent = `No data since ${ago(last.ts)}`;
@@ -1412,13 +1507,11 @@ function renderLive() {
 
 function makeChip(p) {
   knownNames.set(p.uuid, p.name);
-  const chip = el('a', { class: 'chip', href: `#/player/${p.uuid}` },
+  const chip = playerLink(el('a', { class: 'chip' },
     headImg(p.name, 24),
     colorName(el('span', { class: 'chip-name', text: p.name }), p.uuid),
     el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
-  );
-  chip.dataset.uuid = p.uuid;
-  chip.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
+  ), p.uuid, p.name);
   chip.addEventListener('focus', () => prefetchPlayer(p.uuid));
   return chip;
 }
@@ -1802,6 +1895,8 @@ async function loadSnapshots(from) {
 function showView(name) {
   for (const v of ['home', 'player', 'chat']) $(`#view-${v}`).hidden = v !== name;
   document.body.classList.toggle('chat-mode', name === 'chat');
+  $('#search-btn').hidden = name !== 'chat';
+  if (name !== 'chat') closeSearch();
   const tab = name === 'chat' ? 'chat' : 'activity';
   for (const t of ['activity', 'chat']) {
     if (t === tab) $(`#tab-${t}`).setAttribute('aria-current', 'page');
@@ -1855,13 +1950,13 @@ function showPlayerLoading(uuid) {
   if (name) setHead(ph, name);
   else { ph.removeAttribute('src'); delete ph.dataset.name; }
   $('#p-status').textContent = 'Loading…';
-  for (const id of ['p-total', 'p-sessions', 'p-longest', 'p-first']) {
+  for (const id of ['p-total', 'p-sessions', 'p-longest', 'p-chat']) {
     const n = $(`#${id}`);
     delete n.dataset.text;
     delete n.dataset.value;
     n.textContent = '–';
   }
-  for (const id of ['p-total-sub', 'p-avg', 'p-longest-sub', 'p-last', 'pa-label']) $(`#${id}`).textContent = '';
+  for (const id of ['p-total-sub', 'p-avg', 'p-longest-sub', 'p-chat-sub', 'pa-label']) $(`#${id}`).textContent = '';
   const chart = $('#p-heatmap');
   stopTween(chart);
   chartPrev.delete(chart);
@@ -1885,8 +1980,10 @@ async function showPlayer(uuid, { refresh = false } = {}) {
     state.playerData = null;
     showPlayerLoading(uuid);
   }
-  const [r] = await Promise.all([
+  const [r, chatInfo] = await Promise.all([
     fetchPlayer(uuid, refresh),
+    // the page still works if chat can't be loaded
+    fetchPlayerChat(`uuid=${uuid}`, { events: true, fresh: refresh }).catch(() => null),
     refresh || !state.status ? loadStatus() : null,
   ]);
   if (req !== playerReq) return; // another player was opened meanwhile
@@ -1917,6 +2014,9 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   status.replaceChildren();
   if (isOnline) status.append(el('span', { class: 'badge', text: 'Online' }), `since ${fmt(r.sessions.at(-1)[0], { hour: 'numeric', minute: '2-digit' })}`);
   else if (r.sessions.length) status.append(`Last seen ${ago(r.sessions.at(-1)[1])}`);
+  status.append(`${status.childNodes.length ? ' · ' : ''}first seen ${fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' })}`);
+  // the name as chat shows it, in its colors
+  $('#p-name').replaceChildren(...nameParts(chatInfo?.display, player.name));
 
   const weekAgo = nowSec() - 7 * 86400;
   let week = 0;
@@ -1925,15 +2025,14 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   const animate = live() && state.playerShown === player.uuid;
   if (state.playerShown !== player.uuid) pCtl.set(fittingPlayerWindow(player.first_seen));
   state.playerShown = player.uuid;
-  state.playerData = { sessions, liveSession: isOnline ? sessions.at(-1) : null };
+  state.playerData = { sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo };
   setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the last 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
   $('#p-avg').textContent = sessions.length ? `avg ${dur(total / sessions.length)}` : '';
   setCounter($('#p-longest'), dur(longest[0]), longest[0], animate);
   $('#p-longest-sub').textContent = longest[1] ? fmt(longest[1], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-  $('#p-first').textContent = fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' });
-  $('#p-last').textContent = fmt(player.first_seen, { hour: 'numeric', minute: '2-digit' });
+  renderPlayerChatTile(animate);
 
   // A newly opened player fades in, with the activity bars rising from zero.
   const view = $('#view-player');
@@ -1973,6 +2072,30 @@ async function showPlayer(uuid, { refresh = false } = {}) {
     tbody
   ));
 }
+
+// Chat messages sent, all time or today (the choice is remembered).
+const chatDataStartLabel = (ms) => {
+  const t = Math.floor(ms / 1000);
+  return `${fmt(t, { month: 'numeric', day: 'numeric' })} ${fmt(t, { hour: 'numeric' }).replace(/\s/g, '').toLowerCase()}`;
+};
+function renderPlayerChatTile(animate = false) {
+  const c = state.playerData?.chat;
+  const mode = $('#p-chat-mode').value;
+  const node = $('#p-chat');
+  if (!c) {
+    node.textContent = '–';
+    $('#p-chat-sub').textContent = 'Chat log unavailable';
+    return;
+  }
+  const n = mode === 'today' ? c.today : c.total;
+  setCounter(node, n.toLocaleString(), n, animate);
+  $('#p-chat-sub').textContent = c.data_start ? `data starts ${chatDataStartLabel(c.data_start)}` : 'no chat logged yet';
+}
+$('#p-chat-mode').value = recall('playerChatMode') === 'today' ? 'today' : 'total';
+$('#p-chat-mode').addEventListener('change', (e) => {
+  remember('playerChatMode', e.target.value);
+  renderPlayerChatTile(true);
+});
 
 // Bars of time played per hour or day, with the when-online strip underneath.
 function renderPlayerActivity(animate = false, slide = 0, grow = false) {
@@ -2024,6 +2147,11 @@ function renderPlayerActivity(animate = false, slide = 0, grow = false) {
         ];
       },
     },
+    chatStrip: d.chat && {
+      events: d.chat.events.filter(([, ts]) => ts >= r.from * 1000 && ts < r.to * 1000),
+      dataStart: d.chat.data_start ? d.chat.data_start / 1000 : null,
+      onPick: (ev, x, y) => openChatPeek(ev, x, y),
+    },
   }, { animate, slide, grow });
 }
 
@@ -2054,6 +2182,7 @@ const chat = {
   geom: null, // the graph's geometry from its last drawing
   graphReq: 0,
   onlineKey: '',
+  pendingJump: null, // { id, ts } to open the chat at, from a player's page
 };
 const chatScroll = $('#chat-scroll');
 
@@ -2124,9 +2253,46 @@ function chatName(m) {
   knownNames.set(m.uuid, m.name);
   const own = m.display?.find((p) => p.c && p.t.includes(m.name));
   if (own) nameColors.set(m.uuid, own.c);
-  const a = el('a', { class: 'msg-name', href: `#/player/${m.uuid}` }, ...parts);
-  a.addEventListener('pointerenter', () => prefetchPlayer(m.uuid));
+  return playerLink(el('a', { class: 'msg-name' }, ...parts), m.uuid, m.name);
+}
+
+// A link to a player that opens their card (plain click) or their page (new tab, etc.).
+// Without a uuid (a name only seen in a message), the card looks the name up.
+function playerLink(a, uuid, name) {
+  a.href = uuid ? `#/player/${uuid}` : '#';
+  a.dataset.card = '';
+  if (uuid) {
+    a.dataset.uuid = uuid;
+    a.addEventListener('pointerenter', () => prefetchPlayer(uuid));
+  } else a.dataset.name = name;
   return a;
+}
+
+const uuidForName = (name) => {
+  const lower = name.toLowerCase();
+  for (const [uuid, n] of knownNames) if (n && n.toLowerCase() === lower) return uuid;
+  return null;
+};
+
+// A whole message as the game styles it (deaths, advancements): every player named in it is a
+// link in their own colors, and item or advancement names keep theirs.
+function richText(m) {
+  const out = [];
+  const pieces = m.rich;
+  for (let i = 0; i < pieces.length;) {
+    const who = pieces[i].p;
+    if (who) {
+      const run = [];
+      while (i < pieces.length && pieces[i].p === who) run.push(pieces[i++]);
+      const uuid = who === m.name ? m.uuid : uuidForName(who);
+      out.push(playerLink(el('a', { class: 'msg-name' },
+        ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))), uuid, who));
+    } else {
+      const p = pieces[i++];
+      out.push(p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t);
+    }
+  }
+  return out;
 }
 
 const chatAvatar = (m, size) => (m.name && (m.uuid || m.kind !== 'say')
@@ -2147,6 +2313,8 @@ function sysRow(m) {
   const lead = m.kind === 'emote' ? chatAvatar(m, 16) : icon(SYS_ICONS[m.kind] || SYS_ICONS.system, 14);
   const body = el('div', { class: 'sys-text' });
   if (m.kind === 'emote') body.append(chatName(m), ' ', el('i', {}, ...linkify(m.text)));
+  // Join and leave lines are all yellow in game, which would tint the name; those use the name's own colors.
+  else if (m.rich && m.kind !== 'join' && m.kind !== 'leave') body.append(...richText(m));
   else if (m.name && m.text.startsWith(displayText(m))) body.append(chatName(m), m.text.slice(displayText(m).length));
   else if (m.name && m.text.startsWith(m.name)) body.append(chatName({ ...m, display: null }), m.text.slice(m.name.length));
   else body.append(m.text);
@@ -2158,7 +2326,7 @@ function sysRow(m) {
 function msgGroup(m) {
   const head = chatAvatar(m, 24);
   const lead = m.uuid
-    ? el('a', { class: 'msg-lead', href: `#/player/${m.uuid}`, tabindex: '-1', 'aria-hidden': 'true' }, head)
+    ? playerLink(el('a', { class: 'msg-lead', tabindex: '-1', 'aria-hidden': 'true' }, head), m.uuid, m.name)
     : el('span', { class: 'msg-lead' }, head);
   return el('div', { class: 'msg-group' }, lead, el('div', { class: 'msg-body' },
     el('div', { class: 'msg-meta' },
@@ -2316,7 +2484,11 @@ function fillChat() {
 }
 
 // The graph jumps the chat: messages up to that moment end at the bottom of the log.
-async function jumpChatTo(t) {
+// With an id (a search result, a message picked on a player's page), that message is the one shown.
+async function jumpChatTo(t, id = null) {
+  if (chat.loading === 'jump') return;
+  // let a load that's already out finish first, so it doesn't land on top of the jump
+  for (let i = 0; chat.loading && i < 100; i++) await new Promise((r) => setTimeout(r, 50));
   if (chat.loading) return;
   chat.loading = 'jump';
   let line = null;
@@ -2324,11 +2496,13 @@ async function jumpChatTo(t) {
     const res = await api(`/api/chat?at=${Math.round(t * 1000)}&limit=${CHAT_PAGE}`);
     Object.assign(chat, {
       messages: res.messages, moreBefore: res.more_before, moreAfter: res.more_after,
-      maxId: Math.max(chat.maxId, res.max_id),
+      maxId: Math.max(chat.maxId, res.max_id), loaded: true,
     });
     renderChat();
-    line = chat.lines.findLast((l) => l.ts <= t * 1000) || null;
-    setScroll(line ? line.el.offsetTop + line.el.offsetHeight - chatScroll.clientHeight + 10 : 0);
+    line = (id != null && chat.lines.find((l) => l.id === id)) || chat.lines.findLast((l) => l.ts <= t * 1000) || null;
+    // a picked message sits mid-log, clear of the jump button; a picked time ends the log
+    const below = id != null ? chatScroll.clientHeight / 2 - line?.el.offsetHeight / 2 : 10;
+    setScroll(line ? line.el.offsetTop + line.el.offsetHeight - chatScroll.clientHeight + below : 0);
     chat.bottomGap = fromBottom();
     chat.pinned = t;
   } finally {
@@ -2552,9 +2726,7 @@ function renderOnlineThen(force = false) {
   }
   list.replaceChildren(...people.map((p) => {
     if (!onlineHeads.has(p.name)) onlineHeads.set(p.name, headImg(p.name, 16, { width: 16, height: 16, loading: 'eager' }));
-    const a = el('a', { class: 'cg-person', href: `#/player/${p.uuid}` }, onlineHeads.get(p.name), colorName(el('span', { text: p.name }), p.uuid));
-    a.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
-    return a;
+    return playerLink(el('a', { class: 'cg-person' }, onlineHeads.get(p.name), colorName(el('span', { text: p.name }), p.uuid)), p.uuid, p.name);
   }));
 }
 
@@ -2604,10 +2776,12 @@ function renderChatOnline() {
   const fresh = last && nowSec() - last.ts <= 300;
   syncChips($('#chat-chips'), fresh ? st.online : [], '--surface');
   const empty = $('#chat-online-empty');
+  const paused = pausedSince();
   empty.hidden = fresh && st.online.length > 0;
-  empty.textContent = !fresh ? 'No recent data' : !last.up ? 'Server offline' : 'Nobody online right now';
+  empty.textContent = paused ? `Server paused since ${clock(paused)}`
+    : !fresh ? 'No recent data' : !last.up ? 'Server offline' : 'Nobody online right now';
   const n = fresh && last.up ? last.online : 0;
-  $('#chat-online-pill-text').textContent = !fresh ? 'No data' : !last.up ? 'Offline' : `${n} online`;
+  $('#chat-online-pill-text').textContent = paused ? 'Paused' : !fresh ? 'No data' : !last.up ? 'Offline' : `${n} online`;
   $('#chat-online-pill').classList.toggle('none', !n);
 }
 
@@ -2625,10 +2799,15 @@ async function showChat({ refresh = false } = {}) {
   chat.messages = [];
   chat.newFrom = chat.unread ? chat.seenId : null;
   renderChat();
-  await loadChatLatest();
-  markSeen();
+  const jump = chat.pendingJump; // "Show in chat log" from a player's page
+  chat.pendingJump = null;
+  if (jump) await jumpChatTo(jump.ts / 1000, jump.id);
+  else {
+    await loadChatLatest();
+    markSeen();
+  }
   const line = lastVisibleLine();
-  chat.t = line ? line.ts / 1000 : nowSec();
+  chat.t = chat.pinned ?? (line ? line.ts / 1000 : nowSec());
   chat.win = chatWindowFor(chat.t, liveDayWindow());
   await loadChatGraph();
   syncChatTime();
@@ -2642,6 +2821,378 @@ setInterval(() => {
   if (!$('#view-chat').hidden) pollChat().catch(() => {});
   else if (chatTicks++ % 3 === 0) checkUnread().catch(() => {});
 }, CHAT_POLL_MS);
+
+/* ---------- player card: what a click on a name opens ---------- */
+
+const pcard = el('div', { class: 'pcard', role: 'dialog', 'aria-label': 'Player', hidden: '' });
+document.body.append(pcard);
+let pcardFor = null;
+let pcardReq = 0;
+const playerChatCache = new Map(); // query -> { at, promise }
+
+// key: "uuid=…" or "name=…"; events adds their messages, deaths and advancements.
+function fetchPlayerChat(key, { events = false, fresh = false } = {}) {
+  const k = `${key}|${events}`;
+  const hit = playerChatCache.get(k);
+  if (!fresh && hit && Date.now() - hit.at < 60_000) return hit.promise;
+  const promise = api(`/api/chat/player?${key}&today=${startOfTodayTs()}${events ? '&events=1' : ''}`);
+  playerChatCache.set(k, { at: Date.now(), promise });
+  promise.catch(() => playerChatCache.delete(k));
+  return promise;
+}
+
+const nameParts = (display, name) => (display
+  ? display.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
+  : [name]);
+
+function playedBetween(sessions, from, to) {
+  let total = 0;
+  for (const [s, e] of sessions) {
+    const overlap = Math.min(e, to) - Math.max(s, from);
+    if (overlap > 0) total += overlap;
+  }
+  return total;
+}
+
+// Minutes online in each hour of the day, averaged over the last two weeks, as little bars.
+function usualActivity(sessions) {
+  const days = 14;
+  const from = nowSec() - days * 86400;
+  const mins = Array(24).fill(0);
+  for (const [s, e] of sessions) {
+    if (e > from) eachHourChunk(Math.max(s, from), e, (h, secs) => { mins[hourInfo(h).hour] += secs / 60 / days; });
+  }
+  const W = 264, H = 58, top = 4, ph = 38, slot = W / 24;
+  const max = Math.max(10, ...mins);
+  const nowHour = hourInfo(nowSec()).hour;
+  const svg = sv('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'pc-graph', role: 'img', 'aria-label': 'Usual activity by hour' });
+  mins.forEach((v, h) => {
+    const bh = Math.max(v > 0.5 ? 2 : 1, (v / max) * ph);
+    const bar = sv('rect', { x: h * slot + 1, y: top + ph - bh, width: slot - 2, height: bh, rx: 1.5, class: `pc-bar${h === nowHour ? ' now' : ''}${v <= 0.5 ? ' zero' : ''}` });
+    bar.dataset.h = h;
+    svg.append(bar);
+    if (h % 6 === 0) {
+      const t = sv('text', { x: h * slot + 1, y: H - 2, class: 'axis-text' });
+      t.textContent = hourName(h, true);
+      svg.append(t);
+    }
+  });
+  svg.addEventListener('pointermove', (e) => {
+    const h = e.target.dataset?.h;
+    if (h == null) return hideTip();
+    const v = mins[h];
+    showTip(e.clientX, e.clientY, [{ value: v < 1 ? 'Rarely on' : `${Math.round(v)} min`, label: v < 1 ? null : 'avg' },
+      { label: `${hourName(Number(h))}–${hourName((Number(h) + 1) % 24)}, last 2 weeks` }]);
+  });
+  svg.addEventListener('pointerleave', hideTip);
+  return svg;
+}
+
+function pcStat(value, label) {
+  return el('div', { class: 'pc-stat' }, el('div', { class: 'pc-value', text: value }), el('div', { class: 'pc-label', text: label }));
+}
+
+function renderCard({ name, uuid, chatInfo, player, error }) {
+  const display = chatInfo?.display;
+  const headRow = el('div', { class: 'pc-head' },
+    headImg(name || 'MHF_Steve', 48, { width: 48, height: 48, class: 'pc-avatar' }),
+    el('div', { class: 'pc-who' },
+      el('div', { class: 'pc-name' }, ...nameParts(display, name || '…')),
+      el('div', { class: 'pc-status', id: 'pc-status' })));
+  const kids = [headRow];
+  if (error) {
+    kids.push(el('div', { class: 'pc-note', text: error }));
+  } else if (!player) {
+    kids.push(el('div', { class: 'pc-note loading', text: 'Loading…' }));
+  } else {
+    const sessions = player.sessions.map(([s, e]) => [s, e + player.poll_seconds]);
+    const lastTs = state.status?.last?.ts;
+    const online = lastTs != null && player.sessions.length && player.sessions.at(-1)[1] === lastTs;
+    const status = headRow.querySelector('.pc-status');
+    if (online) status.append(el('span', { class: 'pc-dot' }), `Online since ${clock(player.sessions.at(-1)[0])}`);
+    else status.textContent = player.sessions.length ? `Last seen ${ago(player.sessions.at(-1)[1])}` : 'Not seen yet';
+    const now = nowSec();
+    kids.push(
+      el('div', { class: 'pc-stats' },
+        pcStat(chatInfo.today.toLocaleString(), chatInfo.today === 1 ? 'message today' : 'messages today'),
+        pcStat(dur(playedBetween(sessions, startOfTodayTs(), now)), 'played today'),
+        pcStat(dur(playedBetween(sessions, now - 7 * 86400, now)), 'last 7 days')),
+      el('div', { class: 'pc-section', text: 'Usually on' }),
+      usualActivity(sessions),
+      el('a', { class: 'pc-open', href: `#/player/${uuid}` }, 'View profile', el('span', { 'aria-hidden': 'true', text: ' →' })),
+    );
+  }
+  pcard.replaceChildren(...kids);
+}
+
+function placeCard() {
+  if (!pcardFor || pcard.hidden) return;
+  const r = pcardFor.getBoundingClientRect();
+  const w = pcard.offsetWidth, h = pcard.offsetHeight;
+  const x = Math.min(Math.max(8, r.left), innerWidth - w - 8);
+  let y = r.bottom + 6;
+  if (y + h > innerHeight - 8) y = Math.max(8, r.top - h - 6);
+  pcard.style.left = `${x}px`;
+  pcard.style.top = `${y}px`;
+}
+
+async function openCard(a) {
+  if (pcardFor === a && !pcard.hidden) return closeCard();
+  hideTip();
+  pcardFor = a;
+  const req = ++pcardReq;
+  let uuid = a.dataset.uuid || null;
+  let name = a.dataset.name || knownNames.get(uuid) || '';
+  renderCard({ name, uuid });
+  pcard.hidden = false;
+  if (!reducedMotion()) pcard.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 140, easing: 'ease-out' });
+  placeCard();
+  try {
+    const chatInfo = await fetchPlayerChat(uuid ? `uuid=${uuid}` : `name=${encodeURIComponent(name)}`);
+    uuid = chatInfo.uuid;
+    name = chatInfo.name;
+    knownNames.set(uuid, name);
+    const player = await fetchPlayer(uuid);
+    if (req !== pcardReq) return;
+    renderCard({ name, uuid, chatInfo, player });
+  } catch (err) {
+    if (req !== pcardReq) return;
+    renderCard({ name, uuid, error: /→ 404$/.test(err.message) ? 'Not seen on the server yet.' : 'Couldn’t load this player.' });
+  }
+  placeCard();
+}
+
+function closeCard() {
+  pcard.hidden = true;
+  pcardFor = null;
+  pcardReq++;
+  hideTip();
+}
+
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-card]');
+  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  openCard(a);
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!pcard.hidden && !pcard.contains(e.target) && !e.target.closest('[data-card]')) closeCard();
+});
+for (const type of ['wheel', 'touchmove']) {
+  document.addEventListener(type, (e) => { if (!pcard.hidden && !pcard.contains(e.target)) closeCard(); }, { passive: true });
+}
+window.addEventListener('resize', () => { if (!pcard.hidden) closeCard(); });
+window.addEventListener('scroll', () => { if (!pcard.hidden) closeCard(); }, { passive: true }); // the page, not the chat log
+window.addEventListener('hashchange', closeCard);
+
+// A chat mark picked on a player's activity strip: a look at it, and a way to it in the chat log.
+function openChatPeek([id, ts, kind, text], x, y) {
+  const anchor = { getBoundingClientRect: () => new DOMRect(x - 8, y, 0, 0) };
+  if (pcardFor?.peek === id && !pcard.hidden) return closeCard();
+  hideTip();
+  pcardFor = anchor;
+  anchor.peek = id;
+  pcardReq++;
+  const d = state.playerData;
+  const name = knownNames.get(state.playerShown) || '';
+  const what = CHAT_KINDS[kind] || CHAT_KINDS.chat;
+  const talk = kind === 'chat' || kind === 'say' || kind === 'emote';
+  const go = el('button', { type: 'button', class: 'pc-open', text: 'Show in chat log →' });
+  go.addEventListener('click', () => {
+    chat.pendingJump = { id, ts };
+    closeCard();
+    location.hash = '#/chat';
+  });
+  pcard.replaceChildren(
+    el('div', { class: 'peek-head' },
+      el('span', { class: 'key', style: `background:${what.color}` }),
+      el('span', { class: 'peek-kind', text: what.label }),
+      el('time', { text: fmt(ts / 1000, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })),
+    el('div', { class: `peek-text peek-${kind}` },
+      ...(talk ? [el('span', { class: 'msg-name' }, ...nameParts(d?.chat?.display, name)), kind === 'emote' ? ' ' : ': '] : []),
+      text.length >= 200 ? `${text}…` : text),
+    go);
+  pcard.hidden = false;
+  placeCard();
+}
+
+/* ---------- chat search (⌘F / Ctrl+F on the chat page) ---------- */
+
+const search = { q: '', in: 'all', from: '', kind: '', results: [], more: false, req: 0, players: null, timer: 0 };
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+$('#search-kbd').textContent = isMac ? '⌘F' : 'Ctrl F';
+
+function openSearch() {
+  closeCard();
+  $('#search-pop').hidden = false;
+  $('#search-btn').setAttribute('aria-expanded', 'true');
+  const q = $('#search-q');
+  q.focus();
+  q.select();
+  loadSearchPlayers().catch(() => {});
+  if (!search.results.length) renderSearch();
+}
+
+function closeSearch() {
+  $('#search-pop').hidden = true;
+  $('#search-btn').setAttribute('aria-expanded', 'false');
+}
+
+async function loadSearchPlayers() {
+  if (search.players) return;
+  const { players } = await api('/api/chat/players');
+  search.players = players;
+  for (const p of players) knownNames.set(p.uuid, p.name);
+  $('#sf-from').append(...players.map((p) => el('option', { value: p.uuid, text: p.n ? `${p.name} (${p.n.toLocaleString()})` : p.name })));
+}
+
+function syncSearchFilters() {
+  for (const b of $('#sf-in').children) b.setAttribute('aria-pressed', String(b.dataset.v === search.in));
+  const n = (search.in !== 'all') + !!search.from + !!search.kind;
+  const badge = $('#search-filter-n');
+  badge.hidden = !n;
+  badge.textContent = n;
+}
+
+async function runSearch(more = false) {
+  const q = search.q.trim();
+  if (!q && !search.from && !search.kind) {
+    search.results = [];
+    search.more = false;
+    search.req++;
+    renderSearch();
+    return;
+  }
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (q && search.in !== 'all') params.set('in', search.in);
+  if (search.from) params.set('from', search.from);
+  if (search.kind) params.set('kind', search.kind);
+  if (more) {
+    const last = search.results.at(-1);
+    params.set('before', `${last.ts}:${last.id}`);
+  }
+  const req = ++search.req;
+  if (!more) $('#search-results').classList.add('busy');
+  try {
+    const res = await api(`/api/chat/search?${params}`);
+    if (req !== search.req) return;
+    search.results = more ? search.results.concat(res.results) : res.results;
+    search.more = res.more;
+    renderSearch();
+    if (!more) $('#search-results').scrollTop = 0;
+  } finally {
+    if (req === search.req) $('#search-results').classList.remove('busy');
+  }
+}
+
+// Where the words matched, marked.
+function highlighted(text, q) {
+  if (!q) return [text];
+  const out = [];
+  const lower = text.toLowerCase(), needle = q.toLowerCase();
+  let at = 0;
+  for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, at)) {
+    if (i > at) out.push(text.slice(at, i));
+    out.push(el('mark', { text: text.slice(i, i + needle.length) }));
+    at = i + needle.length;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
+}
+
+function searchItem(m) {
+  const talk = m.kind === 'chat' || m.kind === 'say' || m.kind === 'emote';
+  const q = search.q.trim();
+  const shown = displayText(m);
+  // a system line already starts with the name, which the header shows
+  const text = talk || !m.text.startsWith(shown) ? m.text : m.text.slice(shown.length).trim();
+  const own = m.display?.find((p) => p.c && m.name && p.t.includes(m.name));
+  const item = el('button', { type: 'button', class: `sr-item sr-${m.kind}` },
+    el('div', { class: 'sr-meta' },
+      talk ? chatAvatar(m, 16) : el('span', { class: 'sr-icon' }, icon(SYS_ICONS[m.kind] || SYS_ICONS.system, 13)),
+      el('span', { class: `sr-name${own ? ' mc' : ''}`, ...(own && { style: mcStyle(own.c) }) },
+        ...highlighted(shown, search.in === 'text' ? '' : q)),
+      el('time', { text: `${relativeDay(hourInfo(m.ts / 1000).date, { month: 'short', day: 'numeric' })} · ${clock(m.ts / 1000)}` })),
+    el('div', { class: 'sr-text' }, ...highlighted(text, search.in === 'name' ? '' : q)));
+  item.addEventListener('click', () => {
+    for (const x of $('#search-results').querySelectorAll('.sr-item.current')) x.classList.remove('current');
+    item.classList.add('current');
+    jumpChatTo(m.ts / 1000, m.id).catch((e) => showError(e.message));
+  });
+  return item;
+}
+
+function renderSearch() {
+  const root = $('#search-results');
+  const q = search.q.trim();
+  if (!q && !search.from && !search.kind) {
+    root.replaceChildren(el('div', { class: 'sr-hint' },
+      'Type to search messages and names. ',
+      el('button', { type: 'button', class: 'link-btn', text: 'Filters' }), ' narrow it to one player or kind of message.'));
+    root.querySelector('.link-btn').addEventListener('click', () => toggleFilters(true));
+    return;
+  }
+  if (!search.results.length) {
+    root.replaceChildren(el('div', { class: 'sr-hint', text: 'No messages found.' }));
+    return;
+  }
+  const n = search.results.length;
+  const kids = [el('div', { class: 'sr-count', text: `${n}${search.more ? '+' : ''} ${n === 1 ? 'result' : 'results'}, newest first` }), ...search.results.map(searchItem)];
+  if (search.more) {
+    const more = el('button', { type: 'button', class: 'sr-more', text: 'Show older results' });
+    more.addEventListener('click', () => { more.disabled = true; runSearch(true).catch((e) => showError(e.message)); });
+    kids.push(more);
+  }
+  root.replaceChildren(...kids);
+}
+
+function toggleFilters(open = $('#search-filters').hidden) {
+  $('#search-filters').hidden = !open;
+  $('#search-filter-btn').setAttribute('aria-expanded', String(open));
+}
+
+const searchSoon = () => {
+  clearTimeout(search.timer);
+  search.timer = setTimeout(() => runSearch().catch((e) => showError(e.message)), 220);
+};
+$('#search-btn').addEventListener('click', () => ($('#search-pop').hidden ? openSearch() : closeSearch()));
+$('#search-close').addEventListener('click', closeSearch);
+$('#search-filter-btn').addEventListener('click', () => toggleFilters());
+$('#search-q').addEventListener('input', (e) => { search.q = e.target.value; searchSoon(); });
+$('#search-q').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { clearTimeout(search.timer); runSearch().catch((err) => showError(err.message)); }
+  if (e.key === 'ArrowDown') { e.preventDefault(); $('#search-results .sr-item')?.focus(); }
+});
+$('#search-results').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  const items = [...$('#search-results').querySelectorAll('.sr-item')];
+  const i = items.indexOf(document.activeElement);
+  if (i === -1) return;
+  e.preventDefault();
+  if (e.key === 'ArrowUp' && i === 0) $('#search-q').focus();
+  else items[Math.min(items.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
+});
+$('#sf-in').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  search.in = b.dataset.v;
+  syncSearchFilters();
+  if (search.q.trim()) searchSoon();
+});
+$('#sf-from').addEventListener('change', (e) => { search.from = e.target.value; syncSearchFilters(); searchSoon(); });
+$('#sf-kind').addEventListener('change', (e) => { search.kind = e.target.value; syncSearchFilters(); searchSoon(); });
+syncSearchFilters();
+
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f' && !$('#view-chat').hidden) {
+    e.preventDefault();
+    openSearch();
+  } else if (e.key === 'Escape') {
+    if (!pcard.hidden) closeCard();
+    else if (!$('#search-pop').hidden) closeSearch();
+  }
+});
 
 /* ---------- routing & refresh ---------- */
 

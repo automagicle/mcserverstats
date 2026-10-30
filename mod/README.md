@@ -5,7 +5,9 @@ It's one jar with no other dependencies (the bits of Fabric API it uses are bund
 Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anything.
 
 **Recorded:** public chat, `/say`, `/me`, joins, leaves, deaths, advancements, and server start/stop.
-Names are sent as chat shows them (team prefix and colors), so the dashboard can match.
+Names are sent as chat shows them (team prefix and colors), so the dashboard can match. Deaths and
+advancements are sent styled as a whole, so a killer's name, a named weapon or an advancement title keeps its color
+(needs 1.1.0 or newer; older versions still work, with plainer death messages).
 **Never recorded:** private messages (`/msg`, `/tell`, `/w`, `/teammsg`) and commands. Let players know chat is logged.
 
 ## How it gets to the dashboard
@@ -54,7 +56,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.0.2.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.1.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -103,7 +105,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.0.2.jar
+./gradlew build      # → build/libs/mcstats-chat-1.1.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

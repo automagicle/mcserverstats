@@ -70,7 +70,7 @@ final class Uploader {
 	}
 
 	// Called from the server thread.
-	void add(String kind, UUID uuid, String name, JsonArray display, String text) {
+	void add(String kind, UUID uuid, String name, JsonArray display, JsonArray rich, String text) {
 		if (text == null || text.isBlank()) return;
 		JsonObject e = new JsonObject();
 		e.addProperty("id", runId + "-" + seq.incrementAndGet());
@@ -79,6 +79,7 @@ final class Uploader {
 		if (uuid != null) e.addProperty("uuid", uuid.toString());
 		if (name != null) e.addProperty("name", name);
 		if (display != null) e.add("display", display);
+		if (rich != null) e.add("rich", rich);
 		e.addProperty("text", text);
 		synchronized (queue) {
 			queue.addLast(e);

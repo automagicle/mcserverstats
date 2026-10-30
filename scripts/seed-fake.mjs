@@ -74,6 +74,7 @@ const LINES = [
   'ok heading to the end portal', 'trading hall is done', 'there is a witch hut near the swamp',
   'who wants to raid an ocean monument later', 'my elytra broke', 'thanks!', 'np',
 ];
+const WEAPONS = [{ t: '[CATALYST]', c: '#ff55ff' }, { t: '[Iron Sword]' }, { t: '[Excalibur]', c: '#55ffff' }];
 const DEATHS = ['was slain by Zombie', 'was blown up by Creeper', 'fell from a high place', 'drowned',
   'tried to swim in lava', 'was shot by Skeleton', 'hit the ground too hard'];
 const ADV = ['has made the advancement [Diamonds!]', 'has made the advancement [We Need to Go Deeper]',
@@ -87,33 +88,42 @@ const DISPLAY = {
   Mossy: [{ t: 'Mossy', c: '#0000aa' }],
 };
 const shown = (p) => (DISPLAY[p.name] ? DISPLAY[p.name].map((x) => x.t).join('') : p.name);
+// The whole line as the game styles it: names marked with p, the rest in the message's colors.
+const named = (p) => (DISPLAY[p.name] || [{ t: p.name }]).map((x) => ({ ...x, p: p.name }));
+const plain = (pieces) => pieces.map((x) => x.t).join('');
 const chat = [];
 let n = 0;
 const sql = (v) => (v == null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`);
-const msg = (ts, kind, p, text) => chat.push([ts, (id) => `('seed-${id}', ${ts}, '${kind}', ${sql(p?.uuid)}, ${sql(p?.name)}, ${sql(text)}, ${sql(p && DISPLAY[p.name] ? JSON.stringify(DISPLAY[p.name]) : null)})`]);
+const msg = (ts, kind, p, text, rich = null) => chat.push([ts, (id) => `('seed-${id}', ${ts}, '${kind}', ${sql(p?.uuid)}, ${sql(p?.name)}, ${sql(rich ? plain(rich) : text)}, ${sql(p && DISPLAY[p.name] ? JSON.stringify(DISPLAY[p.name]) : null)}, ${sql(rich && JSON.stringify(rich))})`]);
 const chatFrom = now - 14 * 86400;
 for (const [p, s, e] of allSessions) {
   if (e < chatFrom) continue;
-  msg(s * 1000 + Math.floor(rand() * 20000), 'join', p, `${shown(p)} joined the game`);
+  msg(s * 1000 + Math.floor(rand() * 20000), 'join', p, null, [...named(p).map((x) => ({ ...x, c: x.c || '#ffff55' })), { t: ' joined the game', c: '#ffff55' }]);
   for (let t = s + 30 + rand() * 600; t < e; t += 60 + rand() * 900) {
     const r = rand();
     const ms = Math.floor(t * 1000);
-    if (r < 0.06) msg(ms, 'death', p, `${shown(p)} ${DEATHS[Math.floor(rand() * DEATHS.length)]}`);
-    else if (r < 0.09) msg(ms, 'advancement', p, `${shown(p)} ${ADV[Math.floor(rand() * ADV.length)]}`);
+    if (r < 0.03) {
+      const killer = people.filter((q) => q !== p)[Math.floor(rand() * (people.length - 1))];
+      msg(ms, 'death', p, null, [...named(p), { t: ' was slain by ' }, ...named(killer), { t: ' using ' }, WEAPONS[Math.floor(rand() * WEAPONS.length)]]);
+    } else if (r < 0.06) msg(ms, 'death', p, null, [...named(p), { t: ` ${DEATHS[Math.floor(rand() * DEATHS.length)]}` }]);
+    else if (r < 0.09) {
+      const [, what, title] = ADV[Math.floor(rand() * ADV.length)].match(/^(.*) (\[.*\])$/);
+      msg(ms, 'advancement', p, null, [...named(p), { t: ` ${what} ` }, { t: title, c: what.includes('challenge') ? '#aa00aa' : '#55ff55' }]);
+    }
     else if (r < 0.11) msg(ms, 'emote', p, `waves`);
     else {
       msg(ms, 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
       if (rand() < 0.4) msg(ms + 3000 + Math.floor(rand() * 8000), 'chat', p, LINES[Math.floor(rand() * LINES.length)]);
     }
   }
-  if (e < now - 120) msg(e * 1000 + 30000, 'leave', p, `${shown(p)} left the game`);
+  if (e < now - 120) msg(e * 1000 + 30000, 'leave', p, null, [...named(p).map((x) => ({ ...x, c: x.c || '#ffff55' })), { t: ' left the game', c: '#ffff55' }]);
 }
 msg((now - 3 * 86400) * 1000, 'server', null, 'Server stopped');
 msg((now - 3 * 86400 + 90) * 1000, 'server', null, 'Server started');
 // stored in time order, like the mod sends them
 const rows = chat.sort((a, b) => a[0] - b[0]).map(([, row]) => row(++n));
 for (let i = 0; i < rows.length; i += 200) {
-  out.push(`INSERT INTO chat (event_id, ts_ms, kind, uuid, name, text, display) VALUES ${rows.slice(i, i + 200).join(',')};`);
+  out.push(`INSERT INTO chat (event_id, ts_ms, kind, uuid, name, text, display, rich) VALUES ${rows.slice(i, i + 200).join(',')};`);
 }
 
 console.log(out.join('\n'));

@@ -3,6 +3,7 @@ package dev.mcserverstats.chatlog;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -27,6 +28,9 @@ import org.slf4j.LoggerFactory;
 public final class ChatLogMod implements DedicatedServerModInitializer {
 	static final Logger LOG = LoggerFactory.getLogger("mcstats-chat");
 
+	// Player names (Java, or Bedrock through Floodgate's "." prefix); mobs' insertions are UUIDs.
+	private static final Pattern PLAYER_NAME = Pattern.compile("[A-Za-z0-9_.]{1,20}");
+
 	private Uploader uploader;
 
 	@Override
@@ -38,13 +42,14 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			uploader.start();
-			uploader.add("server", null, null, null, "Server started");
+			uploader.add("server", null, null, null, null, "Server started");
 		});
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> uploader.add("server", null, null, null, "Server stopped"));
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> uploader.add("server", null, null, null, null, "Server stopped"));
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> uploader.stop());
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) ->
-				uploader.add("chat", sender.getUUID(), sender.getScoreboardName(), styled(params.name()), message.decoratedContent().getString()));
+				uploader.add("chat", sender.getUUID(), sender.getScoreboardName(), styled(params.name(), 8), null,
+						message.decoratedContent().getString()));
 
 		// /say and /me. Other command messages (like /teammsg) only go to some players, so they're skipped.
 		ServerMessageEvents.COMMAND_MESSAGE.register((message, source, params) -> {
@@ -52,7 +57,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 					: params.chatType().is(ChatType.SAY_COMMAND) ? "say" : null;
 			if (kind == null) return;
 			ServerPlayer player = source.getPlayer();
-			uploader.add(kind, player == null ? null : player.getUUID(), source.getTextName(), styled(params.name()),
+			uploader.add(kind, player == null ? null : player.getUUID(), source.getTextName(), styled(params.name(), 8), null,
 					message.decoratedContent().getString());
 		});
 
@@ -76,7 +81,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 			Object[] args = tc.getArgs();
 			if (!kind.equals("system") && args.length > 0 && args[0] instanceof Component who) {
 				name = plainName(who);
-				display = styled(who);
+				display = styled(who, 8);
 			}
 		}
 		UUID uuid = null;
@@ -84,18 +89,22 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 			ServerPlayer player = server.getPlayerList().getPlayerByName(name);
 			if (player != null) uuid = player.getUUID();
 		}
-		uploader.add(kind, uuid, name, display, message.getString());
+		// The whole message too, so other names in it (a killer) and item names keep their colors.
+		uploader.add(kind, uuid, name, display, kind.equals("system") ? null : styled(message, 32), message.getString());
 	}
 
-	// A name as chat shows it (team prefix, colors), as [{ t: text, c: "#rrggbb" }] pieces.
-	static JsonArray styled(Component c) {
+	// Text as chat shows it (team prefixes, colors), as [{ t: text, c: "#rrggbb", p: player }] pieces.
+	// p marks pieces of a player's name (its click-to-insert text), so the dashboard can link it.
+	static JsonArray styled(Component c, int max) {
 		JsonArray out = new JsonArray();
 		c.visit((style, text) -> {
-			if (!text.isEmpty() && out.size() < 8) {
+			if (!text.isEmpty() && out.size() < max) {
 				JsonObject piece = new JsonObject();
 				piece.addProperty("t", text);
 				TextColor color = style.getColor();
 				if (color != null) piece.addProperty("c", String.format("#%06x", color.getValue() & 0xFFFFFF));
+				String who = style.getInsertion();
+				if (who != null && PLAYER_NAME.matcher(who).matches()) piece.addProperty("p", who);
 				out.add(piece);
 			}
 			return Optional.empty();

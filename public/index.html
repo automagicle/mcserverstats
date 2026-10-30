@@ -26,6 +26,10 @@
       </nav>
     </div>
     <div class="top-right">
+      <button type="button" class="search-btn" id="search-btn" aria-expanded="false" aria-controls="search-pop" title="Search chat" hidden>
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <span class="search-btn-label">Search</span><kbd id="search-kbd"></kbd>
+      </button>
       <div id="live" class="live" aria-live="polite"><span class="dot"></span><span id="live-text">Loading…</span></div>
       <button id="theme-toggle" class="theme-toggle" type="button" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
         <span class="theme-knob"></span>
@@ -34,6 +38,35 @@
       </button>
     </div>
   </header>
+
+  <div class="search-pop" id="search-pop" role="dialog" aria-label="Search chat" hidden>
+    <div class="search-bar">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input id="search-q" type="search" placeholder="Search chat" autocomplete="off" spellcheck="false" aria-label="Search chat">
+      <button type="button" class="icon-btn search-filter-btn" id="search-filter-btn" aria-expanded="false" aria-controls="search-filters" title="Filters">
+        <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3"/></svg>
+        <span class="search-filter-n" id="search-filter-n" hidden></span>
+      </button>
+      <button type="button" class="icon-btn" id="search-close" aria-label="Close search" title="Close (Esc)">
+        <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="search-filters" id="search-filters" hidden>
+      <div class="sf-row"><span class="sf-label">Look in</span>
+        <div class="seg" id="sf-in" role="group" aria-label="Look in">
+          <button type="button" data-v="all">Everything</button><button type="button" data-v="text">Messages</button><button type="button" data-v="name">Names</button>
+        </div>
+      </div>
+      <div class="sf-row"><label class="sf-label" for="sf-from">From</label><select id="sf-from"><option value="">Anyone</option></select></div>
+      <div class="sf-row"><label class="sf-label" for="sf-kind">Type</label>
+        <select id="sf-kind">
+          <option value="">Everything</option><option value="chat">Chat messages</option><option value="death">Deaths</option>
+          <option value="advancement">Advancements</option><option value="joins">Joins &amp; leaves</option>
+        </select>
+      </div>
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
 
   <main>
     <div id="error" class="notice notice-error" hidden></div>
@@ -110,7 +143,14 @@
         <div class="tile"><div class="tile-label">Total played</div><div class="tile-value" id="p-total">–</div><div class="tile-sub" id="p-total-sub"></div></div>
         <div class="tile"><div class="tile-label">Sessions</div><div class="tile-value" id="p-sessions">–</div><div class="tile-sub" id="p-avg"></div></div>
         <div class="tile"><div class="tile-label">Longest session</div><div class="tile-value" id="p-longest">–</div><div class="tile-sub" id="p-longest-sub"></div></div>
-        <div class="tile"><div class="tile-label">First seen</div><div class="tile-value tile-value-sm" id="p-first">–</div><div class="tile-sub" id="p-last"></div></div>
+        <div class="tile">
+          <div class="tile-label">Chat messages
+            <select id="p-chat-mode" class="tile-select" aria-label="Count">
+              <option value="total">total</option><option value="today">today</option>
+            </select>
+          </div>
+          <div class="tile-value" id="p-chat">–</div><div class="tile-sub" id="p-chat-sub"></div>
+        </div>
       </div>
 
       <section class="card">

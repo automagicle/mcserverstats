@@ -1,6 +1,6 @@
 import { isAuthorized } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
-import { ingestChat, readChat } from './chat.js';
+import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
 import { json, UUID_RE } from './util.js';
 
 const DAY = 86400;
@@ -39,6 +39,8 @@ export async function handleApi(request, env, url) {
     const totals = await db.prepare('SELECT COUNT(*) AS players FROM players').first();
     const first = await db.prepare('SELECT MIN(ts) AS ts FROM snapshots').first();
     const peak = await db.prepare('SELECT MAX(peak) AS n FROM hourly').first();
+    // The mod logs "Server stopped" when the server shuts down (it sleeps while nobody's on).
+    const serverEvent = await db.prepare("SELECT ts_ms AS ts, text FROM chat WHERE kind = 'server' ORDER BY ts_ms DESC LIMIT 1").first();
     return json({
       tz: env.TZ_NAME || 'America/Los_Angeles',
       poll_seconds: POLL_SECONDS,
@@ -48,6 +50,7 @@ export async function handleApi(request, env, url) {
       players_total: totals.players,
       data_start: first?.ts ?? null,
       peak_ever: peak?.n ?? 0,
+      server_event: serverEvent ?? null,
     });
   }
 
@@ -92,6 +95,9 @@ export async function handleApi(request, env, url) {
   }
 
   if (path === '/api/chat') return readChat(env, url);
+  if (path === '/api/chat/search') return searchChat(env, url);
+  if (path === '/api/chat/players') return chatPlayers(env);
+  if (path === '/api/chat/player') return playerChat(env, url);
 
   const m = path.match(/^\/api\/player\/([^/]+)$/);
   if (m) {
