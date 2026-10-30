@@ -501,18 +501,27 @@ function tween(root, draw) {
 // Paging with ‹ ›: the old drawing scrolls out as the new one scrolls in from the side it came from.
 const SLIDE_MS = 450;
 const sliding = new Map(); // root -> slides in progress
-function slideIn(root, old, dir) {
+// shift: how far the content moves, in chart widths (-1 = a whole width earlier).
+// Partial shifts also cross-fade, since the old and new drawings overlap.
+function slideIn(root, old, shift) {
   const cur = root.firstElementChild;
-  if (!old || !cur || reducedMotion()) return;
+  if (!old || !cur || !shift || reducedMotion()) return;
   const W = root.clientWidth;
+  const fade = Math.abs(shift) < 0.999;
   Object.assign(old.style, { position: 'absolute', left: '0', top: '0', pointerEvents: 'none' });
   root.style.overflow = 'hidden';
   sliding.set(root, (sliding.get(root) || 0) + 1);
   root.append(old);
   const opts = { duration: SLIDE_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)' };
-  // Earlier (dir -1) moves content right, like scrolling back along a timeline.
-  old.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${-dir * W}px)` }], opts);
-  cur.animate([{ transform: `translateX(${dir * W}px)` }, { transform: 'translateX(0)' }], opts).finished
+  // Earlier (negative shift) moves content right, like scrolling back along a timeline.
+  old.animate([
+    { transform: 'translateX(0)', opacity: 1 },
+    { transform: `translateX(${-shift * W}px)`, opacity: fade ? 0 : 1 },
+  ], opts);
+  cur.animate([
+    { transform: `translateX(${shift * W}px)`, opacity: fade ? 0 : 1 },
+    { transform: 'translateX(0)', opacity: 1 },
+  ], opts).finished
     .catch(() => {})
     .finally(() => {
       old.remove();
@@ -1180,10 +1189,11 @@ function rangeControl(host, { presets, picker, fromPicker, onChange }) {
 
   // dir: -1 / 1 when stepping with ‹ ›, so charts can scroll that way
   function set(nw, notify, dir = 0) {
+    const prev = w;
     w = nw;
     close();
     sync();
-    if (notify) onChange(w, dir);
+    if (notify) onChange(w, dir, prev);
   }
 
   function close() {
@@ -1982,9 +1992,17 @@ darkQuery.addEventListener('change', syncThemeToggle);
 syncThemeToggle();
 requestAnimationFrame(() => requestAnimationFrame(() => themeToggle.classList.add('ready'))); // no slide on page load
 
+// How far paging moved the time axis, in widths of the old window (-1 = a whole width earlier).
+function pageShift(prev, w, dir) {
+  if (!dir || !prev) return 0;
+  const a = resolveWindow(prev), b = resolveWindow(w);
+  const shift = (b.from - a.from) / (a.to - a.from);
+  return Math.max(-1, Math.min(1, shift)) || dir;
+}
+
 const tlCtl = rangeControl($('#tl-ctl'), {
   presets: TL_PRESETS, picker: 'datetime', fromPicker: pickSeconds(TL_PRESETS),
-  onChange: (w, dir) => loadTimeline(dir).catch((e) => showError(e.message)),
+  onChange: (w, dir, prev) => loadTimeline(pageShift(prev, w, dir)).catch((e) => showError(e.message)),
 });
 const dailyCtl = rangeControl($('#daily-ctl'), {
   presets: DAILY_PRESETS, picker: 'date', fromPicker: pickDays(DAILY_PRESETS),
