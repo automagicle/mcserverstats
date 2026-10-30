@@ -2,7 +2,7 @@ node_modules/
 .wrangler/
 .claude/
 .dev.vars
-mcstatus-chat.properties
+mcstats-chat.properties
 mod/run/
 mod/build/
 mod/.gradle
