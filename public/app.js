@@ -608,7 +608,7 @@ function niceStep(raw) {
 const redraws = new Map();
 
 function lineTarget(opts) {
-  let vmax = 0;
+  let vmax = opts.yMin || 0;
   for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
   const ystep = niceStep(Math.max(1, Math.max(vmax, 4) / (opts.ticks || 4)));
   const ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
@@ -616,7 +616,8 @@ function lineTarget(opts) {
 }
 
 // opts: { key, from, to, step, series: [{ name, cls, color, area, pts: [{t, v, down}] }], fmtValue, fmtTime,
-//         ticks?, whoAt?(t), onPick?(t) when the plot is clicked, onDraw?(geometry) after every frame }
+//         ticks?, yMin? (the y-axis reaches at least this), whoAt?(t), onPick?(t) when the plot is clicked,
+//         onDraw?(geometry) after every frame }
 // With animate, morphs from the previous drawing of the same range (domain, scale and values).
 function renderLineChart(root, opts, { animate = false, slide = 0 } = {}) {
   const prev = chartPrev.get(root);
@@ -1567,6 +1568,7 @@ async function loadTimeline(slide = 0) {
   }
   opts.key = windowKey(w);
   opts.dataStart = state.dataStart;
+  opts.yMin = state.status?.peak_ever; // same scale on every range: up to the most ever online
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
 }
 
@@ -2458,7 +2460,7 @@ async function loadChatGraph(slide = 0) {
     loadChatGraph.slideTimer = setTimeout(() => cursor.classList.remove('sliding'), SLIDE_MS);
   }
   renderLineChart($('#chat-chart'), {
-    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, whoAt,
+    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, yMin: state.status?.peak_ever, whoAt,
     series: [{ name: 'online', cls: '1', color: 'var(--series-1)', area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
     fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
     fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · click to read`,

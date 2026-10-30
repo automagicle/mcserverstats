@@ -41,7 +41,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Home**: live status and online players, stat tiles, players online over time, daily activity bars,
   leaderboard, and busiest hours by weekday. The players online chart adds a 1-hour moving-average trend line
   for ranges over 6 hours, switches to hourly average/peak for longer ranges, and its
-  tooltip lists who was online.
+  tooltip lists who was online. Its y-axis always reaches at least the most players ever online at once,
+  so every range is drawn on the same scale.
 - **Player pages**: totals, an activity chart (hourly bars on a fixed 0–60 min scale for 24h, daily bars for longer ranges) with a
   when-online strip underneath, when they usually play, and recent sessions. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
