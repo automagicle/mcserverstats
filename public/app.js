@@ -1014,7 +1014,7 @@ function drawBars(root, spec, f) {
       for (const ev of chatStrip.events) {
         const x = xAt(ev[1] / 1000);
         chatMarks.push({ ev, x });
-        if (ev[2] === 'death') marks.push(sv('path', { d: `M${x},${mid - 7}L${x + 6},${mid}L${x},${mid + 7}L${x - 6},${mid}Z`, class: 'chat-death' }));
+        if (ev[2] === 'death') marks.push(sv('rect', { x: x - 3.5, y: mid - 3.5, width: 7, height: 7, transform: `rotate(45 ${x} ${mid})`, class: 'chat-death' }));
         else if (ev[2] === 'advancement') marks.push(sv('path', { d: starPath(x, mid, 7.5), class: 'chat-adv' }));
         else talk.push(`M${x},${cy + 3}V${cy + ch - 3}`);
       }
