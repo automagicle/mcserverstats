@@ -6,12 +6,12 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Server Stats</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b5a2b'/%3E%3Crect width='16' height='6' rx='3' fill='%235cb85c'/%3E%3Crect y='3' width='16' height='3' fill='%235cb85c'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/style.css">
   <script>
     // Apply a saved theme before first paint, so there's no flash of the other one.
     try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
   </script>
-  <script src="app.js" defer></script>
+  <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="top">
@@ -24,12 +24,19 @@
         <a href="#/" id="tab-activity">Activity</a>
         <a href="#/chat" id="tab-chat">Chat log<span class="tab-badge" id="tab-chat-badge" hidden></span></a>
       </nav>
+      <nav class="tabs seasons" aria-label="Seasons">
+        <a href="/s1/" id="season-1" title="Season 1 (archived)">S1</a>
+        <a href="/" id="season-2" title="Season 2">S2</a>
+      </nav>
     </div>
     <div class="top-right">
       <button type="button" class="search-btn" id="search-btn" aria-expanded="false" aria-controls="search-pop" title="Search chat" hidden>
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
         <span class="search-btn-label">Search</span><kbd id="search-kbd"></kbd>
       </button>
+      <div class="seg name-toggle" id="name-toggle" role="group" aria-label="Show players by" hidden>
+        <button type="button" data-v="ign" title="Show in-game names">IGN</button><button type="button" data-v="real" title="Show real names">Name</button>
+      </div>
       <div id="live" class="live" aria-live="polite"><span class="dot"></span><span id="live-text">Loading…</span></div>
       <button id="theme-toggle" class="theme-toggle" type="button" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode">
         <span class="theme-knob"></span>
@@ -70,14 +77,15 @@
 
   <main>
     <div id="error" class="notice notice-error" hidden></div>
+    <div id="season-note" class="notice season-note" hidden></div>
 
     <!-- Home -->
     <section id="view-home" hidden>
       <div class="tiles">
-        <div class="tile"><div class="tile-label">Online now</div><div class="tile-value" id="t-online">–</div><div class="tile-sub" id="t-online-sub"></div></div>
-        <div class="tile"><div class="tile-label">Peak today</div><div class="tile-value" id="t-peak">–</div><div class="tile-sub">players at once</div></div>
-        <div class="tile"><div class="tile-label">Played this week</div><div class="tile-value" id="t-week">–</div><div class="tile-sub">player-hours, last 7 days</div></div>
-        <div class="tile"><div class="tile-label">Players seen</div><div class="tile-value" id="t-players">–</div><div class="tile-sub">all time</div></div>
+        <div class="tile"><div class="tile-label" id="t-online-label">Online now</div><div class="tile-value" id="t-online">–</div><div class="tile-sub" id="t-online-sub"></div></div>
+        <div class="tile"><div class="tile-label" id="t-peak-label">Peak today</div><div class="tile-value" id="t-peak">–</div><div class="tile-sub">players at once</div></div>
+        <div class="tile"><div class="tile-label" id="t-week-label">Played this week</div><div class="tile-value" id="t-week">–</div><div class="tile-sub" id="t-week-sub">player-hours, last 7 days</div></div>
+        <div class="tile"><div class="tile-label">Players seen</div><div class="tile-value" id="t-players">–</div><div class="tile-sub">this season</div></div>
       </div>
 
       <div id="online-list" class="chips"></div>
@@ -135,6 +143,7 @@
         <img id="p-head" class="p-avatar" alt="" width="64" height="64">
         <div>
           <h1 id="p-name"></h1>
+          <div id="p-team" class="p-team" hidden></div>
           <div id="p-status" class="card-sub"></div>
         </div>
       </div>

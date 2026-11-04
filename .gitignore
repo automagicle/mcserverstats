@@ -7,3 +7,5 @@ mod/run/
 mod/build/
 mod/.gradle
 .DS_Store
+roster-*.json
+*-backup.sql

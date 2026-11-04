@@ -9,11 +9,12 @@
   "workers_dev": true,
   "preview_urls": false,
 
-  // Static UI from ./public. Only /api/* runs the Worker (and requires login).
+  // Static UI from ./public. Only /api/* runs the Worker (and requires login); /s1/ (the season 1
+  // archive) runs it too, to serve the same page there.
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/s1", "/s1/*"]
   },
 
   // Check the server every minute (mcstatus.io caches for ~60s anyway).
@@ -29,9 +30,14 @@
   ],
 
   // MC_SERVER is a secret (wrangler secret put MC_SERVER), never put it here.
-  // So is CHAT_INGEST_TOKEN, which the chat mod sends (see mod/README.md).
+  // So is CHAT_INGEST_TOKEN, which the chat mod sends (see mod/README.md), and ROSTER_S2, the
+  // season's teams with players' real names (see README), which stays out of this public repository.
   "vars": {
     "TZ_NAME": "America/Los_Angeles",
+    // When season 2 begins, as an ISO time with its offset (e.g. "2026-11-08T16:00:00-08:00") or unix seconds.
+    // Everything before it is season 1 (shown at /s1/); the main page shows only what comes after.
+    // Until it's set, season 2 has no data and season 1 keeps going.
+    "SEASON2_START": "",
     // Filled in after enabling Cloudflare Access on the workers.dev URL.
     // Until both are set, every /api/* request is refused.
     "ACCESS_TEAM_DOMAIN": "magicle.cloudflareaccess.com",

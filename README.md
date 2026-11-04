@@ -7,6 +7,8 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
 - **Chat log** (optional): a small Fabric server mod in `mod/` posts public chat to the Worker, which stores it in D1.
   See [mod/README.md](mod/README.md) for setup.
+- **Seasons**: the main page shows the current season (season 2); `/s1/` is the season 1 archive. Seasons split the
+  recorded data by time, so nothing is copied or deleted (see [Seasons](#seasons)).
 - **Privacy**: the server address is a Worker secret. Every `/api/*` request must carry a valid Cloudflare Access login token. Until Access is configured, the API refuses everyone.
   The one exception is `POST /api/ingest/chat`, which takes the chat mod's `CHAT_INGEST_TOKEN` instead (and still needs the
   Access service token to get past Access). Service tokens can't read the dashboard.
@@ -27,6 +29,28 @@ Enable **Cloudflare Access** on the `workers.dev` route and allow only your emai
 **team domain** (`<team>.cloudflareaccess.com`) and the **Audience (AUD) tag** into `ACCESS_TEAM_DOMAIN`
 and `ACCESS_AUD` in `wrangler.jsonc`, then run `npm run deploy` again.
 
+## Seasons
+
+Everything recorded before `SEASON2_START` (in `wrangler.jsonc`) is season 1, shown at `/s1/`; the main page shows only
+what comes after. While it's empty, season 2 has no data (the main page says so and links to the archive) and season 1
+keeps recording. When season 2 begins:
+
+1. Set `SEASON2_START` to the moment it starts, with its offset, e.g. `"2026-11-08T16:00:00-08:00"` (on the hour is tidiest:
+   hourly totals are per hour).
+2. If it's on a new server, update the address: `npx wrangler secret put MC_SERVER`.
+3. `npm run deploy`.
+
+From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
+total, the leaderboard opens on All, and it stops refreshing.
+
+**Teams**: each season's teams and players' real names are a Worker secret, `ROSTER_S2`, so they stay out of this public
+repository. Put them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json` for the format) and run
+`npm run roster:put`. For local development, add the same JSON on one line to `.dev.vars` as `ROSTER_S2='{…}'`.
+
+**Sample data**: `/?dummydata` fills the main page with made-up activity for the season's players (from the roster), to
+see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
+log is left empty.
+
 ## Local development
 
 ```bash
@@ -37,6 +61,11 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 ```
 
 ## Dashboard
+
+- **Header**: S1 / S2 switch between seasons. When the season has a roster, **IGN / Name** switches every player's name
+  (leaderboard, online chips, charts' who-was-online, chat, player pages and cards) between their in-game name and their
+  real name, with the other one on hover; the choice is remembered in the browser. On the leaderboard, names are in
+  their team's color (red or blue), and player pages show the team.
 
 - **Home**: live status and online players, stat tiles, players online over time, daily activity bars,
   leaderboard, and busiest hours by weekday. The players online chart adds a 1-hour moving-average trend line

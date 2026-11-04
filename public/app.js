@@ -44,6 +44,18 @@ function headImg(name, size, attrs = {}) {
   return img;
 }
 
+/* ---------- seasons ---------- */
+
+// The main page shows the current season; /s1/ (and later /s2/, …) show past ones.
+// A season that's over is shown as of its end: the page's clock stops there.
+const CURRENT_SEASON = 2; // keep in step with src/seasons.js
+const SEASON = Number(location.pathname.match(/^\/s(\d+)\//)?.[1]) || CURRENT_SEASON;
+const SITE = SEASON < CURRENT_SEASON ? `Season ${SEASON} · Server Stats` : 'Server Stats';
+// ?dummydata on the main page fills it with made-up activity (public/dummy.js). The chat log stays empty.
+const DUMMY = SEASON === CURRENT_SEASON && new URLSearchParams(location.search).has('dummydata');
+let clockStop = Infinity; // the last moment of a finished season (unix seconds)
+const archived = () => clockStop !== Infinity;
+
 /* ---------- time helpers (everything shown in the server's configured zone) ---------- */
 
 let TZ = 'America/Los_Angeles';
@@ -86,7 +98,7 @@ function hourInfo(ts) {
   return v;
 }
 
-const nowSec = () => Math.floor(Date.now() / 1000);
+const nowSec = () => Math.floor(Math.min(Date.now() / 1000, clockStop));
 const todayStr = () => hourInfo(nowSec()).date;
 
 function addDays(d, n) {
@@ -118,6 +130,7 @@ function dur(secs) {
 }
 
 function ago(ts) {
+  if (archived()) return fmt(ts, { month: 'short', day: 'numeric', year: 'numeric' }); // "3h ago" means little once it's over
   const s = nowSec() - ts;
   if (s < 150) return 'just now';
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
@@ -143,12 +156,74 @@ function eachHourChunk(start, end, fn) {
 
 class AuthError extends Error {}
 
+// Every request is for this page's season.
 async function api(path) {
-  const res = await fetch(path, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+  if (DUMMY && !path.startsWith('/api/roster')) return (await dummyApi())(path);
+  const url = `${path}${path.includes('?') ? '&' : '?'}season=${SEASON}`;
+  const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
   if (res.status === 401) throw new AuthError('unauthorized');
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json();
 }
+
+// The sample data's generator, loaded only when it's asked for. It answers the same requests the server would.
+let dummy = null;
+function dummyApi() {
+  dummy ??= new Promise((resolve, reject) => {
+    const script = el('script', { src: '/dummy.js' });
+    script.onload = () => rosterLoad.then((players) => resolve(window.createDummyApi({ roster: players, tz: TZ })));
+    script.onerror = () => reject(new Error('couldn’t load the sample data'));
+    document.head.append(script);
+  });
+  return dummy;
+}
+
+/* ---------- teams and real names ---------- */
+
+// The season's teams, from the server (a secret, so real names stay out of the repository).
+const roster = new Map(); // lowercased IGN -> { ign, name, team }
+const TEAM_NAMES = { red: 'Red Faction', blue: 'Blue Faction' };
+let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN / Name switch shows
+const rosterLoad = api('/api/roster').then((r) => r.players, () => []).then((players) => {
+  for (const p of players) roster.set(p.ign.toLowerCase(), p);
+  syncNameToggle();
+  return players;
+});
+
+const rosterOf = (ign) => (ign ? roster.get(ign.toLowerCase()) : null);
+const realName = (ign) => rosterOf(ign)?.name ?? null;
+const shownName = (ign) => (nameMode === 'real' && realName(ign)) || ign;
+// the name that isn't shown, for hovering
+const otherName = (ign) => (realName(ign) ? (nameMode === 'real' ? ign : realName(ign)) : null);
+
+// A styled name ([{ t, c }] pieces, as chat shows it) with the IGN swapped for the real name when that's shown.
+function swapParts(parts, ign) {
+  const real = nameMode === 'real' && ign && realName(ign);
+  return real ? parts.map((p) => (p.t.includes(ign) ? { ...p, t: p.t.replace(ign, real) } : p)) : parts;
+}
+
+// Colors a name by team, with the other name on hover.
+function teamName(node, ign) {
+  const r = rosterOf(ign);
+  if (r) node.classList.add('team', `team-${r.team}`);
+  const other = otherName(ign);
+  if (other) node.title = other;
+  return node;
+}
+
+function syncNameToggle() {
+  const t = $('#name-toggle');
+  t.hidden = !roster.size;
+  for (const b of t.children) b.setAttribute('aria-pressed', String(b.dataset.v === nameMode));
+}
+$('#name-toggle').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === nameMode) return;
+  nameMode = b.dataset.v;
+  remember('nameMode', nameMode);
+  syncNameToggle();
+  rerenderNames();
+});
 
 /* ---------- tooltip ---------- */
 
@@ -184,7 +259,7 @@ function playerList(names) {
   const list = el('div', { class: 'tip-players' });
   for (const name of names.slice(0, TIP_PLAYERS)) {
     if (!tipHeads.has(name)) tipHeads.set(name, headImg(name, 14, { width: 14, height: 14, loading: 'eager' }));
-    list.append(el('div', { class: 'tip-player' }, tipHeads.get(name), el('span', { text: name })));
+    list.append(el('div', { class: 'tip-player' }, tipHeads.get(name), el('span', { text: shownName(name) })));
   }
   if (names.length > TIP_PLAYERS) list.append(el('div', { class: 'tip-more', text: `+${names.length - TIP_PLAYERS} more` }));
   return list;
@@ -972,7 +1047,7 @@ function drawBars(root, spec, f) {
         t.textContent = hourName(hourInfo(b.start).hour, true);
       } else {
         const day = Number(b.date.slice(8));
-        t.textContent = b.date === todayStr() ? 'Today'
+        t.textContent = b.date === todayStr() && !archived() ? 'Today'
           : day === 1 || slot >= 44 || i < labelEvery || labelEvery >= 7 ? fmtDay(b.date, { month: 'short', day: 'numeric' })
           : String(day);
       }
@@ -1230,7 +1305,7 @@ const matchPreset = (presets, unit, count) => presets.find((p) => p.unit === uni
 
 function windowLabel(w, r, presets) {
   const p = presets.find((x) => x.v === w.preset);
-  if (r.live && p) return p.long;
+  if (r.live && p) return archived() ? finalLabel(p.long) : p.long;
   const md = { month: 'short', day: 'numeric' };
   if (w.unit === 'day') {
     const first = r.buckets[0].date, last = r.buckets.at(-1).date;
@@ -1238,10 +1313,13 @@ function windowLabel(w, r, presets) {
   }
   const full = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
   const start = fmt(r.from, full);
-  if (r.live) return `${start} – now`;
+  if (r.live) return `${start} – ${archived() ? 'end' : 'now'}`;
   const sameDay = hourInfo(r.from).date === hourInfo(r.to - 1).date;
   return `${start} – ${fmt(r.to, sameDay ? { hour: 'numeric', minute: '2-digit' } : full)}`;
 }
+
+// In a finished season, "Last 7 days" are its final 7 days.
+const finalLabel = (s) => (s === 'Today' ? 'Final day' : s.replace(/^Last /, 'Final '));
 
 const TL_PRESETS = [
   { v: '6h', label: '6h', unit: 'sec', count: 6 * 3600, long: 'Last 6 hours' },
@@ -1458,7 +1536,7 @@ function fittingLeaderboardRange() {
   return LB_PRESETS.find((p) => p.unit === 'all' || (p.unit === 'sec' && span <= p.count));
 }
 
-const defaultLeaderboardRange = () => presetByKey(LB_PRESETS, '1d');
+const defaultLeaderboardRange = () => presetByKey(LB_PRESETS, archived() ? 'all' : '1d');
 
 function showError(msg) {
   const e = $('#error');
@@ -1483,7 +1561,14 @@ function renderLive() {
   const last = st.last;
   const paused = pausedSince();
   live.title = paused ? `Server stopped ${ago(paused)}` : '';
-  if (!last) {
+  if (archived()) {
+    live.dataset.state = 'archived';
+    text.textContent = `Ended ${fmt(clockStop, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    live.title = `Season ${SEASON} is over. This is how it ended.`;
+  } else if (st.season && !st.season.started) {
+    live.dataset.state = 'none';
+    text.textContent = 'Not started';
+  } else if (!last) {
     live.dataset.state = 'none';
     text.textContent = 'Waiting for first check';
   } else if (paused) {
@@ -1501,14 +1586,45 @@ function renderLive() {
   }
 
   $('#foot').textContent = `Times shown in ${TZ.replace('_', ' ')} · checked every ${POLL / 60} min via mcstatus.io`
-    + (last ? ` · last check ${fmt(last.ts, { hour: 'numeric', minute: '2-digit' })}` : '');
+    + (archived() ? ` · Season ${SEASON} archive` : last ? ` · last check ${fmt(last.ts, { hour: 'numeric', minute: '2-digit' })}` : '')
+    + (DUMMY ? ' · sample data' : '');
+  renderSeasonNote();
+}
+
+const seasonSpan = () => {
+  const day = { month: 'short', day: 'numeric', year: 'numeric' };
+  return state.dataStart ? `${fmt(state.dataStart, day)} – ${fmt(nowSec(), day)}` : '';
+};
+
+// The line at the top: sample data, no data yet this season, or which season's archive this is.
+function renderSeasonNote() {
+  const note = $('#season-note');
+  const st = state.status;
+  let kids = null;
+  if (DUMMY) {
+    kids = [el('strong', { text: 'Sample data.' }), ' This activity is made up, to show how the page looks. The chat log is left empty. ',
+      el('a', { href: '/', text: 'Show real data' })];
+  } else if (st && SEASON === CURRENT_SEASON && !st.data_start) {
+    const s = st.season;
+    const when = s?.start && !s.started
+      ? ` It starts ${fmt(s.start, { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : '';
+    kids = [el('strong', { text: `No Season ${SEASON} data yet.` }), `${when} `,
+      el('a', { href: `/s${SEASON - 1}/`, text: `See Season ${SEASON - 1}’s archived stats →` })];
+  } else if (st && SEASON < CURRENT_SEASON && !$('#view-home').hidden) {
+    kids = [el('strong', { text: `Season ${SEASON} archive` }),
+      archived() ? ` · ${seasonSpan()}. ` : ` · still recording until Season ${SEASON + 1} starts. `,
+      el('a', { href: SEASON + 1 === CURRENT_SEASON ? '/' : `/s${SEASON + 1}/`, text: `Go to Season ${SEASON + 1} →` })];
+  }
+  note.classList.toggle('dummy', DUMMY);
+  note.hidden = !kids;
+  if (kids) note.replaceChildren(...kids);
 }
 
 function makeChip(p) {
   knownNames.set(p.uuid, p.name);
-  const chip = playerLink(el('a', { class: 'chip' },
+  const chip = playerLink(el('a', { class: 'chip', title: otherName(p.name) },
     headImg(p.name, 24),
-    colorName(el('span', { class: 'chip-name', text: p.name }), p.uuid),
+    colorName(el('span', { class: 'chip-name', text: shownName(p.name) }), p.uuid),
     el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
   ), p.uuid, p.name);
   chip.addEventListener('focus', () => prefetchPlayer(p.uuid));
@@ -1548,7 +1664,9 @@ function syncChips(list, players, bg = '--page') {
   for (const p of players) {
     const existing = current.get(p.uuid);
     if (existing) {
-      colorName(existing.querySelector('.chip-name'), p.uuid).textContent = p.name;
+      colorName(existing.querySelector('.chip-name'), p.uuid).textContent = shownName(p.name);
+      if (otherName(p.name)) existing.title = otherName(p.name);
+      else existing.removeAttribute('title');
       continue;
     }
     const chip = makeChip(p);
@@ -1558,10 +1676,10 @@ function syncChips(list, players, bg = '--page') {
 }
 
 function renderOnlineChips() {
-  syncChips($('#online-list'), state.status.online);
+  syncChips($('#online-list'), archived() ? [] : state.status.online);
   const warn = $('#sample-warning');
   const last = state.status.last;
-  if (last && last.up && last.online > last.listed) {
+  if (!archived() && last && last.up && last.online > last.listed) {
     warn.replaceChildren(
       `The server reports ${last.online} players but only lists ${last.listed} by name, so some playtime isn't being counted. `,
       'Turning on ', el('code', { text: 'enable-query=true' }), ' in server.properties gives the full list.'
@@ -1576,6 +1694,7 @@ function renderOnlineChips() {
 
 function renderTiles() {
   const st = state.status;
+  if (archived()) return renderArchiveTiles();
   const last = st.last;
   const fresh = last && nowSec() - last.ts <= 300;
   const animate = live();
@@ -1592,6 +1711,23 @@ function renderTiles() {
   setCounter($('#t-peak'), String(peak), peak, animate);
   setCounter($('#t-week'), fmtHours(weekMinutes / 60), weekMinutes, animate);
   setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, animate);
+}
+
+// A finished season: how long it ran, its busiest moment and its total.
+function renderArchiveTiles() {
+  const st = state.status;
+  const days = state.dataStart ? daysCovered(state.dataStart) : 0;
+  $('#t-online-label').textContent = 'Season length';
+  setCounter($('#t-online'), `${days} ${days === 1 ? 'day' : 'days'}`, null, false);
+  $('#t-online-sub').textContent = seasonSpan();
+  $('#t-peak-label').textContent = 'Peak';
+  setCounter($('#t-peak'), String(st.peak_ever), st.peak_ever, false);
+  let minutes = 0;
+  for (const [, , , sum] of state.hourly) minutes += sum;
+  $('#t-week-label').textContent = 'Total played';
+  setCounter($('#t-week'), fmtHours(minutes / 60), minutes, false);
+  $('#t-week-sub').textContent = 'player-hours, whole season';
+  setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, false);
 }
 
 async function renderServerDaily(animate = false, slide = 0) {
@@ -1623,7 +1759,7 @@ async function renderServerDaily(animate = false, slide = 0) {
 function renderServerWeekGrid() {
   const sum = Array.from({ length: 7 }, () => Array(24).fill(0));
   const cnt = Array.from({ length: 7 }, () => Array(24).fill(0));
-  const since = nowSec() - 90 * 86400;
+  const since = archived() ? 0 : nowSec() - 90 * 86400;
   for (const [ts, samples, , s] of state.hourly) {
     if (ts < since) continue;
     const { dow, hour } = hourInfo(ts);
@@ -1633,7 +1769,7 @@ function renderServerWeekGrid() {
   const avg = sum.map((row, d) => row.map((s, h) => (cnt[d][h] ? s / cnt[d][h] : 0)));
   renderWeekGrid($('#weekgrid'), avg, (v, label) => [
     { value: `${v.toFixed(v < 10 ? 1 : 0)} players`, label: 'avg' },
-    { label: `${label} · last 90 days` },
+    { label: `${label} · ${archived() ? 'whole season' : 'last 90 days'}` },
   ], { animate: live() });
 }
 
@@ -1796,13 +1932,13 @@ async function loadLeaderboard() {
     return;
   }
   const top = r.players[0].secs || 1;
-  const onlineNow = new Set(state.status.online.map((p) => p.uuid));
+  const onlineNow = new Set(archived() ? [] : state.status.online.map((p) => p.uuid));
   const prev = state.lbPrev?.range === windowKey(w) ? state.lbPrev.secs : null;
   state.lbPrev = { range: windowKey(w), secs: new Map(r.players.map((p) => [p.uuid, p.secs])) };
   const changed = [];
   const tbody = el('tbody');
   r.players.slice(0, 25).forEach((p, i) => {
-    const link = el('a', { href: `#/player/${p.uuid}`, text: p.name });
+    const link = teamName(el('a', { href: `#/player/${p.uuid}`, text: shownName(p.name) }), p.name);
     const tr = el('tr', { class: 'link', 'data-uuid': p.uuid },
       el('td', { class: 'rank', text: String(i + 1) }),
       el('td', {},
@@ -1839,7 +1975,12 @@ async function loadLeaderboard() {
 }
 
 async function loadStatus() {
-  state.status = await api('/api/status');
+  [state.status] = await Promise.all([api('/api/status'), rosterLoad]);
+  const season = state.status.season;
+  if (season?.ended && season.end) {
+    clockStop = season.end - 1; // its end is the next season's first moment
+    document.body.classList.add('archived');
+  }
   setTz(state.status.tz);
   POLL = state.status.poll_seconds;
   state.dataStart = state.status.data_start;
@@ -1854,7 +1995,8 @@ async function loadStatus() {
 
 // After the first load, only rows from the latest (still-filling) hour onward are re-fetched.
 async function loadHourly() {
-  const since = nowSec() - HOURLY_DAYS * 86400;
+  // a finished season keeps all of its hours, for its totals
+  const since = archived() ? Math.min(state.dataStart ?? nowSec(), nowSec() - HOURLY_DAYS * 86400) : nowSec() - HOURLY_DAYS * 86400;
   state.hourlyFrom = since;
   if (!state.hourly.length) {
     state.hourly = (await api(`/api/hourly?from=${since}`)).rows;
@@ -1899,6 +2041,7 @@ function showView(name) {
   document.body.classList.toggle('chat-mode', name === 'chat');
   $('#search-btn').hidden = name !== 'chat';
   if (name !== 'chat') closeSearch();
+  if (state.status) renderSeasonNote();
   const tab = name === 'chat' ? 'chat' : 'activity';
   for (const t of ['activity', 'chat']) {
     if (t === tab) $(`#tab-${t}`).setAttribute('aria-current', 'page');
@@ -1908,7 +2051,7 @@ function showView(name) {
 
 async function showHome() {
   showView('home');
-  document.title = 'Server Stats';
+  document.title = SITE;
   await loadStatus();
   await loadHourly();
   renderTiles();
@@ -1947,7 +2090,8 @@ function showPlayerLoading(uuid) {
   view.classList.remove('reveal');
   view.classList.add('is-loading');
   const name = knownNames.get(uuid);
-  $('#p-name').textContent = name || 'Loading…';
+  $('#p-name').textContent = name ? shownName(name) : 'Loading…';
+  $('#p-team').hidden = true;
   const ph = $('#p-head');
   if (name) setHead(ph, name);
   else { ph.removeAttribute('src'); delete ph.dataset.name; }
@@ -1991,14 +2135,11 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   if (req !== playerReq) return; // another player was opened meanwhile
   const { player } = r;
   knownNames.set(player.uuid, player.name);
-  document.title = `${player.name} · Server Stats`;
-
-  $('#p-name').textContent = player.name;
   setHead($('#p-head'), player.name);
 
   const sessions = r.sessions.map(([s, e]) => [s, e + r.poll_seconds]);
   const lastTs = state.status.last?.ts;
-  const isOnline = lastTs != null && r.sessions.length && r.sessions.at(-1)[1] === lastTs;
+  const isOnline = !archived() && lastTs != null && r.sessions.length && r.sessions.at(-1)[1] === lastTs;
 
   let total = 0, longest = [0, null];
   const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
@@ -2016,9 +2157,8 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   status.replaceChildren();
   if (isOnline) status.append(el('span', { class: 'badge', text: 'Online' }), `since ${fmt(r.sessions.at(-1)[0], { hour: 'numeric', minute: '2-digit' })}`);
   else if (r.sessions.length) status.append(`Last seen ${ago(r.sessions.at(-1)[1])}`);
-  status.append(`${status.childNodes.length ? ' · ' : ''}first seen ${fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' })}`);
-  // the name as chat shows it, in its colors
-  $('#p-name').replaceChildren(...nameParts(chatInfo?.display, player.name));
+  else status.append('Not seen this season');
+  if (player.first_seen) status.append(` · first seen ${fmt(player.first_seen, { month: 'short', day: 'numeric', year: 'numeric' })}`);
 
   const weekAgo = nowSec() - 7 * 86400;
   let week = 0;
@@ -2027,9 +2167,10 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   const animate = live() && state.playerShown === player.uuid;
   if (state.playerShown !== player.uuid) pCtl.set(playerDefaultWindow());
   state.playerShown = player.uuid;
-  state.playerData = { sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo };
+  state.playerData = { name: player.name, sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo };
+  renderPlayerName();
   setCounter($('#p-total'), dur(total), total, animate);
-  $('#p-total-sub').textContent = `${dur(week)} in the last 7 days`;
+  $('#p-total-sub').textContent = `${dur(week)} in the ${archived() ? 'final' : 'last'} 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
   $('#p-avg').textContent = sessions.length ? `avg ${dur(total / sessions.length)}` : '';
   setCounter($('#p-longest'), dur(longest[0]), longest[0], animate);
@@ -2075,14 +2216,31 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   ));
 }
 
-// Chat messages sent, all time or today (the choice is remembered).
+// The name as chat shows it, in its colors (or their real name), and their team.
+function renderPlayerName() {
+  const d = state.playerData;
+  if (!d) return;
+  $('#p-name').replaceChildren(...nameParts(d.chat?.display, d.name));
+  document.title = `${shownName(d.name)} · ${SITE}`;
+  const r = rosterOf(d.name);
+  const team = $('#p-team');
+  team.hidden = !r;
+  if (r) {
+    team.replaceChildren(el('span', { class: `team-dot team-${r.team}` }),
+      el('span', { class: `team-${r.team}`, text: TEAM_NAMES[r.team] || r.team }),
+      el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }));
+  }
+}
+
+// Chat messages sent, all time or today (the choice is remembered). A finished season shows its total.
 const chatDataStartLabel = (ms) => {
   const t = Math.floor(ms / 1000);
   return `${fmt(t, { month: 'numeric', day: 'numeric' })} ${fmt(t, { hour: 'numeric' }).replace(/\s/g, '').toLowerCase()}`;
 };
 function renderPlayerChatTile(animate = false) {
   const c = state.playerData?.chat;
-  const mode = $('#p-chat-mode').value;
+  const mode = archived() ? 'total' : $('#p-chat-mode').value;
+  $('#p-chat-mode').hidden = archived();
   const node = $('#p-chat');
   if (!c) {
     node.textContent = '–';
@@ -2191,6 +2349,7 @@ const chatScroll = $('#chat-scroll');
 const clock = (t) => fmt(t, { hour: 'numeric', minute: '2-digit' });
 
 function relativeDay(date, opts) {
+  if (archived()) return fmtDay(date, opts);
   const today = todayStr();
   if (date === today) return 'Today';
   if (date === addDays(today, -1)) return 'Yesterday';
@@ -2251,8 +2410,8 @@ const displayText = (m) => (m.display ? m.display.map((p) => p.t).join('') : m.n
 
 function chatName(m) {
   const parts = m.display
-    ? m.display.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
-    : [m.name || 'Server'];
+    ? swapParts(m.display, m.name).map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
+    : [m.name ? shownName(m.name) : 'Server'];
   if (!m.uuid) return el('span', { class: 'msg-name' }, ...parts);
   knownNames.set(m.uuid, m.name);
   const own = m.display?.find((p) => p.c && p.t.includes(m.name));
@@ -2289,8 +2448,9 @@ function richText(m) {
       const run = [];
       while (i < pieces.length && pieces[i].p === who) run.push(pieces[i++]);
       const uuid = who === m.name ? m.uuid : uuidForName(who);
+      const shown = (t) => (shownName(who) === who ? t : t.replace(who, shownName(who)));
       out.push(playerLink(el('a', { class: 'msg-name' },
-        ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))), uuid, who));
+        ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: shown(p.t) }) : shown(p.t)))), uuid, who));
     } else {
       const p = pieces[i++];
       out.push(p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t);
@@ -2526,7 +2686,7 @@ async function jumpChatTo(t, id = null) {
 
 // Everything up to the newest message counts as seen once the reader is at the bottom of the log.
 function markSeen() {
-  if ($('#view-chat').hidden || document.hidden || !chat.loaded || chat.moreAfter || fromBottom() > 60) return;
+  if (DUMMY || archived() || $('#view-chat').hidden || document.hidden || !chat.loaded || chat.moreAfter || fromBottom() > 60) return;
   if (chat.seenId == null || chat.maxId > chat.seenId) {
     chat.seenId = chat.maxId;
     remember('chatSeen', String(chat.maxId));
@@ -2551,6 +2711,7 @@ function renderUnread() {
 
 // From the other pages: just the count, every 30 seconds.
 async function checkUnread() {
+  if (DUMMY || archived()) return; // no new messages in sample data or a finished season
   if (chat.seenId == null) {
     const res = await api(`/api/chat?since_id=${Number.MAX_SAFE_INTEGER}&limit=1`);
     chat.seenId = res.max_id;
@@ -2565,7 +2726,7 @@ async function checkUnread() {
 }
 
 async function pollChat() {
-  if (!chat.loaded || chat.loading || document.hidden || $('#view-chat').hidden) return;
+  if (DUMMY || archived() || !chat.loaded || chat.loading || document.hidden || $('#view-chat').hidden) return;
   const res = await api(`/api/chat?since_id=${chat.maxId}&limit=200&unread_since=${chat.seenId ?? chat.maxId}`);
   if (res.more_after && !chat.moreAfter) return loadChatLatest().then(syncChatTime); // fell far behind
   chat.maxId = Math.max(chat.maxId, res.max_id);
@@ -2730,7 +2891,7 @@ function renderOnlineThen(force = false) {
   }
   list.replaceChildren(...people.map((p) => {
     if (!onlineHeads.has(p.name)) onlineHeads.set(p.name, headImg(p.name, 16, { width: 16, height: 16, loading: 'eager' }));
-    return playerLink(el('a', { class: 'cg-person' }, onlineHeads.get(p.name), colorName(el('span', { text: p.name }), p.uuid)), p.uuid, p.name);
+    return playerLink(el('a', { class: 'cg-person' }, onlineHeads.get(p.name), colorName(el('span', { text: shownName(p.name) }), p.uuid)), p.uuid, p.name);
   }));
 }
 
@@ -2791,7 +2952,7 @@ function renderChatOnline() {
 
 async function showChat({ refresh = false } = {}) {
   showView('chat');
-  document.title = 'Chat log · Server Stats';
+  document.title = `Chat log · ${SITE}`;
   await loadStatus();
   renderChatOnline();
   if (refresh && chat.loaded) {
@@ -2846,8 +3007,8 @@ function fetchPlayerChat(key, { events = false, fresh = false } = {}) {
 }
 
 const nameParts = (display, name) => (display
-  ? display.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
-  : [name]);
+  ? swapParts(display, name).map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
+  : [shownName(name)]);
 
 function playedBetween(sessions, from, to) {
   let total = 0;
@@ -2860,7 +3021,8 @@ function playedBetween(sessions, from, to) {
 
 // Minutes online in each hour of the day, averaged over the last two weeks, as little bars.
 function usualActivity(sessions) {
-  const days = 14;
+  // a finished season: averaged over all of it
+  const days = archived() && state.dataStart ? Math.max(1, Math.round((nowSec() - state.dataStart) / 86400)) : 14;
   const from = nowSec() - days * 86400;
   const mins = Array(24).fill(0);
   for (const [s, e] of sessions) {
@@ -2886,7 +3048,7 @@ function usualActivity(sessions) {
     if (h == null) return hideTip();
     const v = mins[h];
     showTip(e.clientX, e.clientY, [{ value: v < 1 ? 'Rarely on' : `${Math.round(v)} min`, label: v < 1 ? null : 'avg' },
-      { label: `${hourName(Number(h))}–${hourName((Number(h) + 1) % 24)}, last 2 weeks` }]);
+      { label: `${hourName(Number(h))}–${hourName((Number(h) + 1) % 24)}, ${archived() ? 'whole season' : 'last 2 weeks'}` }]);
   });
   svg.addEventListener('pointerleave', hideTip);
   return svg;
@@ -2901,7 +3063,8 @@ function renderCard({ name, uuid, chatInfo, player, error }) {
   const headRow = el('div', { class: 'pc-head' },
     headImg(name || 'MHF_Steve', 48, { width: 48, height: 48, class: 'pc-avatar' }),
     el('div', { class: 'pc-who' },
-      el('div', { class: 'pc-name' }, ...nameParts(display, name || '…')),
+      el('div', { class: 'pc-name' }, ...(rosterOf(name) ? [el('span', { class: `team-dot team-${rosterOf(name).team}`, title: TEAM_NAMES[rosterOf(name).team] || rosterOf(name).team })] : []),
+        ...nameParts(display, name || '…')),
       el('div', { class: 'pc-status', id: 'pc-status' })));
   const kids = [headRow];
   if (error) {
@@ -2911,16 +3074,21 @@ function renderCard({ name, uuid, chatInfo, player, error }) {
   } else {
     const sessions = player.sessions.map(([s, e]) => [s, e + player.poll_seconds]);
     const lastTs = state.status?.last?.ts;
-    const online = lastTs != null && player.sessions.length && player.sessions.at(-1)[1] === lastTs;
+    const online = !archived() && lastTs != null && player.sessions.length && player.sessions.at(-1)[1] === lastTs;
     const status = headRow.querySelector('.pc-status');
     if (online) status.append(el('span', { class: 'pc-dot' }), `Online since ${clock(player.sessions.at(-1)[0])}`);
     else status.textContent = player.sessions.length ? `Last seen ${ago(player.sessions.at(-1)[1])}` : 'Not seen yet';
     const now = nowSec();
     kids.push(
-      el('div', { class: 'pc-stats' },
-        pcStat(chatInfo.today.toLocaleString(), chatInfo.today === 1 ? 'message today' : 'messages today'),
-        pcStat(dur(playedBetween(sessions, startOfTodayTs(), now)), 'played today'),
-        pcStat(dur(playedBetween(sessions, now - 7 * 86400, now)), 'last 7 days')),
+      archived()
+        ? el('div', { class: 'pc-stats' },
+          pcStat(chatInfo.total.toLocaleString(), chatInfo.total === 1 ? 'message' : 'messages'),
+          pcStat(dur(playedBetween(sessions, 0, now)), 'played'),
+          pcStat(sessions.length.toLocaleString(), sessions.length === 1 ? 'session' : 'sessions'))
+        : el('div', { class: 'pc-stats' },
+          pcStat(chatInfo.today.toLocaleString(), chatInfo.today === 1 ? 'message today' : 'messages today'),
+          pcStat(dur(playedBetween(sessions, startOfTodayTs(), now)), 'played today'),
+          pcStat(dur(playedBetween(sessions, now - 7 * 86400, now)), 'last 7 days')),
       el('div', { class: 'pc-section', text: 'Usually on' }),
       usualActivity(sessions),
       el('a', { class: 'pc-open', href: `#/player/${uuid}` }, 'View profile', el('span', { 'aria-hidden': 'true', text: ' →' })),
@@ -3198,6 +3366,28 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+/* ---------- the IGN / Name switch: redraw names where they're showing ---------- */
+
+function rerenderNames() {
+  hideTip();
+  closeCard();
+  if (!$('#view-home').hidden && state.status) {
+    renderOnlineChips();
+    loadLeaderboard().catch((e) => showError(e.message));
+  } else if (!$('#view-player').hidden) {
+    renderPlayerName();
+  } else if (!$('#view-chat').hidden && chat.loaded) {
+    const anchor = chatAnchor();
+    renderChat();
+    restoreAnchor(anchor);
+    renderOnlineThen(true);
+    renderChatOnline();
+  }
+}
+
+$(`#season-${SEASON}`)?.setAttribute('aria-current', 'page');
+syncNameToggle();
+
 /* ---------- routing & refresh ---------- */
 
 async function route() {
@@ -3380,7 +3570,7 @@ function live() {
   return refreshing && !reducedMotion();
 }
 async function refresh() {
-  if (document.hidden || refreshing) return;
+  if (document.hidden || refreshing || archived()) return; // a finished season doesn't change
   refreshing = true;
   try {
     const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
@@ -3411,5 +3601,4 @@ document.addEventListener('visibilitychange', () => {
 });
 scheduleRefresh();
 
-route();
-checkUnread().catch(() => {});
+route().finally(() => checkUnread().catch(() => {}));

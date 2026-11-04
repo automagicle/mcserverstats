@@ -23,6 +23,8 @@
   --lv4: #184f95;
   --hover: rgba(11, 11, 11, 0.05);
   --cursor: var(--series-2); /* the chat log's time on its graph */
+  --team-red: #c42f2a;
+  --team-blue: #1d5fc4;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -48,6 +50,8 @@
     --lv3: #5598e7;
     --lv4: #9ec5f4;
     --hover: rgba(255, 255, 255, 0.06);
+    --team-red: #f27a72;
+    --team-blue: #6ea8f5;
   }
 }
 :root[data-theme="dark"] {
@@ -70,6 +74,8 @@
   --lv3: #5598e7;
   --lv4: #9ec5f4;
   --hover: rgba(255, 255, 255, 0.06);
+  --team-red: #f27a72;
+  --team-blue: #6ea8f5;
 }
 
 * { box-sizing: border-box; }
@@ -604,6 +610,16 @@ tr.link:hover td { background: var(--hover); }
   .top-left { display: contents; }
   .tabs { order: 2; width: 100%; }
   .tabs a { flex: 1; text-align: center; }
+  /* first row: name, then live status and theme; second row: pages, seasons and the IGN / Name switch */
+  .top { column-gap: 8px; }
+  .top-right { display: contents; }
+  .brand { margin-right: auto; }
+  .top::after { content: ""; order: 1; flex-basis: 100%; margin-top: -10px; }
+  .tabs { width: auto; }
+  .tabs:not(.seasons) { flex: 1 1 auto; }
+  .tabs a { padding: 4px 8px; }
+  .seasons { order: 3; }
+  .seasons a { flex: none; }
 }
 
 /* ---------- chat log page: fills the window, only the log scrolls ---------- */
@@ -1101,3 +1117,35 @@ a.msg-name:hover { text-decoration: underline; }
 .sr-more:hover { color: var(--ink); background: var(--grid); }
 @media (max-width: 640px) { .search-pop { right: 16px; left: 16px; width: auto; max-width: none; top: 58px; } }
 @media (prefers-reduced-motion: reduce) { .search-pop { animation: none; } }
+
+/* ---------- seasons ---------- */
+
+.seasons a { padding: 4px 9px; }
+.live[data-state="archived"] .dot { background: var(--muted); }
+.season-note { box-shadow: 0 0 0 1px var(--ring), inset 3px 0 0 var(--series-1); }
+.season-note.dummy { box-shadow: 0 0 0 1px var(--ring), inset 3px 0 0 var(--warning); }
+.season-note a { color: var(--series-1); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.season-note a:hover { text-decoration: underline; }
+/* a finished season has nobody online now */
+body.archived .chat-online, body.archived .online-pill { display: none; }
+body.archived .chat-card .chat-scroll { padding-bottom: 0; }
+
+/* ---------- teams and the IGN / Name switch ---------- */
+
+.name-toggle { flex: none; }
+.name-toggle[hidden] { display: none; }
+.name-toggle button { padding: 3px 9px; font-size: 12.5px; font-weight: 550; }
+@media (max-width: 600px) {
+  .name-toggle { order: 4; }
+  .name-toggle button { padding: 4px 7px; }
+}
+.team-red { color: var(--team-red); }
+.team-blue { color: var(--team-blue); }
+.pname a.team { font-weight: 650; }
+.team-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.team-dot.team-red { background: var(--team-red); }
+.team-dot.team-blue { background: var(--team-blue); }
+.p-team { display: flex; align-items: center; gap: 6px; margin: 2px 0 1px; font-size: 13.5px; font-weight: 600; }
+.p-team[hidden] { display: none; }
+.p-team .muted { font-weight: 450; }
+.pc-name .team-dot { margin: 0 6px 2px 0; vertical-align: middle; }

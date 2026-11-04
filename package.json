@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply mcstats --local",
     "db:migrate:remote": "wrangler d1 migrations apply mcstats --remote",
-    "seed:local": "node scripts/seed-fake.mjs > .wrangler/seed.sql && wrangler d1 execute mcstats --local --file .wrangler/seed.sql"
+    "seed:local": "node scripts/seed-fake.mjs > .wrangler/seed.sql && wrangler d1 execute mcstats --local --file .wrangler/seed.sql",
+    "roster:put": "wrangler secret put ROSTER_S2 < roster-s2.json"
   },
   "devDependencies": {
     "wrangler": "4.150.0"

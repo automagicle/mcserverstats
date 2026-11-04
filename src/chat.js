@@ -1,3 +1,4 @@
+import { OPEN_ENDED } from './seasons.js';
 import { json, UUID_RE } from './util.js';
 
 const KINDS = new Set(['chat', 'emote', 'say', 'join', 'leave', 'death', 'advancement', 'server', 'system']);
@@ -111,36 +112,45 @@ const BIG = Number.MAX_SAFE_INTEGER;
 //   before=TS:ID      older than a message      after=TS:ID   newer than a message
 //   at=TS             up to and just after a moment (unix ms)
 //   since_id=ID       stored after that id (live updates), whatever their time; add unread_since=ID for a count
-export async function readChat(env, url) {
+// Only messages within the season's time span are returned.
+export async function readChat(env, url, season) {
   const q = url.searchParams;
   const db = env.DB;
+  const lo = season.lo * 1000, hi = season.hi * 1000;
+  const inSeason = (a, b) => `ts_ms >= ?${a} AND ts_ms < ?${b}`;
   const limit = Math.min(200, Math.max(1, Math.floor(Number(q.get('limit'))) || 100));
   const cursor = (v) => {
     const m = /^(\d+):(\d+)$/.exec(v || '');
     return m ? [Number(m[1]), Number(m[2])] : null;
   };
   const older = (ts, id, n) => db.prepare(
-    `SELECT ${COLS} FROM chat WHERE ts_ms < ?1 OR (ts_ms = ?1 AND id < ?2) ORDER BY ts_ms DESC, id DESC LIMIT ?3`
-  ).bind(ts, id, n + 1);
+    `SELECT ${COLS} FROM chat WHERE (ts_ms < ?1 OR (ts_ms = ?1 AND id < ?2)) AND ${inSeason(4, 5)} ORDER BY ts_ms DESC, id DESC LIMIT ?3`
+  ).bind(ts, id, n + 1, lo, hi);
   const newer = (ts, id, n) => db.prepare(
-    `SELECT ${COLS} FROM chat WHERE ts_ms > ?1 OR (ts_ms = ?1 AND id > ?2) ORDER BY ts_ms, id LIMIT ?3`
-  ).bind(ts, id, n + 1);
-  const maxId = db.prepare('SELECT MAX(id) AS id FROM chat');
+    `SELECT ${COLS} FROM chat WHERE (ts_ms > ?1 OR (ts_ms = ?1 AND id > ?2)) AND ${inSeason(4, 5)} ORDER BY ts_ms, id LIMIT ?3`
+  ).bind(ts, id, n + 1, lo, hi);
+  // The newest message: for a season still going, simply the highest id (cheap); for one that's over,
+  // its last message by time.
+  const maxId = OPEN_ENDED(season)
+    ? db.prepare('SELECT MAX(id) AS id FROM chat')
+    : db.prepare('SELECT id FROM chat WHERE ts_ms < ? ORDER BY ts_ms DESC, id DESC LIMIT 1').bind(hi);
 
   if (q.has('since_id')) {
     const since = Math.max(0, Math.floor(Number(q.get('since_id'))) || 0);
     const [rows, max] = await db.batch([
-      db.prepare(`SELECT ${COLS} FROM chat WHERE id > ? ORDER BY id LIMIT ?`).bind(since, limit + 1),
+      db.prepare(`SELECT ${COLS} FROM chat WHERE id > ?1 AND ${inSeason(3, 4)} ORDER BY id LIMIT ?2`)
+        .bind(since, limit + 1, lo, hi),
       maxId,
     ]);
     const messages = withDisplay(rows.results.slice(0, limit)).sort((a, b) => a.ts - b.ts || a.id - b.id);
-    const body = { messages, more_after: rows.results.length > limit, max_id: max.results[0].id ?? 0 };
+    const body = { messages, more_after: rows.results.length > limit, max_id: max.results[0]?.id ?? 0 };
     // unread_since=ID: how many messages worth reading (chat, deaths, advancements; not joins or leaves) came after it, up to 1000
     if (q.has('unread_since')) {
       const seen = Math.max(0, Math.floor(Number(q.get('unread_since'))) || 0);
       body.unread = (await db.prepare(
-        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM chat WHERE id > ? AND kind IN ('chat', 'say', 'emote', 'death', 'advancement') LIMIT 1000)`
-      ).bind(seen).first()).n;
+        `SELECT COUNT(*) AS n FROM (SELECT 1 FROM chat WHERE id > ? AND kind IN ('chat', 'say', 'emote', 'death', 'advancement')
+         AND ts_ms >= ? AND ts_ms < ? LIMIT 1000)`
+      ).bind(seen, lo, hi).first()).n;
     }
     return json(body);
   }
@@ -164,7 +174,7 @@ export async function readChat(env, url) {
   }
 
   const res = await db.batch([back, fwd, maxId].filter(Boolean));
-  const max = res.pop().results[0].id ?? 0;
+  const max = res.pop().results[0]?.id ?? 0;
   const b = back ? res.shift().results : [];
   const f = fwd ? res.shift().results : [];
   const bn = back && !q.has('after') ? limit : 0;
@@ -191,11 +201,12 @@ const likeArg = (s) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 //   from=UUID   only messages from (or about) this player
 //   kind=chat | death | advancement | joins
 //   before=TS:ID  the next page
-export async function searchChat(env, url) {
+export async function searchChat(env, url, season) {
   const q = url.searchParams;
   const limit = Math.min(50, Math.max(1, Math.floor(Number(q.get('limit'))) || 30));
   const text = (q.get('q') || '').trim().slice(0, 100);
   const where = [], args = [];
+  const bounds = ['ts_ms >= ?', 'ts_ms < ?'];
   if (text) {
     const field = q.get('in');
     if (field === 'text') where.push("text LIKE ? ESCAPE '\\'");
@@ -212,6 +223,8 @@ export async function searchChat(env, url) {
   const kind = q.get('kind');
   if (kind && SEARCH_KINDS[kind]) where.push(SEARCH_KINDS[kind]);
   if (!where.length) return json({ error: 'nothing to search for' }, 400);
+  where.push(...bounds);
+  args.push(season.lo * 1000, season.hi * 1000);
   const before = /^(\d+):(\d+)$/.exec(q.get('before') || '');
   if (before) {
     where.push('(ts_ms < ? OR (ts_ms = ? AND id < ?))');
@@ -223,22 +236,24 @@ export async function searchChat(env, url) {
   return json({ results: withDisplay(results.slice(0, limit)), more: results.length > limit });
 }
 
-// GET /api/chat/players — everyone, with how many messages they've sent, for the search filter.
-export async function chatPlayers(env) {
+// GET /api/chat/players — everyone who played in the season, with how many messages they sent in it, for the search filter.
+export async function chatPlayers(env, season) {
   const { results } = await env.DB.prepare(
     `SELECT p.uuid, p.name, COUNT(c.id) AS n FROM players p
-     LEFT JOIN chat c ON c.uuid = p.uuid AND c.kind IN ${TALK}
+     LEFT JOIN chat c ON c.uuid = p.uuid AND c.kind IN ${TALK} AND c.ts_ms >= ?1 * 1000 AND c.ts_ms < ?2 * 1000
+     WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.uuid = p.uuid AND s.end_ts >= ?1 AND s.start_ts < ?2)
      GROUP BY p.uuid ORDER BY n DESC, p.name COLLATE NOCASE`
-  ).all();
+  ).bind(season.lo, season.hi).all();
   return json({ players: results });
 }
 
 // GET /api/chat/player?uuid=… (or name=…) — one player's chat at a glance:
 //   their name as chat last showed it, messages sent (all time and since today=UNIX_SECONDS),
 //   and with events=1 their messages, deaths and advancements: [id, ts, kind, text] in time order.
-export async function playerChat(env, url) {
+export async function playerChat(env, url, season) {
   const q = url.searchParams;
   const db = env.DB;
+  const lo = season.lo * 1000, hi = season.hi * 1000;
   let uuid = q.get('uuid');
   let name = null;
   if (uuid) {
@@ -253,15 +268,19 @@ export async function playerChat(env, url) {
   const today = Math.floor(Number(q.get('today')) || 0) * 1000;
   const stmts = [
     db.prepare('SELECT name FROM players WHERE uuid = ?').bind(uuid),
-    db.prepare('SELECT display FROM chat WHERE uuid = ? AND display IS NOT NULL ORDER BY ts_ms DESC LIMIT 1').bind(uuid),
-    db.prepare(`SELECT COUNT(*) AS total, SUM(ts_ms >= ?) AS today FROM chat WHERE uuid = ? AND kind IN ${TALK}`).bind(today, uuid),
-    db.prepare('SELECT MIN(ts_ms) AS ts FROM chat'),
+    // their name as chat showed it by the end of the season (or before it, if they haven't talked in it)
+    db.prepare('SELECT display FROM chat WHERE uuid = ? AND display IS NOT NULL AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1')
+      .bind(uuid, Math.max(hi, lo + 1)),
+    db.prepare(`SELECT COUNT(*) AS total, SUM(ts_ms >= ?) AS today FROM chat WHERE uuid = ? AND kind IN ${TALK} AND ts_ms >= ? AND ts_ms < ?`)
+      .bind(today, uuid, lo, hi),
+    db.prepare('SELECT MIN(ts_ms) AS ts FROM chat WHERE ts_ms >= ? AND ts_ms < ?').bind(lo, hi),
   ];
   if (q.get('events') === '1') {
     stmts.push(db.prepare(
       `SELECT id, ts_ms, kind, substr(text, 1, 200) FROM chat
-       WHERE uuid = ? AND kind IN ('chat', 'say', 'emote', 'death', 'advancement') ORDER BY ts_ms DESC LIMIT 20000`
-    ).bind(uuid));
+       WHERE uuid = ? AND kind IN ('chat', 'say', 'emote', 'death', 'advancement') AND ts_ms >= ? AND ts_ms < ?
+       ORDER BY ts_ms DESC LIMIT 20000`
+    ).bind(uuid, lo, hi));
   }
   const [p, d, counts, first, events] = await db.batch(stmts);
   name = p.results[0]?.name ?? null;
