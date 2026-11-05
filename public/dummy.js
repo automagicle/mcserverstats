@@ -72,11 +72,7 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
 
   /* ---------- who plays ---------- */
 
-  const FALLBACK = [
-    ['BuilderBee', 'red'], ['xXCreeperXx', 'blue'], ['redstone_rae', 'red'], ['Pickaxe_Pat', 'blue'], ['Notch_Fan99', 'red'],
-    ['LlamaDrama', 'blue'], ['EnderEli', 'red'], ['Mossy', 'blue'], ['GlowSquid42', 'red'], ['NetherNate', 'blue'],
-  ].map(([ign, team]) => ({ ign, team }));
-  const list = roster.length ? roster : FALLBACK;
+  const list = roster; // the season's real players, from /api/roster
 
   const HABITS = {
     grinder: { play: 0.88, mins: 165, solo: 0.55, fade: 0.05 },

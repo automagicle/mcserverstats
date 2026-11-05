@@ -43,11 +43,12 @@ keeps recording. When season 2 begins:
 From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
 total, the leaderboard opens on All, and it stops refreshing.
 
-**Teams**: each season's teams and players' real names are a Worker secret, `ROSTER_S2`, so they stay out of this public
-repository. Put them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json` for the format) and run
-`npm run roster:put`. For local development, add the same JSON on one line to `.dev.vars` as `ROSTER_S2='{…}'`.
+**Teams**: each season's teams and players' real names live in the database (the `roster` table), so they stay out of
+this public repository. Keep them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json` for the
+format) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect at once and
+needs no deploy. `npm run roster:local` does the same for local development.
 
-**Sample data**: `/?dummydata` fills the main page with made-up activity for the season's players (from the roster), to
+**Sample data**: `/?dummydata` fills the main page with made-up activity for the season's real players (from the roster), to
 see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
 log is left empty.
 

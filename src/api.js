@@ -14,30 +14,13 @@ function range(url, defaultDays, maxDays) {
   return [Math.floor(from), Math.floor(to)];
 }
 
-// Team rosters are kept out of the (public) repository: a ROSTER_S<n> secret holding
-// { "red": { "IGN": "Real name", … }, "blue": { … } }. Names that aren't plausible are skipped.
-const IGN_RE = /^[A-Za-z0-9_]{1,32}$/;
-const TEAM_RE = /^[a-z][a-z0-9-]{0,19}$/;
-function roster(env, season) {
-  const raw = season.n ? env[`ROSTER_S${season.n}`] : null;
-  if (!raw) return [];
-  let teams;
-  try {
-    teams = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  } catch (err) {
-    console.error(`ROSTER_S${season.n} isn't valid JSON:`, err.message);
-    return [];
-  }
-  const players = [];
-  for (const [team, members] of Object.entries(teams || {})) {
-    if (!TEAM_RE.test(team) || !members || typeof members !== 'object') continue;
-    for (const [ign, name] of Object.entries(members)) {
-      if (IGN_RE.test(ign) && typeof name === 'string' && name.trim()) {
-        players.push({ ign, name: name.trim().slice(0, 40), team });
-      }
-    }
-  }
-  return players;
+// Each season's teams and players' real names, from the roster table (filled by npm run roster:remote,
+// so the names stay out of this public repository).
+async function roster(db, season) {
+  if (!season.n) return [];
+  const { results } = await db.prepare('SELECT ign, name, team FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE')
+    .bind(season.n).all();
+  return results;
 }
 
 export async function handleApi(request, env, url) {
@@ -95,7 +78,7 @@ export async function handleApi(request, env, url) {
     });
   }
 
-  if (path === '/api/roster') return json({ players: roster(env, season) });
+  if (path === '/api/roster') return json({ players: await roster(env.DB, season) });
 
   if (path === '/api/leaderboard') {
     const [from, to] = clampRange(season, ...range(url, 36500));

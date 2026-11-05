@@ -180,7 +180,7 @@ function dummyApi() {
 
 /* ---------- teams and real names ---------- */
 
-// The season's teams, from the server (a secret, so real names stay out of the repository).
+// The season's teams, from the server (its roster table, so real names stay out of the repository).
 const roster = new Map(); // lowercased IGN -> { ign, name, team }
 const TEAM_NAMES = { red: 'Red Faction', blue: 'Blue Faction' };
 let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN / Name switch shows
