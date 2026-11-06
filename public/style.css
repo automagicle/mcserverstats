@@ -312,16 +312,36 @@ main {
 .scale span.sw { width: 11px; height: 11px; border-radius: 2px; }
 .scale .lbl { margin: 0 4px; }
 
+/* hour × weekday, like a week calendar: days across, hours down */
 .weekgrid {
   display: grid;
-  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  grid-template-columns: 28px repeat(7, minmax(0, 1fr));
   gap: 2px;
   font-size: 11px;
   color: var(--muted);
 }
-.weekgrid .hlabel { grid-column: span 3; font-variant-numeric: tabular-nums; }
-.weekgrid .dlabel { line-height: 1; align-self: center; }
-.wcell { aspect-ratio: 1; border-radius: 2px; min-height: 8px; }
+.weekgrid .dlabel { text-align: center; padding-bottom: 2px; }
+.weekgrid .hlabel { line-height: 1; text-align: right; padding-right: 4px; font-variant-numeric: tabular-nums; margin-top: -1px; white-space: nowrap; }
+.wcell { height: 12px; border-radius: 2px; }
+
+/* one team's busiest times, in its color */
+.heat-red {
+  --lv1: color-mix(in oklab, var(--team-red) 30%, var(--lv0));
+  --lv2: color-mix(in oklab, var(--team-red) 55%, var(--lv0));
+  --lv3: color-mix(in oklab, var(--team-red) 78%, var(--lv0));
+  --lv4: var(--team-red);
+}
+.heat-blue {
+  --lv1: color-mix(in oklab, var(--team-blue) 30%, var(--lv0));
+  --lv2: color-mix(in oklab, var(--team-blue) 55%, var(--lv0));
+  --lv3: color-mix(in oklab, var(--team-blue) 78%, var(--lv0));
+  --lv4: var(--team-blue);
+}
+.heat-team button { padding: 3px 8px; font-size: 12px; }
+
+/* a wide card beside the narrow busiest-times calendar */
+.grid2.grid-side { grid-template-columns: minmax(0, 1fr) 330px; }
+.grid2.grid-side-left { grid-template-columns: 330px minmax(0, 1fr); }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -335,6 +355,8 @@ tr.link:hover td { background: var(--hover); }
 .pname img { width: 22px; height: 22px; border-radius: 4px; image-rendering: pixelated; flex: none; }
 .pname a { text-decoration: none; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { height: 4px; border-radius: 2px; background: var(--series-1); margin-top: 4px; min-width: 2px; }
+.bar.team-red { background: var(--team-red); }
+.bar.team-blue { background: var(--team-blue); }
 .muted { color: var(--muted); }
 .empty { color: var(--muted); font-size: 14px; padding: 12px 0; }
 .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; color: var(--good); box-shadow: inset 0 0 0 1px currentColor; }
@@ -378,7 +400,7 @@ tr.link:hover td { background: var(--hover); }
 
 @media (max-width: 800px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .grid2, .grid2.grid-side, .grid2.grid-side-left { grid-template-columns: minmax(0, 1fr); }
   .tile-value { font-size: 24px; }
   .hide-sm { display: none; }
 }

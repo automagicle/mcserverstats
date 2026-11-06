@@ -187,6 +187,7 @@ let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN /
 const rosterLoad = api('/api/roster').then((r) => r.players, () => []).then((players) => {
   for (const p of players) roster.set(p.ign.toLowerCase(), p);
   syncNameToggle();
+  syncHeatToggle();
   return players;
 });
 
@@ -644,30 +645,33 @@ function morphAxis(old, cur, opts) {
 
 const weekPrev = new Map();
 
-// grid[dow][hour] = number
-function renderWeekGrid(root, grid, describe, { animate = false } = {}) {
+// grid[dow][hour] = number, laid out like a week calendar: days across, hours running down.
+// cellColor(d, h), when given, colors each cell itself (instead of the five levels), with its own legend.
+// describe(value, label, d, h) -> tooltip rows
+function renderWeekGrid(root, grid, describe, { animate = false, cellColor = null, legend = null } = {}) {
   root.replaceChildren();
   const max = Math.max(0, ...grid.flat());
   const level = (v) => (v <= 0 || max <= 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4)));
   const g = el('div', { class: 'weekgrid', role: 'img', 'aria-label': 'Activity by weekday and hour' });
 
   g.append(el('span'));
-  for (let h = 0; h < 24; h += 3) g.append(el('span', { class: 'hlabel', text: hourName(h, true) }));
+  for (let d = 0; d < 7; d++) g.append(el('span', { class: 'dlabel', text: DOWS[d] }));
   const cells = [];
-  for (let d = 0; d < 7; d++) {
-    g.append(el('span', { class: 'dlabel', text: DOWS[d] }));
-    for (let h = 0; h < 24; h++) {
-      const c = el('span', { class: `wcell lv${level(grid[d][h])}` });
+  for (let h = 0; h < 24; h++) {
+    g.append(el('span', { class: 'hlabel', text: h % 3 ? '' : hourName(h, true) }));
+    for (let d = 0; d < 7; d++) {
+      const c = el('span', { class: cellColor ? 'wcell' : `wcell lv${level(grid[d][h])}` });
+      if (cellColor) c.style.background = cellColor(d, h);
       c.dataset.d = d;
       c.dataset.h = h;
       g.append(c);
       cells.push(c);
     }
   }
-  root.append(g, scaleLegend());
+  root.append(g, legend || scaleLegend());
   attachCellTips(root, '.wcell', (c) => {
     const d = Number(c.dataset.d), h = Number(c.dataset.h);
-    return describe(grid[d][h], `${DOWS[d]} ${hourName(h)}–${hourName((h + 1) % 24)}`);
+    return describe(grid[d][h], `${DOWS[d]} ${hourName(h)}–${hourName((h + 1) % 24)}`, d, h);
   });
 
   const prev = weekPrev.get(root);
@@ -1756,21 +1760,98 @@ async function renderServerDaily(animate = false, slide = 0) {
   }, { animate, slide });
 }
 
-function renderServerWeekGrid() {
-  const sum = Array.from({ length: 7 }, () => Array(24).fill(0));
-  const cnt = Array.from({ length: 7 }, () => Array(24).fill(0));
-  const since = archived() ? 0 : nowSec() - 90 * 86400;
+// Busiest times for everyone, one team, or both teams blended (red and blue mixed by their share).
+const HEAT_MODES = ['all', 'red', 'blue', 'mix'];
+let heatTeam = HEAT_MODES.includes(recall('heatTeam')) ? recall('heatTeam') : 'all';
+let heatToken = 0;
+
+function syncHeatToggle() {
+  const t = $('#heat-team');
+  t.hidden = !roster.size;
+  for (const b of t.children) b.setAttribute('aria-pressed', String(b.dataset.v === heatTeam));
+}
+
+// Seconds each team spent online in every weekday-hour of [from, to), from everyone's sessions.
+async function teamSeconds(from, to) {
+  const r = await memoApi(`/api/sessions?from=${from}&to=${to}`);
+  const secs = { red: emptyWeek(), blue: emptyWeek() };
+  for (const [, name, a0, b0] of r.rows) {
+    const team = secs[rosterOf(name)?.team];
+    if (!team) continue;
+    const b = Math.min(to, b0 + r.poll_seconds);
+    for (let t = Math.max(from, a0); t < b;) {
+      const end = Math.min(b, Math.floor(t / 3600) * 3600 + 3600);
+      const { dow, hour } = hourInfo(t);
+      team[dow][hour] += end - t;
+      t = end;
+    }
+  }
+  return secs;
+}
+const emptyWeek = () => Array.from({ length: 7 }, () => Array(24).fill(0));
+const fmtAvg = (v) => v.toFixed(v < 10 ? 1 : 0);
+
+async function renderServerWeekGrid() {
+  const token = ++heatToken;
+  const mode = roster.size ? heatTeam : 'all';
+  const root = $('#weekgrid');
+  syncHeatToggle();
+  // Hours are whole so the sessions request stays the same (and cached) until the next hour.
+  const now = nowSec();
+  const to = mode === 'all' ? Infinity : Math.floor(now / 3600) * 3600;
+  let since = archived() ? 0 : now - 90 * 86400;
+  if (mode !== 'all') since = Math.floor(Math.max(since, (archived() ? now : to) - 119 * 86400, state.dataStart || 0) / 3600) * 3600;
+  const sum = emptyWeek();
+  const cnt = emptyWeek();
   for (const [ts, samples, , s] of state.hourly) {
-    if (ts < since) continue;
+    if (ts < since || ts >= to) continue;
     const { dow, hour } = hourInfo(ts);
     sum[dow][hour] += s;
     cnt[dow][hour] += samples;
   }
-  const avg = sum.map((row, d) => row.map((s, h) => (cnt[d][h] ? s / cnt[d][h] : 0)));
-  renderWeekGrid($('#weekgrid'), avg, (v, label) => [
-    { value: `${v.toFixed(v < 10 ? 1 : 0)} players`, label: 'avg' },
-    { label: `${label} · ${archived() ? 'whole season' : 'last 90 days'}` },
-  ], { animate: live() });
+  const per = (g) => g.map((row, d) => row.map((v, h) => (cnt[d][h] ? v / cnt[d][h] : 0)));
+  const span = archived() ? 'whole season' : 'last 90 days';
+  root.className = mode === 'red' || mode === 'blue' ? `heat-${mode}` : '';
+
+  if (mode === 'all') {
+    renderWeekGrid(root, per(sum), (v, label) => [
+      { value: `${fmtAvg(v)} players`, label: 'avg' },
+      { label: `${label} · ${span}` },
+    ], { animate: live() });
+    return;
+  }
+
+  const secs = await teamSeconds(since, to);
+  if (token !== heatToken) return; // the mode changed or a newer render started meanwhile
+  // a player online for a whole hour shows up in every check of it, so seconds / POLL = their samples
+  const red = per(secs.red.map((row) => row.map((v) => v / POLL)));
+  const blue = per(secs.blue.map((row) => row.map((v) => v / POLL)));
+  const tip = (rows, label) => [...rows, { label: `${label} · ${span}` }];
+  const teamRow = (team, v) => ({ color: `var(--team-${team})`, value: `${fmtAvg(v)} ${team}`, label: 'avg' });
+
+  if (mode !== 'mix') {
+    const grid = mode === 'red' ? red : blue;
+    renderWeekGrid(root, grid, (v, label) => tip([teamRow(mode, v)], label), { animate: live() });
+    return;
+  }
+
+  // Blended: the hue is the red/blue share, the strength is how many are on in all (in five steps, like the others).
+  const both = red.map((row, d) => row.map((v, h) => v + blue[d][h]));
+  const max = Math.max(0, ...both.flat());
+  const STRENGTH = [0, 30, 55, 78, 100];
+  const mixColor = (pRed, strength) => `color-mix(in oklab, color-mix(in oklch, var(--team-red) ${pRed}%, var(--team-blue)) ${strength}%, var(--lv0))`;
+  const legend = el('div', { class: 'scale' }, el('span', { class: 'lbl', text: 'Red' }));
+  for (const p of [100, 75, 50, 25, 0]) legend.append(el('span', { class: 'sw', style: `background:${mixColor(p, 100)}` }));
+  legend.append(el('span', { class: 'lbl', text: 'Blue' }));
+  renderWeekGrid(root, both, (v, label, d, h) => tip([teamRow('red', red[d][h]), teamRow('blue', blue[d][h])], label), {
+    animate: live(),
+    legend,
+    cellColor: (d, h) => {
+      const v = both[d][h];
+      if (v <= 0 || max <= 0) return 'var(--lv0)';
+      return mixColor(Math.round((red[d][h] / v) * 100), STRENGTH[Math.min(4, Math.ceil((v / max) * 4))]);
+    },
+  });
 }
 
 // Centered moving average over `window` seconds, at the same timestamps as pts.
@@ -1943,7 +2024,7 @@ async function loadLeaderboard() {
       el('td', { class: 'rank', text: String(i + 1) }),
       el('td', {},
         el('div', { class: 'pname' }, headImg(p.name, 22), link),
-        el('div', { class: 'bar', style: `width:${Math.max(1, (p.secs / top) * 100)}%` })
+        el('div', { class: `bar${rosterOf(p.name) ? ` team-${rosterOf(p.name).team}` : ''}`, style: `width:${Math.max(1, (p.secs / top) * 100)}%` })
       ),
       el('td', { class: 'num', text: dur(p.secs) }),
       el('td', { class: 'num muted hide-sm', text: onlineNow.has(p.uuid) ? 'online' : ago(p.last_seen) })
@@ -2056,7 +2137,7 @@ async function showHome() {
   await loadHourly();
   renderTiles();
   renderOnlineChips();
-  renderServerWeekGrid();
+  renderServerWeekGrid().catch((e) => showError(e.message));
   await Promise.all([loadTimeline(), renderServerDaily(live()), loadLeaderboard()]);
 }
 
@@ -2916,6 +2997,14 @@ function remember(key, value) {
 function recall(key) {
   try { return localStorage.getItem(key); } catch { return null; }
 }
+
+$('#heat-team').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === heatTeam) return;
+  heatTeam = b.dataset.v;
+  remember('heatTeam', heatTeam);
+  renderServerWeekGrid().catch((err) => showError(err.message));
+});
 
 function setGraphOpen(open) {
   $('#cg').classList.toggle('collapsed', !open);

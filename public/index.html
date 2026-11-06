@@ -114,7 +114,7 @@
         <div id="heatmap" class="chart chart-bars"></div>
       </section>
 
-      <div class="grid2">
+      <div class="grid2 grid-side">
         <section class="card">
           <div class="card-head">
             <div class="card-title card-title-stacked">
@@ -128,8 +128,16 @@
 
         <section class="card">
           <div class="card-head">
-            <h2>Busiest times</h2>
-            <span class="card-sub">avg players online</span>
+            <div class="card-title card-title-stacked">
+              <h2>Busiest times</h2>
+              <span class="card-sub">avg players online</span>
+            </div>
+            <div class="seg heat-team" id="heat-team" role="group" aria-label="Which team" hidden>
+              <button type="button" data-v="all" title="Everyone">All</button>
+              <button type="button" data-v="red" title="Red team only">Red</button>
+              <button type="button" data-v="blue" title="Blue team only">Blue</button>
+              <button type="button" data-v="mix" title="Both teams, blended by their share">Mix</button>
+            </div>
           </div>
           <div id="weekgrid"></div>
         </section>
@@ -173,7 +181,7 @@
         <div id="p-heatmap" class="chart chart-bars chart-strip"></div>
       </section>
 
-      <div class="grid2">
+      <div class="grid2 grid-side grid-side-left">
         <section class="card">
           <div class="card-head"><h2>When they play</h2><span class="card-sub">total time by hour</span></div>
           <div id="p-weekgrid"></div>
