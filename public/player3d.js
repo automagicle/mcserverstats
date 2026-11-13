@@ -333,9 +333,13 @@ export async function mountPlayer(container, spec) {
 
   const skinMat = material(keep(pixelTexture(skin.canvas)));
   const H = skin.legacy ? 32 : 64;
+  // Neighbouring limbs overlap (the legs are 3.8 apart but 4 wide, armor wider still), so their
+  // front and back faces would share a plane and flicker where they cross. Each part is grown by a
+  // hair more than the one it overlaps, so one is always clearly in front.
+  const NUDGE = { body: 0, rightArm: 0.03, leftArm: 0.03, rightLeg: 0.015, leftLeg: 0, head: 0 };
   const add = (name, w, h, d, u, v, inflate = 0, mirror = false, mat = skinMat, texW = 64, texH = H) => {
     const [x, y, z] = (mat === skinMat ? offset : armorOffset)[name];
-    const m = mesh(cube(w, h, d, u, v, texW, texH, inflate, mirror), mat, x, y, z);
+    const m = mesh(cube(w, h, d, u, v, texW, texH, inflate + NUDGE[name], mirror), mat, x, y, z);
     parts[name].add(m);
     return m;
   };
@@ -396,8 +400,9 @@ export async function mountPlayer(container, spec) {
       // Held by the handle (the picture's lower left), the blade pointing forward and a little up.
       it.scale.setScalar(0.85 * s);
       it.position.set(4.6 * 0.85, 4.6 * 0.85, 0);
-      // turned out a little from straight ahead, so its face shows from the front
-      holder.rotation.set(0.35, right ? -Math.PI / 2 - 0.95 : Math.PI / 2 + 0.95, 0, 'XYZ');
+      // As in the game: the blade points forward, tipped a little up, the picture's face turned to the side.
+      // Swung a little in toward the body so that face shows from where the camera looks.
+      holder.rotation.set(0, right ? -Math.PI / 2 + 0.3 : Math.PI / 2 - 0.3, -0.55, 'XYZ');
     } else {
       it.scale.setScalar(0.55 * s);
       holder.position.y += 2.2;
