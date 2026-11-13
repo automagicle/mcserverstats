@@ -226,6 +226,70 @@ $('#name-toggle').addEventListener('click', (e) => {
   rerenderNames();
 });
 
+/* ---------- eggs and gear ---------- */
+
+// Egg SMP's eggs (from the egg datapack): name, color, and the game item each one is drawn as.
+const EGGS = {
+  life: ['Life Egg', '#FF4F8B', 'sniffer_egg'],
+  hunger: ['Harvest Egg', '#D6E35A', 'turtle_egg'],
+  sky: ['Skyblocker Egg', '#7DD3FC', 'vex_spawn_egg'],
+  gravity: ['Gravity Egg', '#9BC9FF', 'breeze_spawn_egg'],
+  gambler: ['Gambler Egg', '#FFE56A', 'piglin_spawn_egg'],
+  fire: ['Fire Egg', '#FF7A2E', 'blaze_spawn_egg'],
+  blood: ['Blood Egg', '#C41818', 'magma_cube_spawn_egg'],
+  echo: ['Echo Egg', '#2DD4BF', 'warden_spawn_egg'],
+  aqua: ['Aqua Egg', '#3DDCFF', 'tropical_fish_spawn_egg'],
+  meteor: ['Meteor Egg', '#FF8C2A', 'strider_spawn_egg'],
+  wizard: ['Wizard Egg', '#B14BFF', 'enderman_spawn_egg'],
+  train: ['Train Egg', '#E03A3A', 'spider_spawn_egg'],
+  redstone: ['Redstone Egg', '#FF3B3B', 'mooshroom_spawn_egg'],
+  binding: ['Binding Egg', '#C5CCD6', 'stray_spawn_egg'],
+  murica: ["'Murica Egg", '#C8102E', 'parrot_spawn_egg'],
+  dung: ['Dung Egg', '#A0693A', 'tadpole_spawn_egg'],
+  fat: ['Fat Egg', '#FF9EB5', 'pig_spawn_egg'],
+  woods: ['Woods Egg', '#3C8F3A', 'creaking_spawn_egg'],
+  smite: ['Smite Egg', '#2BB7A0', 'guardian_spawn_egg'],
+  stash: ['Stash Egg', '#3DDC97', 'villager_spawn_egg'],
+  sulfur: ['Sulfur Egg', '#E8D44D', 'sulfur_cube_spawn_egg'],
+  subzero: ['Sub-Zero Egg', '#8FD8FF', 'stray_spawn_egg'],
+  combo: ['Combo Egg', '#7DD3FF', 'allay_spawn_egg'],
+  electric: ['Electric Egg', '#4FD8FF', 'glow_squid_spawn_egg'],
+  deadshot: ['Deadshot Egg', '#E04848', 'pillager_spawn_egg'],
+};
+// An egg the datapack doesn't have (yet): its name from the id, drawn as a plain egg.
+const eggInfo = (id) => {
+  if (!id) return null;
+  const [name, color, model] = EGGS[id] || [`${id[0].toUpperCase()}${id.slice(1)} Egg`, null, 'egg'];
+  return { id, name, color, model };
+};
+
+// The best weapon they carry: mace, then trident, sword, axe, pickaxe, shovel; better material first.
+const WEAPON_KINDS = ['mace', 'trident', 'sword', 'axe', 'pickaxe', 'shovel'];
+const TOOL_MATERIALS = ['netherite', 'diamond', 'iron', 'copper', 'stone', 'golden', 'wooden'];
+function weaponRank(it) {
+  if (!it || it.egg) return null;
+  const kind = WEAPON_KINDS.indexOf(it.id === 'mace' || it.id === 'trident' ? it.id : it.id.split('_').pop());
+  if (kind < 0) return null;
+  const mat = TOOL_MATERIALS.indexOf(it.id.split('_')[0]);
+  return kind * 100 + (mat < 0 ? 50 : mat * 2) + (it.glint ? 0 : 1);
+}
+function bestWeapon(gear) {
+  let best = null, bestRank = Infinity;
+  for (const it of [gear?.mainhand, gear?.offhand, ...(gear?.items || [])]) {
+    const r = weaponRank(it);
+    if (r != null && r < bestRank) [best, bestRank] = [it, r];
+  }
+  return best;
+}
+// Their egg as they carry it (the off hand first: that's where it works), else the season's assignment.
+function heldEgg(gear, assigned) {
+  const carried = [gear?.offhand, gear?.mainhand, ...(gear?.items || [])].find((it) => it?.egg && it.model);
+  if (carried) return { id: carried.model };
+  const info = eggInfo(assigned);
+  return info ? { id: info.model } : null;
+}
+const itemName = (it) => it.name || it.id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
 /* ---------- tooltip ---------- */
 
 const tip = $('#tooltip');
@@ -2119,6 +2183,7 @@ async function loadSnapshots(from) {
 // Shows one of the views ('home', 'player', 'chat') and marks its tab.
 function showView(name) {
   for (const v of ['home', 'player', 'chat']) $(`#view-${v}`).hidden = v !== name;
+  if (name !== 'player') clearPlayerModel();
   document.body.classList.toggle('chat-mode', name === 'chat');
   $('#search-btn').hidden = name !== 'chat';
   if (name !== 'chat') closeSearch();
@@ -2248,8 +2313,9 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   const animate = live() && state.playerShown === player.uuid;
   if (state.playerShown !== player.uuid) pCtl.set(playerDefaultWindow());
   state.playerShown = player.uuid;
-  state.playerData = { name: player.name, sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo };
+  state.playerData = { name: player.name, sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo, gear: r.gear };
   renderPlayerName();
+  renderPlayerModel(player.name, r.gear);
   setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the ${archived() ? 'final' : 'last'} 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
@@ -2307,10 +2373,66 @@ function renderPlayerName() {
   const team = $('#p-team');
   team.hidden = !r;
   if (r) {
+    const egg = eggInfo(r.egg);
     team.replaceChildren(el('span', { class: `team-dot team-${r.team}` }),
       el('span', { class: `team-${r.team}`, text: TEAM_NAMES[r.team] || r.team }),
-      el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }));
+      el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }),
+      ...(egg ? [el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: `· ${egg.name}` })] : []));
   }
+}
+
+// The player in 3D, wearing their armor, with their best weapon and their egg (public/player3d.js).
+let playerModel = null; // { key, abort, handle }
+function clearPlayerModel() {
+  if (!playerModel) return;
+  playerModel.abort.abort();
+  playerModel.handle?.dispose();
+  playerModel = null;
+  $('#p-model').replaceChildren();
+}
+function renderPlayerModel(name, gear) {
+  const card = $('#p-model-card');
+  const spec = {
+    name,
+    uuid: gear?.uuid ? gear.uuid.replace(/-/g, '') : null,
+    armor: gear?.armor || {},
+    mainhand: bestWeapon(gear),
+    offhand: heldEgg(gear, rosterOf(name)?.egg),
+  };
+  const key = JSON.stringify(spec);
+  renderModelNote(spec, gear);
+  if (playerModel?.key === key) return; // the same look: leave it turning
+  clearPlayerModel();
+  card.hidden = false;
+  const abort = new AbortController();
+  const mine = { key, abort, handle: null };
+  playerModel = mine;
+  const box = $('#p-model');
+  box.classList.add('loading');
+  import('/player3d.js')
+    .then((m) => m.mountPlayer(box, { ...spec, signal: abort.signal }))
+    .then((handle) => {
+      if (playerModel !== mine) return handle.dispose();
+      mine.handle = handle;
+    })
+    .catch((err) => {
+      console.error('3D model:', err);
+      if (playerModel === mine) card.hidden = true; // no WebGL, or the library couldn't load
+    })
+    .finally(() => box.classList.remove('loading'));
+}
+// Under the model: what they're holding, and when that was reported.
+function renderModelNote(spec, gear) {
+  const note = $('#p-model-note');
+  const parts = [];
+  if (spec.mainhand) parts.push(el('span', { text: itemName(spec.mainhand) }));
+  const egg = eggInfo(rosterOf(state.playerData?.name)?.egg);
+  if (egg) parts.push(el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: egg.name }));
+  const when = gear?.ts ? `Gear updated ${ago(gear.ts)}` : 'No gear reported yet';
+  note.replaceChildren(
+    ...(parts.length ? [el('div', { class: 'p-model-held' }, ...parts.flatMap((p, i) => (i ? [' · ', p] : [p])))] : []),
+    el('div', { class: 'muted', text: when }),
+  );
 }
 
 // Chat messages sent, all time or today (the choice is remembered). A finished season shows its total.

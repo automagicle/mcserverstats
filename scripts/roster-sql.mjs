@@ -1,4 +1,5 @@
-// Turns roster-s<n>.json ({ "red": { "IGN": "Real name", … }, "blue": { … } }) into SQL that replaces
+// Turns roster-s<n>.json ({ "red": { "IGN": { "name": "Real name", "egg": "gravity" }, … }, "blue": { … } };
+// a plain "Real name" works too, for a player without an egg yet) into SQL that replaces
 // that season's roster: node scripts/roster-sql.mjs 2 > .wrangler/roster.sql
 import { readFileSync } from 'node:fs';
 
@@ -8,17 +9,20 @@ const teams = JSON.parse(readFileSync(new URL(`../roster-s${season}.json`, impor
 
 const IGN_RE = /^[A-Za-z0-9_]{1,32}$/;
 const TEAM_RE = /^[a-z][a-z0-9-]{0,19}$/;
+const EGG_RE = /^[a-z][a-z0-9_]{0,23}$/;
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
 const rows = [];
 for (const [team, members] of Object.entries(teams)) {
   if (!TEAM_RE.test(team)) throw new Error(`bad team name: ${team}`);
-  for (const [ign, name] of Object.entries(members)) {
+  for (const [ign, v] of Object.entries(members)) {
     if (!IGN_RE.test(ign)) throw new Error(`bad IGN: ${ign}`);
+    const { name, egg = null } = typeof v === 'string' ? { name: v } : v || {};
     if (typeof name !== 'string' || !name.trim()) throw new Error(`no name for ${ign}`);
-    rows.push(`(${season}, ${q(ign)}, ${q(name.trim().slice(0, 40))}, ${q(team)})`);
+    if (egg != null && !EGG_RE.test(egg)) throw new Error(`bad egg for ${ign}: ${egg}`);
+    rows.push(`(${season}, ${q(ign)}, ${q(name.trim().slice(0, 40))}, ${q(team)}, ${egg == null ? 'NULL' : q(egg)})`);
   }
 }
 console.log(`DELETE FROM roster WHERE season = ${season};`);
-if (rows.length) console.log(`INSERT INTO roster (season, ign, name, team) VALUES\n${rows.join(',\n')};`);
+if (rows.length) console.log(`INSERT INTO roster (season, ign, name, team, egg) VALUES\n${rows.join(',\n')};`);
 console.error(`season ${season}: ${rows.length} players`);

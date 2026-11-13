@@ -14,7 +14,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HexFormat;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -45,6 +47,8 @@ final class Uploader {
 	private final String runId = HexFormat.of().formatHex(new SecureRandom().generateSeed(6));
 	private final AtomicLong seq = new AtomicLong();
 	private final ArrayDeque<JsonObject> queue = new ArrayDeque<>();
+	// Each player's latest gear report waiting to be sent (a newer one replaces an unsent older one).
+	private final Map<UUID, JsonObject> gear = new LinkedHashMap<>();
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
 	private volatile Config config = Config.EMPTY;
@@ -90,6 +94,14 @@ final class Uploader {
 		}
 	}
 
+	// Called from the server thread.
+	void addGear(UUID player, JsonObject report) {
+		synchronized (gear) {
+			gear.remove(player);
+			gear.put(player, report);
+		}
+	}
+
 	void start() {
 		if (exec != null) return;
 		loadPending();
@@ -126,6 +138,7 @@ final class Uploader {
 			if (now - lastFlush < FLUSH_MS && size() < BATCH) return;
 			lastFlush = now;
 			while (sendBatch(Duration.ofSeconds(15))) { }
+			if (now >= nextAttempt) sendGear();
 		} catch (Throwable t) {
 			ChatLogMod.LOG.error("Chat upload failed unexpectedly", t);
 		}
@@ -158,34 +171,11 @@ final class Uploader {
 		JsonObject body = new JsonObject();
 		body.add("events", events);
 
-		Config c = config;
-		int status;
-		String reply;
-		boolean fromAccess; // Access answers with its own HTML page; the Worker answers with JSON
-		try {
-			HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(c.url()))
-					.timeout(timeout)
-					.header("Content-Type", "application/json")
-					.header("Authorization", "Bearer " + c.token())
-					.header("User-Agent", userAgent)
-					.POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
-			if (!c.accessClientId().isEmpty()) {
-				req.header("CF-Access-Client-Id", c.accessClientId());
-				req.header("CF-Access-Client-Secret", c.accessClientSecret());
-			}
-			HttpResponse<String> res = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
-			status = res.statusCode();
-			reply = res.body();
-			fromAccess = !res.headers().firstValue("Content-Type").orElse("").contains("application/json");
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			return false;
-		} catch (Exception e) {
-			fail("couldn't reach the dashboard (" + e.getClass().getSimpleName()
-					+ (e.getMessage() != null ? ": " + e.getMessage() : "") + ")");
-			return false;
-		}
-
+		Reply r = post(config.url(), body, timeout);
+		if (r == null) return false;
+		int status = r.status();
+		String reply = r.body();
+		boolean fromAccess = r.fromAccess();
 		if (status >= 200 && status < 300) {
 			if (lastWarning != null) ChatLogMod.LOG.info("Chat log is reaching the dashboard again");
 			else if (!connected) ChatLogMod.LOG.info("Chat log connected; messages are reaching the dashboard");
@@ -201,7 +191,72 @@ final class Uploader {
 			remove(batch);
 			return size() > 0;
 		}
-		fail(switch (status) {
+		fail(why(status, fromAccess));
+		return false;
+	}
+
+	private record Reply(int status, String body, boolean fromAccess) {}
+
+	// One POST with the token and Access headers. Null if the dashboard couldn't be reached.
+	private Reply post(String url, JsonObject body, Duration timeout) {
+		Config c = config;
+		try {
+			HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(url))
+					.timeout(timeout)
+					.header("Content-Type", "application/json")
+					.header("Authorization", "Bearer " + c.token())
+					.header("User-Agent", userAgent)
+					.POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8));
+			if (!c.accessClientId().isEmpty()) {
+				req.header("CF-Access-Client-Id", c.accessClientId());
+				req.header("CF-Access-Client-Secret", c.accessClientSecret());
+			}
+			HttpResponse<String> res = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
+			// Access answers with its own HTML page; the Worker answers with JSON
+			return new Reply(res.statusCode(), res.body(),
+					!res.headers().firstValue("Content-Type").orElse("").contains("application/json"));
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return null;
+		} catch (Exception e) {
+			fail("couldn't reach the dashboard (" + e.getClass().getSimpleName()
+					+ (e.getMessage() != null ? ": " + e.getMessage() : "") + ")");
+			return null;
+		}
+	}
+
+	// Sends every waiting gear report in one request, to /api/ingest/gear next to the chat url.
+	// An older dashboard without that endpoint (404) is skipped quietly; the reports are dropped.
+	private void sendGear() {
+		JsonArray players = new JsonArray();
+		List<UUID> ids = new ArrayList<>();
+		synchronized (gear) {
+			gear.forEach((id, report) -> {
+				ids.add(id);
+				players.add(report);
+			});
+		}
+		if (players.isEmpty()) return;
+		JsonObject body = new JsonObject();
+		body.add("players", players);
+		Reply r = post(config.url().replaceFirst("/chat/?$", "/gear"), body, Duration.ofSeconds(15));
+		if (r == null) return;
+		boolean done = r.status() >= 200 && r.status() < 300;
+		if (done || r.status() == 400 || r.status() == 404 || r.status() == 413) {
+			if (!done && r.status() != 404) ChatLogMod.LOG.error("Dashboard rejected gear (HTTP {}): {}", r.status(), trim(r.body()));
+			synchronized (gear) {
+				for (UUID id : ids) {
+					JsonObject sent = players.get(ids.indexOf(id)).getAsJsonObject();
+					if (gear.get(id) == sent) gear.remove(id); // unless a newer report came in meanwhile
+				}
+			}
+			return;
+		}
+		fail(why(r.status(), r.fromAccess()));
+	}
+
+	private static String why(int status, boolean fromAccess) {
+		return switch (status) {
 			case 401 -> fromAccess
 					? "Cloudflare Access doesn't recognise access_client_id / access_client_secret (deleted token or wrong secret)"
 					: "the token doesn't match CHAT_INGEST_TOKEN on the Worker";
@@ -211,8 +266,7 @@ final class Uploader {
 					+ "); check access_client_id / access_client_secret";
 			case 404 -> "the url isn't right (HTTP 404); it should end in /api/ingest/chat";
 			default -> "the dashboard answered HTTP " + status;
-		});
-		return false;
+		};
 	}
 
 	private void remove(List<JsonObject> sent) {

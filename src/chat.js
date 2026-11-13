@@ -10,7 +10,7 @@ const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const MAX_AGE_MS = 60 * 86400_000; // older messages (e.g. saved during a very long outage) are skipped
 
 // Constant-time comparison; hashing first makes both sides the same length.
-async function sameSecret(a, b) {
+export async function sameSecret(a, b) {
   const enc = new TextEncoder();
   const [ha, hb] = await Promise.all([a, b].map((s) => crypto.subtle.digest('SHA-256', enc.encode(s))));
   return crypto.subtle.timingSafeEqual(ha, hb);

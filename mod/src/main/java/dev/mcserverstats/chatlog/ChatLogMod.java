@@ -10,6 +10,7 @@ import com.google.gson.JsonObject;
 
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.network.chat.ChatType;
@@ -24,7 +25,8 @@ import org.slf4j.LoggerFactory;
 
 // Records public chat (plus joins, leaves, deaths and advancements) and hands it to the
 // uploader, which sends it to the dashboard in the background. Private messages
-// (/msg, /tell, /teammsg) are never recorded.
+// (/msg, /tell, /teammsg) are never recorded. Also reports what each player is wearing and
+// carrying (GearReporter), for the 3D model on their dashboard page.
 public final class ChatLogMod implements DedicatedServerModInitializer {
 	static final Logger LOG = LoggerFactory.getLogger("mcstats-chat");
 
@@ -46,6 +48,9 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> uploader.add("server", null, null, null, null, "Server stopped"));
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> uploader.stop());
+
+		GearReporter gear = new GearReporter(uploader);
+		ServerTickEvents.END_SERVER_TICK.register(gear::tick);
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) ->
 				uploader.add("chat", sender.getUUID(), sender.getScoreboardName(), styled(params.name(), 8), null,

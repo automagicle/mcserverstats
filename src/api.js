@@ -2,6 +2,8 @@ import { isAuthorized } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
 import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
 import { clampRange, seasonFor } from './seasons.js';
+import { gearFor, ingestGear } from './gear.js';
+import { serveSkin, serveTexture } from './mcassets.js';
 import { json, UUID_RE } from './util.js';
 
 const DAY = 86400;
@@ -18,7 +20,7 @@ function range(url, defaultDays, maxDays) {
 // so the names stay out of this public repository).
 async function roster(db, season) {
   if (!season.n) return [];
-  const { results } = await db.prepare('SELECT ign, name, team FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE')
+  const { results } = await db.prepare('SELECT ign, name, team, egg FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE')
     .bind(season.n).all();
   return results;
 }
@@ -29,9 +31,18 @@ export async function handleApi(request, env, url) {
     if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
     return ingestChat(request, env);
   }
+  if (url.pathname === '/api/ingest/gear') {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+    return ingestGear(request, env);
+  }
 
   if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
   if (!(await isAuthorized(request, env, url))) return json({ error: 'unauthorized' }, 401);
+
+  // Game textures and skins, for the 3D player model.
+  if (url.pathname.startsWith('/api/mc/')) return serveTexture(env, url.pathname.slice(8));
+  const skin = url.pathname.match(/^\/api\/skin\/([^/]+)$/);
+  if (skin) return serveSkin(env, decodeURIComponent(skin[1]), (url.searchParams.get('uuid') || '').replace(/-/g, '').toLowerCase());
 
   // Everything below is limited to one season's time span when ?season=N is given.
   const season = seasonFor(env, url);
@@ -141,7 +152,9 @@ export async function handleApi(request, env, url) {
     ).bind(uuid, lo, hi, POLL_SECONDS).raw();
     // first seen this season (null if they haven't played in it)
     player.first_seen = season.n ? (sessions[0]?.[0] ?? null) : player.first_seen;
-    return json({ player, poll_seconds: POLL_SECONDS, sessions });
+    // what they last wore and carried (not limited to the season: it's their latest)
+    const gear = await gearFor(db, player.name);
+    return json({ player, poll_seconds: POLL_SECONDS, sessions, gear });
   }
 
   return json({ error: 'not found' }, 404);

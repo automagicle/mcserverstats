@@ -147,26 +147,34 @@
     <!-- Player -->
     <section id="view-player" hidden>
       <a class="back" href="#/">← All players</a>
-      <div class="player-head">
-        <img id="p-head" class="p-avatar" alt="" width="64" height="64">
-        <div>
-          <h1 id="p-name"></h1>
-          <div id="p-team" class="p-team" hidden></div>
-          <div id="p-status" class="card-sub"></div>
-        </div>
-      </div>
-
-      <div class="tiles">
-        <div class="tile"><div class="tile-label">Total played</div><div class="tile-value" id="p-total">–</div><div class="tile-sub" id="p-total-sub"></div></div>
-        <div class="tile"><div class="tile-label">Sessions</div><div class="tile-value" id="p-sessions">–</div><div class="tile-sub" id="p-avg"></div></div>
-        <div class="tile"><div class="tile-label">Longest session</div><div class="tile-value" id="p-longest">–</div><div class="tile-sub" id="p-longest-sub"></div></div>
-        <div class="tile">
-          <div class="tile-label">Chat messages
-            <select id="p-chat-mode" class="tile-select" aria-label="Count">
-              <option value="total">total</option><option value="today">today</option>
-            </select>
+      <div class="player-top">
+        <figure class="p-model-card" id="p-model-card" hidden>
+          <div id="p-model" class="p-model" role="img" aria-label="3D model of the player"></div>
+          <figcaption id="p-model-note" class="p-model-note"></figcaption>
+        </figure>
+        <div class="player-side">
+          <div class="player-head">
+            <img id="p-head" class="p-avatar" alt="" width="64" height="64">
+            <div>
+              <h1 id="p-name"></h1>
+              <div id="p-team" class="p-team" hidden></div>
+              <div id="p-status" class="card-sub"></div>
+            </div>
           </div>
-          <div class="tile-value" id="p-chat">–</div><div class="tile-sub" id="p-chat-sub"></div>
+
+          <div class="tiles">
+            <div class="tile"><div class="tile-label">Total played</div><div class="tile-value" id="p-total">–</div><div class="tile-sub" id="p-total-sub"></div></div>
+            <div class="tile"><div class="tile-label">Sessions</div><div class="tile-value" id="p-sessions">–</div><div class="tile-sub" id="p-avg"></div></div>
+            <div class="tile"><div class="tile-label">Longest session</div><div class="tile-value" id="p-longest">–</div><div class="tile-sub" id="p-longest-sub"></div></div>
+            <div class="tile">
+              <div class="tile-label">Chat messages
+                <select id="p-chat-mode" class="tile-select" aria-label="Count">
+                  <option value="total">total</option><option value="today">today</option>
+                </select>
+              </div>
+              <div class="tile-value" id="p-chat">–</div><div class="tile-sub" id="p-chat-sub"></div>
+            </div>
+          </div>
         </div>
       </div>
 

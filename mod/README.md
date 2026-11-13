@@ -1,6 +1,7 @@
 # mcstats-chat (server mod)
 
-A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page.
+A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page, and what each
+player wears and carries to the **3D model** on their player page.
 It's one jar with no other dependencies (the bits of Fabric API it uses are bundled inside), for
 Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anything.
 
@@ -8,6 +9,9 @@ Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anyth
 Names are sent as chat shows them (team prefix and colors), so the dashboard can match. Deaths and
 advancements are sent styled as a whole, so a killer's name, a named weapon or an advancement title keeps its color
 (needs 1.1.0 or newer; older versions still work, with plainer death messages).
+**Gear** (1.2.0 or newer): each online player's armor (with trims and dye), both hands, and the weapons, tools and Egg SMP
+eggs in their inventory (nothing else from it). Checked every 10 seconds and sent only when it changed, at most once a
+minute per player, to `/api/ingest/gear` next to the chat url (same token, no extra setup).
 **Never recorded:** private messages (`/msg`, `/tell`, `/w`, `/teammsg`) and commands. Let players know chat is logged.
 
 ## How it gets to the dashboard
@@ -56,7 +60,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.1.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.2.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -105,7 +109,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.1.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.2.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

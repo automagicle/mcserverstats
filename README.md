@@ -5,7 +5,8 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 
 - **Collector**: a Cron-triggered Worker asks [mcstatus.io](https://mcstatus.io) about the server every minute and records the player count plus each named player's session in D1 (SQLite).
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
-- **Chat log** (optional): a small Fabric server mod in `mod/` posts public chat to the Worker, which stores it in D1.
+- **Chat log and gear** (optional): a small Fabric server mod in `mod/` posts public chat, and what each player wears and
+  carries, to the Worker, which stores them in D1.
   See [mod/README.md](mod/README.md) for setup.
 - **Seasons**: the main page shows the current season (season 2); `/s1/` is the season 1 archive. Seasons split the
   recorded data by time, so nothing is copied or deleted (see [Seasons](#seasons)).
@@ -43,9 +44,9 @@ keeps recording. When season 2 begins:
 From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
 total, the leaderboard opens on All, and it stops refreshing.
 
-**Teams**: each season's teams and players' real names live in the database (the `roster` table), so they stay out of
-this public repository. Keep them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json` for the
-format) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect at once and
+**Teams**: each season's teams, players' real names and their eggs live in the database (the `roster` table), so they
+stay out of this public repository. Keep them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json`
+for the format: `"IGN": { "name": "Real name", "egg": "gravity" }`, egg ids as in the Egg SMP datapack) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect at once and
 needs no deploy. `npm run roster:local` does the same for local development.
 
 **Sample data**: `/?dummydata` fills the main page with made-up activity for the season's real players (from the roster), to
@@ -79,6 +80,14 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   usually play, and recent sessions. The Chat strip has an orange line per message, a red diamond per death and a yellow star
   per advancement; clicking one previews it, with a button to open the chat log there. It opens on the last 24 hours. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
+
+- **3D player model**: player pages show the player in 3D with their skin, the armor they last wore (trims, leather dye
+  and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, axe, pickaxe,
+  shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
+  little toward the mouse. Gear comes from the server mod (1.2.0 or newer); until a player has been on with it, the model
+  shows just their skin and roster egg. Armor and item textures are read on demand from Mojang's official game client
+  for `MC_VERSION` (in `wrangler.jsonc`; set it to the server's version) by `/api/mc/…`, so none of Mojang's files are in
+  this repository; skins come from Mojang through `/api/skin/<name>`. Drawn with three.js, loaded only on player pages.
 - **Player cards**: clicking a player's name or head (in the chat log, the online chips, who was online) opens a small card:
   their name as chat shows it, online or last seen, messages and time played today, time played this week, a little
   graph of when they're usually on (the last two weeks, by hour), and a button to their page. The leaderboard still

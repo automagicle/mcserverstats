@@ -335,6 +335,51 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
     },
   };
 
+  /* ---------- what they wear and carry (for the 3D model) ---------- */
+
+  const TRIMS = ['coast', 'dune', 'eye', 'rib', 'sentry', 'snout', 'spire', 'tide', 'vex', 'ward', 'wild', 'silence',
+    'wayfinder', 'raiser', 'shaper', 'host', 'flow', 'bolt'];
+  const TRIM_MATERIALS = ['amethyst', 'copper', 'diamond', 'emerald', 'gold', 'iron', 'lapis', 'netherite', 'quartz', 'redstone', 'resin'];
+  const DARKER = new Set(['copper', 'diamond', 'gold', 'iron', 'netherite']);
+  const ARMOR_BY_HABIT = {
+    grinder: ['netherite', 'netherite', 'netherite', 'diamond'],
+    regular: ['diamond', 'diamond', 'netherite', 'iron'],
+    casual: ['iron', 'diamond', 'iron', 'chainmail', 'gold'],
+    rare: ['iron', 'leather', 'chainmail', 'gold', 'copper'],
+  };
+  const PIECES = { head: 'helmet', chest: 'chestplate', legs: 'leggings', feet: 'boots' };
+  const itemPrefix = (asset) => (asset === 'gold' ? 'golden' : asset);
+
+  function gearFor(p) {
+    const r = rng(hash(`gear:${p.name.toLowerCase()}`));
+    const pick = (a) => a[Math.floor(r() * a.length)];
+    const armor = {};
+    const style = { pattern: pick(TRIMS), material: pick(TRIM_MATERIALS) }; // most keep one look
+    for (const [slot, piece] of Object.entries(PIECES)) {
+      if (slot === 'head' && r() < 0.12) continue;
+      let asset = pick(ARMOR_BY_HABIT[p.habit]);
+      if (slot === 'head' && r() < 0.05) asset = 'turtle_scute';
+      const it = {
+        id: asset === 'turtle_scute' ? 'turtle_helmet' : `${itemPrefix(asset)}_${piece}`,
+        asset,
+      };
+      if ((asset === 'netherite' || asset === 'diamond' ? 0.85 : 0.35) > r()) it.glint = true;
+      if (asset === 'leather') it.dye = Math.floor(r() * 0xffffff);
+      if (r() < (p.habit === 'rare' ? 0.25 : 0.7)) {
+        const t = r() < 0.75 ? style : { pattern: pick(TRIMS), material: pick(TRIM_MATERIALS) };
+        it.trim = { pattern: t.pattern, palette: t.material === asset && DARKER.has(asset) ? `${asset}_darker` : t.material };
+      }
+      armor[slot] = it;
+    }
+    const best = p.habit === 'grinder' || p.habit === 'regular' ? 'netherite' : pick(['diamond', 'iron', 'stone']);
+    const items = [{ id: `${best}_sword`, glint: r() < 0.7 }, { id: `${pick(['netherite', 'diamond', 'iron'])}_pickaxe`, glint: true }];
+    if (r() < 0.6) items.push({ id: `${best}_axe` });
+    if (r() < (p.habit === 'grinder' ? 0.55 : 0.15)) items.push({ id: 'mace', glint: r() < 0.6 });
+    else if (r() < 0.15) items.push({ id: 'trident', glint: true });
+    for (const it of items) if (!it.glint) delete it.glint;
+    return { ts: nowMin() - Math.floor(r() * 5 * 3600), armor, mainhand: items[1], items };
+  }
+
   return async function dummyApi(path) {
     const url = new URL(path, location.origin);
     const now = nowMin();
@@ -343,7 +388,7 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
       const p = byUuid.get(decodeURIComponent(m[1]).toLowerCase());
       if (!p) notFound(path);
       const sessions = p.sessions.map((x) => asOfNow(x, now)).filter(Boolean);
-      return { player: { uuid: p.uuid, name: p.name, first_seen: sessions[0]?.[0] ?? null }, poll_seconds: POLL, sessions };
+      return { player: { uuid: p.uuid, name: p.name, first_seen: sessions[0]?.[0] ?? null }, poll_seconds: POLL, sessions, gear: gearFor(p) };
     }
     const handler = routes[url.pathname];
     if (!handler) notFound(path);
