@@ -6,12 +6,12 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 - **Collector**: a Cron-triggered Worker asks [mcstatus.io](https://mcstatus.io) about the server every minute and records the player count plus each named player's session in D1 (SQLite).
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
 - **Chat log and gear** (optional): a small Fabric server mod in `mod/` posts public chat, and what each player wears and
-  carries, to the Worker, which stores them in D1.
+  carries, to the Worker, which stores them in D1. It also shows chat typed on the dashboard in game (web chat).
   See [mod/README.md](mod/README.md) for setup.
 - **Seasons**: the main page shows the current season (season 2); `/s1/` is the season 1 archive. Seasons split the
   recorded data by time, so nothing is copied or deleted (see [Seasons](#seasons)).
 - **Privacy**: the server address is a Worker secret. Every `/api/*` request must carry a valid Cloudflare Access login token. Until Access is configured, the API refuses everyone.
-  The one exception is `POST /api/ingest/chat`, which takes the chat mod's `CHAT_INGEST_TOKEN` instead (and still needs the
+  The exceptions are the mod's `/api/ingest/*` endpoints, which take its `CHAT_INGEST_TOKEN` instead (and still need the
   Access service token to get past Access). Service tokens can't read the dashboard.
 
 ## Deploy
@@ -44,19 +44,34 @@ keeps recording. When season 2 begins:
 From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
 total, the leaderboard opens on All, and it stops refreshing.
 
-**Teams**: each season's teams, players' real names and their eggs live in the database (the `roster` table), so they
-stay out of this public repository. Keep them in `roster-s2.json` (git ignores `roster-*.json`; see `roster.example.json`
-for the format: `"IGN": { "name": "Real name", "egg": "gravity" }`, egg ids as in the Egg SMP datapack) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect at once and
-needs no deploy. `npm run roster:local` does the same for local development.
+**Teams**: each season's teams, players' real names, their eggs and their login emails live in the database (the
+`roster` and `roster_email` tables), so they stay out of this public repository. Keep them in `roster-s2.json` (git
+ignores `roster-*.json`; see `roster.example.json` for the format:
+`"IGN": { "name": "Real name", "egg": "gravity", "email": "them@example.org" }`, egg ids as in the Egg SMP datapack;
+`email` can be a list) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect
+at once and needs no deploy. `npm run roster:local` does the same for local development.
+A player's emails are who may send chat from the dashboard as them; they're never shown on the page.
 
 **Sample data**: `/?dummydata` fills the main page with made-up activity for the season's real players (from the roster), to
 see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
 log is left empty.
 
+## Sign-in (Cloudflare Access)
+
+The Access application's **Allow** policy decides who can open the dashboard. Its **Include** rules are OR'd, so one
+policy can let in a whole email domain *and* individual addresses: add an **Emails ending in** rule (e.g.
+`@school.org`) and an **Emails** rule (or an Access **List** of emails) for people outside it. Turn on the
+**One-time PIN** login method (Zero Trust → Settings → Authentication) so any email address can sign in with a code;
+a Google login works too for Google accounts. Keep the separate **Service Auth** policy for the mod's service token.
+
+Being let in only allows reading. **Sending chat** also needs the email to be on the season's roster (see Teams above);
+anyone else sees the message box disabled with the reason.
+
 ## Local development
 
 ```bash
 printf 'DEV_NO_AUTH=1\nMC_SERVER=demo.mcstatus.io\nCHAT_INGEST_TOKEN=local-dev-token-0123456789abcdef0123456789\n' > .dev.vars
+# optional: DEV_EMAIL=<a roster email> in .dev.vars to try sending chat as that player
 npm run db:migrate:local
 npm run seed:local        # optional: 200 days of fake data, plus two weeks of fake chat
 npm run dev               # http://localhost:8787, trigger a check at /__scheduled
@@ -104,7 +119,10 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
   tab is visible), with animations that are skipped when the system's reduce-motion setting is on.
 - **Chat log**: the server's chat, newest at the bottom, loading older messages as you scroll up and new ones every
-  10 seconds. Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
+  10 seconds. Players whose login email is on the roster can **send chat** from the box under the log: it shows in game
+  as `[Web] <name> message` (needs mod 1.3.0 and the server online; the box says when it can't send) and comes back into
+  the log with a "web" tag. At most one message every 1.5 seconds and 8 per 30 seconds per player, 256 characters each.
+  Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,
   and the graph pages back a day when that time leaves its left edge. Beside it is who was online at that moment.
   Clicking the graph jumps the chat to that time. Names show as they do in game chat, with team prefixes and colors
   (exact on the light page, with a Minecraft-style shadow on pale ones; lightened where needed on the dark page). Deaths and advancements show the whole message in its
@@ -130,4 +148,5 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   Smaller dips are left alone, since someone may really have relogged.
 - Usage on Cloudflare's free tier: about 1,440 Cron runs per day, plus a few D1 rows written per check (1 per player).
   The chat mod adds at most one request every 3 seconds while people are talking (one row per message), and an open
-  Chat log page checks for new messages every 10 seconds while it's visible.
+  Chat log page checks for new messages every 10 seconds while it's visible. Web chat uses one Durable Object holding
+  the mod's WebSocket, which sleeps while idle (the mod's pings are answered without waking it).

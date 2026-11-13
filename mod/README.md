@@ -1,7 +1,7 @@
 # mcstats-chat (server mod)
 
-A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page, and what each
-player wears and carries to the **3D model** on their player page.
+A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page, what each
+player wears and carries to the **3D model** on their player page, and shows chat sent from the dashboard in game.
 It's one jar with no other dependencies (the bits of Fabric API it uses are bundled inside), for
 Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anything.
 
@@ -12,6 +12,11 @@ advancements are sent styled as a whole, so a killer's name, a named weapon or a
 **Gear** (1.2.0 or newer): each online player's armor (with trims and dye), both hands, and the weapons, tools and Egg SMP
 eggs in their inventory (nothing else from it). Checked every 10 seconds and sent only when it changed, at most once a
 minute per player, to `/api/ingest/gear` next to the chat url (same token, no extra setup).
+**Web chat** (1.3.0 or newer): players signed in to the dashboard with a roster email can type in the Chat log. The mod
+keeps one WebSocket open to `/api/ingest/link` next to the chat url (same token and service token, no extra setup) and
+shows each message to everyone as `[Web] <name> message`, the name in its team's colors. It's logged like other chat,
+with a "web" tag on the dashboard. If the server isn't connected, the dashboard says so and nothing is queued.
+Set `web_chat=false` to turn it off.
 **Never recorded:** private messages (`/msg`, `/tell`, `/w`, `/teammsg`) and commands. Let players know chat is logged.
 
 ## How it gets to the dashboard
@@ -22,6 +27,10 @@ Minecraft server ── mod queues each message ──► every few seconds, one
                     Cloudflare Access ──────────► lets it through only with the service token
                     Worker ─────────────────────► checks CHAT_INGEST_TOKEN, stores rows in D1 (chat table)
 Dashboard ◄──────── /api/chat ◄────────────────── read by the Chat log page (behind your normal login)
+
+Dashboard ── POST /api/chat/send ──► Worker checks the login email is on the roster
+                                     ──► Durable Object ──► the mod's WebSocket (/api/ingest/link)
+                                     ──► mod shows "[Web] <name> …" in game, answers ok, logs it as chat
 ```
 
 The upload runs on a background thread, so the game never waits on it. If the dashboard can't be
@@ -60,7 +69,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.2.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.3.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -88,6 +97,8 @@ Search the server console (latest.log) for `mcstats-chat`:
 | `Created …/mcstats-chat.properties` on every start | The filled-in file isn't where the mod looks, or has a different name. It must be exactly `config/mcstats-chat.properties`. |
 | `Not sending chat: url is blank` (or `token`) | The file was found but that value is empty. Check spelling of the keys (`url=`, `token=`). |
 | `Sending chat to …` then `Chat log connected` | Working. |
+| `Web chat connected` | Messages typed on the dashboard will show in game. |
+| `Web chat isn't connected: …` | Same reasons as below; the dashboard shows the message box as offline meanwhile. |
 | `Couldn't send chat: …` | The rest of the line says which part is wrong. Note that Cloudflare Access answers 401 for a service token it doesn't recognise and 403 for one it knows but no Service Auth policy allows. |
 
 To test a config file from your own computer, put a copy named `mcstats-chat.properties` in the repo root
@@ -102,6 +113,7 @@ or pass another file's path.
 | `token` | Must equal the Worker's `CHAT_INGEST_TOKEN` |
 | `access_client_id`, `access_client_secret` | The Cloudflare Access service token |
 | `system_messages` | `false` to send only chat, without joins, leaves, deaths and advancements (default `true`) |
+| `web_chat` | `false` to stop showing chat sent from the dashboard (default `true`) |
 
 ## Building
 
@@ -109,7 +121,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.2.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.3.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

@@ -9,8 +9,8 @@ import java.util.Properties;
 
 // config/mcstats-chat.properties. Created with blank values on first start; edits are
 // picked up within a few seconds, without a restart.
-record Config(String url, String token, String accessClientId, String accessClientSecret, boolean systemMessages) {
-	static final Config EMPTY = new Config("", "", "", "", true);
+record Config(String url, String token, String accessClientId, String accessClientSecret, boolean systemMessages, boolean webChat) {
+	static final Config EMPTY = new Config("", "", "", "", true, true);
 
 	private static final String TEMPLATE = """
 			# mcstats chat log: sends this server's public chat to your mcstats dashboard.
@@ -30,6 +30,10 @@ record Config(String url, String token, String accessClientId, String accessClie
 
 			# Also log joins, leaves, deaths and advancements.
 			system_messages=true
+
+			# Show chat sent from the dashboard in game, as "[Web] <name> message". Only players whose
+			# login email is on the dashboard's roster can send.
+			web_chat=true
 			""";
 
 	boolean ready() {
@@ -50,7 +54,8 @@ record Config(String url, String token, String accessClientId, String accessClie
 		p.load(new StringReader(text));
 		return new Config(
 				get(p, "url"), get(p, "token"), get(p, "access_client_id"), get(p, "access_client_secret"),
-				!get(p, "system_messages").equalsIgnoreCase("false"));
+				!get(p, "system_messages").equalsIgnoreCase("false"),
+				!get(p, "web_chat").equalsIgnoreCase("false"));
 	}
 
 	private static String get(Properties p, String key) {

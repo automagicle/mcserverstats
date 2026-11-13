@@ -30,42 +30,48 @@ async function loadKeys(teamDomain, force) {
   return map;
 }
 
-export async function isAuthorized(request, env, url) {
+// Who's signed in: { email } (email is null for local development without DEV_EMAIL), or null if
+// nobody is (or it's a service token, which may only post chat, not read the dashboard).
+export async function signedIn(request, env, url) {
   // Local development only: .dev.vars is never uploaded by `wrangler deploy`.
   if (env.DEV_NO_AUTH === '1' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')) {
-    return true;
+    return { email: env.DEV_EMAIL || null };
   }
+  const payload = await accessToken(request, env);
+  return payload && typeof payload.email === 'string' && payload.email ? { email: payload.email.toLowerCase() } : null;
+}
 
+// The verified Access token's claims, or null.
+async function accessToken(request, env) {
   const team = env.ACCESS_TEAM_DOMAIN;
   const aud = env.ACCESS_AUD;
-  if (!team || !aud) return false;
+  if (!team || !aud) return null;
 
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
-  if (!token) return false;
+  if (!token) return null;
 
   try {
     const [h, p, s] = token.split('.');
     const header = b64urlJson(h);
     const payload = b64urlJson(p);
-    if (header.alg !== 'RS256') return false;
+    if (header.alg !== 'RS256') return null;
 
     let keys = await loadKeys(team, false);
     if (!keys.has(header.kid)) keys = await loadKeys(team, true);
     const key = keys.get(header.kid);
-    if (!key) return false;
+    if (!key) return null;
 
     const valid = await crypto.subtle.verify(
       'RSASSA-PKCS1-v1_5', key, b64urlBytes(s), new TextEncoder().encode(`${h}.${p}`)
     );
-    if (!valid) return false;
+    if (!valid) return null;
 
     const now = Math.floor(Date.now() / 1000);
     const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-    if (!(auds.includes(aud) && payload.iss === `https://${team}` && payload.exp > now)) return false;
-    // A service token (the chat mod's way past Access) may only post chat, not read the dashboard.
-    return !(payload.common_name && !payload.email);
+    if (!(auds.includes(aud) && payload.iss === `https://${team}` && payload.exp > now)) return null;
+    return payload;
   } catch (err) {
     console.error('Access token check failed:', err.message);
-    return false;
+    return null;
   }
 }

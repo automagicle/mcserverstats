@@ -1,9 +1,10 @@
-import { isAuthorized } from './auth.js';
+import { signedIn } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
 import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
 import { clampRange, seasonFor } from './seasons.js';
 import { gearFor, ingestGear } from './gear.js';
 import { serveSkin, serveTexture } from './mcassets.js';
+import { connectLink, sendWebChat, webChatMe } from './link.js';
 import { json, UUID_RE } from './util.js';
 
 const DAY = 86400;
@@ -36,8 +37,19 @@ export async function handleApi(request, env, url) {
     return ingestGear(request, env);
   }
 
+  // The server mod's WebSocket, which carries chat sent from the dashboard into the game.
+  if (url.pathname === '/api/ingest/link') return connectLink(request, env);
+
+  const who = await signedIn(request, env, url);
+  if (!who) return json({ error: 'unauthorized' }, 401);
+
+  // Chat from the dashboard, for players whose login email is on the roster.
+  if (url.pathname === '/api/chat/send') {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+    return sendWebChat(request, env, url, who);
+  }
   if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
-  if (!(await isAuthorized(request, env, url))) return json({ error: 'unauthorized' }, 401);
+  if (url.pathname === '/api/chat/me') return webChatMe(env, who);
 
   // Game textures and skins, for the 3D player model.
   if (url.pathname.startsWith('/api/mc/')) return serveTexture(env, url.pathname.slice(8));

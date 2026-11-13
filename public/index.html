@@ -235,8 +235,18 @@
         <div class="chat-scroll" id="chat-scroll" role="log" aria-label="Chat log" tabindex="0">
           <div class="chat-edge" id="chat-top"></div>
           <div id="chat-list"></div>
+          <div id="chat-pending"></div>
           <div class="chat-jump-wrap"><button type="button" class="chat-jump" id="chat-jump" hidden></button></div>
         </div>
+        <form class="chat-compose" id="chat-compose" autocomplete="off" hidden>
+          <div class="chat-compose-err" id="chat-compose-err" role="alert" hidden></div>
+          <span class="chat-compose-me" id="chat-compose-me" aria-hidden="true"></span>
+          <input type="text" id="chat-input" maxlength="256" enterkeyhint="send" spellcheck="true" aria-label="Message the server">
+          <span class="chat-count" id="chat-count" aria-hidden="true"></span>
+          <button type="submit" class="chat-send" id="chat-send" aria-label="Send" title="Send (Enter)">
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3.5M3.8 7.5 8 3.2l4.2 4.3"/></svg>
+          </button>
+        </form>
         <div class="chat-online" id="chat-online">
           <div class="chips chat-chips" id="chat-chips"></div>
           <div class="chat-online-empty muted" id="chat-online-empty" hidden></div>

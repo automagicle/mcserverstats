@@ -1,10 +1,10 @@
 {
   "red": {
-    "Notch_Fan99": { "name": "Alex", "egg": "gravity" },
+    "Notch_Fan99": { "name": "Alex", "egg": "gravity", "email": "alex@example.org" },
     "BuilderBee": "Sam"
   },
   "blue": {
-    "xXCreeperXx": { "name": "Jordan", "egg": "fire" },
+    "xXCreeperXx": { "name": "Jordan", "egg": "fire", "email": ["jordan@example.org", "jordan.games@example.com"] },
     "redstone_rae": "Rae"
   }
 }

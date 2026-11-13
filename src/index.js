@@ -2,6 +2,8 @@ import { poll } from './poll.js';
 import { handleApi } from './api.js';
 import { CURRENT_SEASON } from './seasons.js';
 
+export { ServerLink } from './link.js';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);

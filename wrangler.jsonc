@@ -29,6 +29,12 @@
     }
   ],
 
+  // Holds the server mod's WebSocket, which carries chat sent from the dashboard into the game (src/link.js).
+  "durable_objects": {
+    "bindings": [{ "name": "LINK", "class_name": "ServerLink" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ServerLink"] }],
+
   // MC_SERVER is a secret (wrangler secret put MC_SERVER), never put it here.
   // So is CHAT_INGEST_TOKEN, which the chat mod sends (see mod/README.md).
   "vars": {

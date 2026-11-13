@@ -2699,6 +2699,7 @@ function msgGroup(m) {
     el('div', { class: 'msg-meta' },
       chatName(m),
       m.kind === 'say' ? el('span', { class: 'msg-tag', text: '/say' }) : null,
+      m.via === 'web' ? el('span', { class: 'msg-tag', text: 'web', title: 'Sent from this dashboard' }) : null,
       el('time', { class: 'msg-time', text: clock(m.ts / 1000) }))));
 }
 
@@ -2725,7 +2726,7 @@ function renderChat(fresh = new Set()) {
     }
     let node;
     if (m.kind === 'chat' || m.kind === 'say') {
-      if (!group || prev.kind !== m.kind || prev.name !== m.name || m.ts - prev.ts > CHAT_GROUP_MS) {
+      if (!group || prev.kind !== m.kind || prev.name !== m.name || prev.via !== m.via || m.ts - prev.ts > CHAT_GROUP_MS) {
         group = msgGroup(m);
         frag.append(group);
       }
@@ -2939,6 +2940,7 @@ async function pollChat() {
   const known = new Set(chat.messages.map((m) => m.id));
   const fresh = res.messages.filter((m) => !known.has(m.id));
   if (!fresh.length) return;
+  settlePending(fresh);
   const follow = fromBottom() < 60 && chat.pinned == null;
   const anchor = chatAnchor();
   chat.messages = chat.messages.concat(fresh).sort((a, b) => a.ts - b.ts || a.id - b.id);
@@ -2957,6 +2959,141 @@ async function pollChat() {
   updateChatJump();
   syncChatTime();
 }
+
+/* ---------- sending chat into the game ---------- */
+
+// Players whose login email is on the roster can send chat; the server mod shows it in game as
+// "[Web] <name> message" and logs it, so it comes back into this log a few seconds later. Until
+// then it shows faded under the log.
+const compose = { me: null, sending: false, pending: [], checked: 0 };
+const chatInput = $('#chat-input');
+
+async function loadComposer() {
+  const form = $('#chat-compose');
+  if (DUMMY || archived() || SEASON !== CURRENT_SEASON) {
+    form.hidden = true;
+    return;
+  }
+  compose.checked = Date.now();
+  try {
+    compose.me = await api('/api/chat/me');
+  } catch {
+    compose.me = null;
+  }
+  renderComposer();
+}
+
+function renderComposer() {
+  const me = compose.me;
+  const form = $('#chat-compose');
+  form.hidden = !me;
+  if (!me) return;
+  const can = !!(me.ign && me.linked);
+  chatInput.disabled = !can;
+  chatInput.placeholder = !me.ign
+    ? (me.email ? `${me.email} isn't on the roster, so it can't send messages` : 'Sign in with your roster email to send messages')
+    : !me.linked ? "The server isn't connected, so messages can't be sent right now"
+    : `Message the server as ${shownName(me.ign)}`;
+  $('#chat-compose-me').replaceChildren(me.ign ? headImg(me.ign, 24) : '');
+  updateComposeCount();
+}
+
+function updateComposeCount() {
+  const max = compose.me?.max || 256;
+  const n = chatInput.value.length;
+  const left = $('#chat-count');
+  left.textContent = n > max - 40 ? String(max - n) : '';
+  left.classList.toggle('over', n > max);
+  $('#chat-send').disabled = chatInput.disabled || compose.sending || !chatInput.value.trim() || n > max;
+}
+
+let composeErrTimer = 0;
+function composeError(msg) {
+  const box = $('#chat-compose-err');
+  box.textContent = msg || '';
+  box.hidden = !msg;
+  clearTimeout(composeErrTimer);
+  if (msg) composeErrTimer = setTimeout(() => { box.hidden = true; }, 6000);
+}
+
+function renderPending() {
+  $('#chat-pending').replaceChildren(...compose.pending.map((p) => {
+    const m = { kind: 'chat', name: p.name, ts: p.ts, text: p.text, uuid: null };
+    const group = msgGroup(m);
+    group.classList.add('msg-pending');
+    group.querySelector('.msg-meta').append(el('span', { class: 'msg-tag', text: p.sent ? 'sent' : 'sending…' }));
+    group.lastChild.append(chatLine(m));
+    return group;
+  }));
+}
+
+// Messages that came back in the log replace their faded copies.
+function settlePending(fresh) {
+  if (!compose.pending.length) return;
+  const before = compose.pending.length;
+  for (const m of fresh) {
+    if (m.via !== 'web') continue;
+    const i = compose.pending.findIndex((p) => p.sent && p.text === m.text && p.name.toLowerCase() === (m.name || '').toLowerCase());
+    if (i >= 0) compose.pending.splice(i, 1);
+  }
+  if (compose.pending.length !== before) renderPending();
+}
+
+async function sendChat() {
+  const text = chatInput.value.trim();
+  const me = compose.me;
+  if (!text || compose.sending || !me?.ign) return;
+  composeError('');
+  compose.sending = true;
+  const p = { name: me.ign, text, ts: Date.now(), sent: false };
+  compose.pending.push(p);
+  chatInput.value = '';
+  updateComposeCount();
+  if (chat.moreAfter) await loadChatLatest().catch(() => {});
+  renderPending();
+  chat.pinned = null;
+  chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  try {
+    const res = await fetch('/api/chat/send', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error('Your login expired; reload the page to sign in again.');
+    if (!res.ok) {
+      if (body.reason === 'offline') me.linked = false;
+      throw new Error(body.error || `Couldn't send it (HTTP ${res.status}).`);
+    }
+    p.sent = true;
+    renderPending();
+    // the mod logs it right away; it's usually back within a few seconds
+    for (const ms of [1500, 4000, 8000]) setTimeout(() => pollChat().catch(() => {}), ms);
+    setTimeout(() => {
+      const i = compose.pending.indexOf(p);
+      if (i >= 0) { compose.pending.splice(i, 1); renderPending(); }
+    }, 30_000);
+  } catch (err) {
+    compose.pending.splice(compose.pending.indexOf(p), 1);
+    renderPending();
+    if (!chatInput.value) chatInput.value = text; // give it back to try again
+    composeError(err.message);
+  } finally {
+    compose.sending = false;
+    renderComposer();
+    if (!chatInput.disabled) chatInput.focus();
+  }
+}
+
+$('#chat-compose').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendChat();
+});
+chatInput.addEventListener('input', () => {
+  updateComposeCount();
+  if (!$('#chat-compose-err').hidden) composeError('');
+});
 
 function updateChatJump() {
   const btn = $('#chat-jump');
@@ -3061,7 +3198,7 @@ function placeCursor() {
   const c = $('#cg-cursor');
   const g = chat.geom;
   // The live graph is redrawn once a minute, so anything newer than its last drawing is "now".
-  const t = chat.win?.end == null && chat.t > (g?.to ?? 0) && chat.t <= nowSec() + 60 ? g.to : chat.t;
+  const t = g && chat.win?.end == null && chat.t > g.to && chat.t <= nowSec() + 60 ? g.to : chat.t;
   if (!g || t == null || t < g.from || t > g.to) {
     c.classList.add('off');
     return;
@@ -3164,6 +3301,7 @@ function renderChatOnline() {
 async function showChat({ refresh = false } = {}) {
   showView('chat');
   document.title = `Chat log · ${SITE}`;
+  if (!refresh || Date.now() - compose.checked > 60_000) loadComposer();
   await loadStatus();
   renderChatOnline();
   if (refresh && chat.loaded) {
@@ -3194,8 +3332,11 @@ async function showChat({ refresh = false } = {}) {
 let chatTicks = 0;
 setInterval(() => {
   if (document.hidden) return;
-  if (!$('#view-chat').hidden) pollChat().catch(() => {});
-  else if (chatTicks++ % 3 === 0) checkUnread().catch(() => {});
+  if (!$('#view-chat').hidden) {
+    pollChat().catch(() => {});
+    // whether the server is connected, now and then (and sooner while it isn't)
+    if (Date.now() - compose.checked > (compose.me?.linked ? 60_000 : 20_000)) loadComposer();
+  } else if (chatTicks++ % 3 === 0) checkUnread().catch(() => {});
 }, CHAT_POLL_MS);
 
 /* ---------- player card: what a click on a name opens ---------- */
@@ -3592,6 +3733,8 @@ function rerenderNames() {
     renderChat();
     restoreAnchor(anchor);
     renderOnlineThen(true);
+    renderPending();
+    renderComposer();
     renderChatOnline();
   }
 }

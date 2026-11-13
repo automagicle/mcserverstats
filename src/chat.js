@@ -50,7 +50,8 @@ function cleanRich(d) {
   return out.length ? JSON.stringify(out) : null;
 }
 
-// POST /api/ingest/chat from the server mod: { events: [{ id, ts, kind, uuid?, name?, display?, rich?, text }] }.
+// POST /api/ingest/chat from the server mod: { events: [{ id, ts, kind, uuid?, name?, display?, rich?, text, via? }] }.
+// via is 'web' for a message sent from the dashboard (see link.js).
 // Cloudflare Access only lets it through with the service token; the bearer token is checked here too.
 export async function ingestChat(request, env) {
   const secret = env.CHAT_INGEST_TOKEN || '';
@@ -86,21 +87,21 @@ export async function ingestChat(request, env) {
     if (!valid) continue;
     const text = clean(e.text, MAX_TEXT);
     if (!text) continue;
-    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display), cleanRich(e.rich)]);
+    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display), cleanRich(e.rich), e.via === 'web' ? 'web' : null]);
   }
 
   if (rows.length) {
     // Server messages name a player without a UUID sometimes; fill it in from the players we know.
     const stmt = env.DB.prepare(
-      `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text, display, rich)
-       VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7, ?8)`
+      `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text, display, rich, via)
+       VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7, ?8, ?9)`
     );
     await env.DB.batch(rows.map((r) => stmt.bind(...r)));
   }
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }
 
-const COLS = 'id, ts_ms AS ts, kind, uuid, name, text, display, rich';
+const COLS = 'id, ts_ms AS ts, kind, uuid, name, text, display, rich, via';
 const withDisplay = (rows) => rows.map((r) => ({
   ...r, display: r.display ? JSON.parse(r.display) : null, rich: r.rich ? JSON.parse(r.rich) : null,
 }));

@@ -54,7 +54,7 @@ final class Uploader {
 	private volatile Config config = Config.EMPTY;
 	private long configModified = -1;
 	private ScheduledExecutorService exec;
-	private long lastFlush;
+	private volatile long lastFlush;
 	private long nextAttempt;
 	private long backoff;
 	private String lastWarning;
@@ -73,8 +73,17 @@ final class Uploader {
 		return config.systemMessages();
 	}
 
+	Config config() {
+		return config;
+	}
+
 	// Called from the server thread.
 	void add(String kind, UUID uuid, String name, JsonArray display, JsonArray rich, String text) {
+		add(kind, uuid, name, display, rich, text, null);
+	}
+
+	// via: "web" for chat sent from the dashboard.
+	void add(String kind, UUID uuid, String name, JsonArray display, JsonArray rich, String text, String via) {
 		if (text == null || text.isBlank()) return;
 		JsonObject e = new JsonObject();
 		e.addProperty("id", runId + "-" + seq.incrementAndGet());
@@ -85,6 +94,7 @@ final class Uploader {
 		if (display != null) e.add("display", display);
 		if (rich != null) e.add("rich", rich);
 		e.addProperty("text", text);
+		if (via != null) e.addProperty("via", via);
 		synchronized (queue) {
 			queue.addLast(e);
 			while (queue.size() > MAX_QUEUE) {
@@ -92,6 +102,12 @@ final class Uploader {
 				dropped++;
 			}
 		}
+	}
+
+	// Send what's queued at the next tick rather than waiting out the batching delay (so a message
+	// sent from the dashboard shows in its chat log quickly).
+	void flushSoon() {
+		lastFlush = 0;
 	}
 
 	// Called from the server thread.
@@ -255,7 +271,7 @@ final class Uploader {
 		fail(why(r.status(), r.fromAccess()));
 	}
 
-	private static String why(int status, boolean fromAccess) {
+	static String why(int status, boolean fromAccess) {
 		return switch (status) {
 			case 401 -> fromAccess
 					? "Cloudflare Access doesn't recognise access_client_id / access_client_secret (deleted token or wrong secret)"
