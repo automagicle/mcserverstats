@@ -5,7 +5,8 @@
 // reaches the same one. A signed-in player whose login email is on the roster can POST
 // /api/chat/send; the message goes down the socket, the mod shows it in game chat as
 // "[Web] <name> text" and logs it like any other chat (marked via = 'web'), so it comes back to
-// the chat log a few seconds later. Nothing is queued: if the server isn't connected, sending
+// the chat log a few seconds later. Admins (the roster file's "admins" emails) send without a
+// player name: a yellow [Admin] tag stands in for it (via = 'admin'). Nothing is queued: if the server isn't connected, sending
 // fails right away rather than turning up in game later.
 //
 // The socket hibernates while idle (the mod's pings are answered without waking the object), so an
@@ -38,14 +39,19 @@ export async function connectLink(request, env) {
   return link(env).fetch(new Request('https://link/connect', request));
 }
 
-// The roster player a login email belongs to this season, or null.
+const ADMIN = '@admin'; // roster_email's stand-in IGN for an admin (scripts/roster-sql.mjs)
+
+// Who a login email sends as this season: { ign, team } for a roster player, { admin: true } for an
+// admin, or null.
 async function playerFor(env, email) {
   if (!email) return null;
   const row = await env.DB.prepare(
-    `SELECT r.ign, r.team FROM roster_email e JOIN roster r ON r.season = e.season AND r.ign = e.ign
+    `SELECT e.ign, r.team FROM roster_email e LEFT JOIN roster r ON r.season = e.season AND r.ign = e.ign
      WHERE e.season = ? AND e.email = ?`
   ).bind(CURRENT_SEASON, email).first();
-  return row ?? null;
+  if (!row) return null;
+  if (row.ign === ADMIN) return { admin: true };
+  return row.team ? { ign: row.ign, team: row.team } : null;
 }
 
 // GET /api/chat/me: who you'd be sending as, and whether the server is connected.
@@ -59,7 +65,7 @@ export async function webChatMe(env, who) {
       console.error('link status:', err.message);
     }
   }
-  return json({ email: who.email, ign: player?.ign ?? null, team: player?.team ?? null, linked, max: MAX_WEB_CHAT });
+  return json({ email: who.email, ign: player?.ign ?? null, team: player?.team ?? null, admin: !!player?.admin, linked, max: MAX_WEB_CHAT });
 }
 
 // POST /api/chat/send { text }
@@ -88,7 +94,7 @@ export async function sendWebChat(request, env, url, who) {
   const res = await link(env).fetch('https://link/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: player.ign, text }),
+    body: JSON.stringify(player.admin ? { admin: true, key: who.email, text } : { name: player.ign, key: player.ign, text }),
   });
   return new Response(res.body, { status: res.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
@@ -124,16 +130,16 @@ export class ServerLink extends DurableObject {
     if (path === '/status') return json({ linked: !!this.socket() });
 
     if (path === '/send' && request.method === 'POST') {
-      const { name, text } = await request.json();
+      const { name = null, admin = false, key, text } = await request.json();
       const ws = this.socket();
       if (!ws) return json({ error: "The server isn't connected right now, so messages can't reach the game.", reason: 'offline' }, 503);
 
       const now = Date.now();
-      const times = (this.sent.get(name) || []).filter((t) => now - t < BURST_MS);
+      const times = (this.sent.get(key) || []).filter((t) => now - t < BURST_MS);
       if (times.length && now - times[times.length - 1] < GAP_MS) return json({ error: 'Slow down a little.', reason: 'rate' }, 429);
       if (times.length >= BURST) return json({ error: 'Too many messages; wait a few seconds.', reason: 'rate' }, 429);
       times.push(now);
-      this.sent.set(name, times);
+      this.sent.set(key, times);
 
       const id = crypto.randomUUID();
       const answer = new Promise((resolve) => {
@@ -141,14 +147,14 @@ export class ServerLink extends DurableObject {
         setTimeout(() => resolve({ ok: false, error: "The server didn't answer in time; the message may not have arrived." }), ACK_MS);
       });
       try {
-        ws.send(JSON.stringify({ type: 'say', id, name, text }));
+        ws.send(JSON.stringify(admin ? { type: 'say', id, admin: true, text } : { type: 'say', id, name, text }));
       } catch {
         this.pending.delete(id);
         return json({ error: "The server isn't connected right now.", reason: 'offline' }, 503);
       }
       const r = await answer;
       this.pending.delete(id);
-      return r.ok ? json({ ok: true, name, text }) : json({ error: r.error || 'The server refused the message.', reason: 'refused' }, 502);
+      return r.ok ? json({ ok: true, name, admin, text }) : json({ error: r.error || 'The server refused the message.', reason: 'refused' }, 502);
     }
 
     return json({ error: 'not found' }, 404);

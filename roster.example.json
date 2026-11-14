@@ -1,10 +1,24 @@
 {
   "red": {
-    "Notch_Fan99": { "name": "Alex", "egg": "gravity", "email": "alex@example.org" },
+    "Notch_Fan99": {
+      "name": "Alex",
+      "egg": "gravity",
+      "email": "alex@example.org"
+    },
     "BuilderBee": "Sam"
   },
   "blue": {
-    "xXCreeperXx": { "name": "Jordan", "egg": "fire", "email": ["jordan@example.org", "jordan.games@example.com"] },
+    "xXCreeperXx": {
+      "name": "Jordan",
+      "egg": "fire",
+      "email": [
+        "jordan@example.org",
+        "jordan.games@example.com"
+      ]
+    },
     "redstone_rae": "Rae"
-  }
+  },
+  "admins": [
+    "host@example.org"
+  ]
 }

@@ -2611,7 +2611,11 @@ function colorName(node, uuid) {
 
 const displayText = (m) => (m.display ? m.display.map((p) => p.t).join('') : m.name || 'Server');
 
+// Admins send chat from the dashboard without a player name; a yellow tag stands in for it.
+const adminTag = () => el('span', { class: 'msg-name msg-admin', text: 'Admin', title: 'Sent by an admin from this dashboard' });
+
 function chatName(m) {
+  if (m.via === 'admin') return adminTag();
   const parts = m.display
     ? swapParts(m.display, m.name).map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
     : [m.name ? shownName(m.name) : 'Server'];
@@ -2988,13 +2992,13 @@ function renderComposer() {
   const form = $('#chat-compose');
   form.hidden = !me;
   if (!me) return;
-  const can = !!(me.ign && me.linked);
+  const can = !!((me.ign || me.admin) && me.linked);
   chatInput.disabled = !can;
-  chatInput.placeholder = !me.ign
+  chatInput.placeholder = !me.ign && !me.admin
     ? (me.email ? `${me.email} isn't on the roster, so it can't send messages` : 'Sign in with your roster email to send messages')
     : !me.linked ? "The server isn't connected, so messages can't be sent right now"
-    : `Message the server as ${shownName(me.ign)}`;
-  $('#chat-compose-me').replaceChildren(me.ign ? headImg(me.ign, 24) : '');
+    : `Message the server as ${me.admin ? 'Admin' : shownName(me.ign)}`;
+  $('#chat-compose-me').replaceChildren(me.admin ? adminTag() : me.ign ? headImg(me.ign, 24) : '');
   updateComposeCount();
 }
 
@@ -3018,7 +3022,7 @@ function composeError(msg) {
 
 function renderPending() {
   $('#chat-pending').replaceChildren(...compose.pending.map((p) => {
-    const m = { kind: 'chat', name: p.name, ts: p.ts, text: p.text, uuid: null };
+    const m = { kind: 'chat', name: p.name, ts: p.ts, text: p.text, uuid: null, via: p.admin ? 'admin' : 'web' };
     const group = msgGroup(m);
     group.classList.add('msg-pending');
     group.querySelector('.msg-meta').append(el('span', { class: 'msg-tag', text: p.sent ? 'sent' : 'sending…' }));
@@ -3032,8 +3036,9 @@ function settlePending(fresh) {
   if (!compose.pending.length) return;
   const before = compose.pending.length;
   for (const m of fresh) {
-    if (m.via !== 'web') continue;
-    const i = compose.pending.findIndex((p) => p.sent && p.text === m.text && p.name.toLowerCase() === (m.name || '').toLowerCase());
+    if (m.via !== 'web' && m.via !== 'admin') continue;
+    const i = compose.pending.findIndex((p) => p.sent && p.text === m.text
+      && (p.admin ? m.via === 'admin' : m.via === 'web' && p.name.toLowerCase() === (m.name || '').toLowerCase()));
     if (i >= 0) compose.pending.splice(i, 1);
   }
   if (compose.pending.length !== before) renderPending();
@@ -3042,10 +3047,10 @@ function settlePending(fresh) {
 async function sendChat() {
   const text = chatInput.value.trim();
   const me = compose.me;
-  if (!text || compose.sending || !me?.ign) return;
+  if (!text || compose.sending || !(me?.ign || me?.admin)) return;
   composeError('');
   compose.sending = true;
-  const p = { name: me.ign, text, ts: Date.now(), sent: false };
+  const p = { name: me.admin ? null : me.ign, admin: !!me.admin, text, ts: Date.now(), sent: false };
   compose.pending.push(p);
   chatInput.value = '';
   updateComposeCount();

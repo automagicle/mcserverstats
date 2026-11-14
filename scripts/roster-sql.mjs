@@ -3,6 +3,7 @@
 // that season's roster: node scripts/roster-sql.mjs 2 > .wrangler/roster.sql
 // "email" (one, or a list) is who may send chat from the dashboard as that player: the email they
 // sign in with. Emails are never shown on the dashboard.
+// "admins": ["email", …] (beside the teams) may send chat too, shown with a yellow Admin tag instead of a name.
 import { readFileSync } from 'node:fs';
 
 const season = Number(process.argv[2] || 2);
@@ -17,19 +18,23 @@ const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
 const rows = [];
 const emails = new Map();
-for (const [team, members] of Object.entries(teams)) {
+const ADMIN = '@admin'; // stands in for the IGN of an admin's email (no IGN can contain @)
+const addEmail = (e, ign, who) => {
+  if (typeof e !== 'string' || !EMAIL_RE.test(e.trim())) throw new Error(`bad email for ${who}`);
+  const key = e.trim().toLowerCase();
+  if (emails.has(key)) throw new Error(`${who} and ${emails.get(key)} have the same email`);
+  emails.set(key, ign);
+};
+const { admins = [], ...teamsOnly } = teams;
+for (const e of [admins].flat()) addEmail(e, ADMIN, 'an admin');
+for (const [team, members] of Object.entries(teamsOnly)) {
   if (!TEAM_RE.test(team)) throw new Error(`bad team name: ${team}`);
   for (const [ign, v] of Object.entries(members)) {
     if (!IGN_RE.test(ign)) throw new Error(`bad IGN: ${ign}`);
     const { name, egg = null, email = [] } = typeof v === 'string' ? { name: v } : v || {};
     if (typeof name !== 'string' || !name.trim()) throw new Error(`no name for ${ign}`);
     if (egg != null && !EGG_RE.test(egg)) throw new Error(`bad egg for ${ign}: ${egg}`);
-    for (const e of [email].flat()) {
-      if (typeof e !== 'string' || !EMAIL_RE.test(e.trim())) throw new Error(`bad email for ${ign}`);
-      const key = e.trim().toLowerCase();
-      if (emails.has(key)) throw new Error(`${ign} and ${emails.get(key)} have the same email`);
-      emails.set(key, ign);
-    }
+    for (const e of [email].flat()) addEmail(e, ign, ign);
     rows.push(`(${season}, ${q(ign)}, ${q(name.trim().slice(0, 40))}, ${q(team)}, ${egg == null ? 'NULL' : q(egg)})`);
   }
 }

@@ -24,6 +24,7 @@ import com.google.gson.JsonParser;
 // Reconnects by itself with backoff, and pings every 30 seconds so a dead connection is noticed.
 final class WebChatLink {
 	// Answers "" if the message was shown, or why it wasn't. Called on a background thread.
+	// name is null for an admin (shown with an [Admin] tag instead of a name).
 	interface Handler {
 		CompletableFuture<String> say(String name, String text);
 	}
@@ -180,9 +181,10 @@ final class WebChatLink {
 		}
 		if (!m.has("type") || !m.get("type").getAsString().equals("say") || !m.has("id")) return;
 		String id = m.get("id").getAsString();
-		String name = m.has("name") ? m.get("name").getAsString() : "";
+		boolean admin = m.has("admin") && m.get("admin").getAsBoolean();
+		String name = admin ? null : m.has("name") ? m.get("name").getAsString() : "";
 		String text = m.has("text") ? clean(m.get("text").getAsString()) : "";
-		if (!NAME.matcher(name).matches() || text.isEmpty()) {
+		if ((!admin && !NAME.matcher(name).matches()) || text.isEmpty()) {
 			ack(ws, id, "bad message");
 			return;
 		}

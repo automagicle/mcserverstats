@@ -51,7 +51,7 @@ function cleanRich(d) {
 }
 
 // POST /api/ingest/chat from the server mod: { events: [{ id, ts, kind, uuid?, name?, display?, rich?, text, via? }] }.
-// via is 'web' for a message sent from the dashboard (see link.js).
+// via is 'web' for a message sent from the dashboard (see link.js), 'admin' for one an admin sent there.
 // Cloudflare Access only lets it through with the service token; the bearer token is checked here too.
 export async function ingestChat(request, env) {
   const secret = env.CHAT_INGEST_TOKEN || '';
@@ -87,7 +87,7 @@ export async function ingestChat(request, env) {
     if (!valid) continue;
     const text = clean(e.text, MAX_TEXT);
     if (!text) continue;
-    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display), cleanRich(e.rich), e.via === 'web' ? 'web' : null]);
+    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display), cleanRich(e.rich), e.via === 'web' || e.via === 'admin' ? e.via : null]);
   }
 
   if (rows.length) {

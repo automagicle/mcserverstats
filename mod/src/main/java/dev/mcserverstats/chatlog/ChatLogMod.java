@@ -17,6 +17,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ChatType;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.TextColor;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -89,27 +90,37 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	}
 
 	// A message sent from the dashboard by a roster player: shown to everyone as "[Web] <name> text",
-	// the name in their team's colors, and logged as their chat (marked as from the web). Runs on the
-	// server thread; the answer is "" when it was shown.
+	// the name in their team's colors, and logged as their chat (marked as from the web). An admin's
+	// (name null) shows as "[Web] [Admin] text" with the tag in yellow. Runs on the server thread;
+	// the answer is "" when it was shown.
 	private CompletableFuture<String> webMessage(String name, String text) {
 		MinecraftServer s = server;
 		if (s == null) return CompletableFuture.completedFuture("the server is starting or stopping");
 		CompletableFuture<String> done = new CompletableFuture<>();
 		s.execute(() -> {
 			try {
-				PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
-				Component who = PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
-				Component line = Component.empty()
-						.append(Component.literal("[Web] ").withStyle(ChatFormatting.GRAY))
-						.append(Component.translatable("chat.type.text", who, Component.literal(text)));
+				Component who;
+				MutableComponent line = Component.empty().append(Component.literal("[Web] ").withStyle(ChatFormatting.GRAY));
+				if (name == null) {
+					who = Component.literal("[Admin]").withStyle(ChatFormatting.YELLOW);
+					line.append(who).append(" ").append(Component.literal(text));
+				} else {
+					PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
+					who = PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
+					line.append(Component.translatable("chat.type.text", who, Component.literal(text)));
+				}
 				postingWeb = true;
 				try {
 					s.getPlayerList().broadcastSystemMessage(line, false);
 				} finally {
 					postingWeb = false;
 				}
-				ServerPlayer online = s.getPlayerList().getPlayerByName(name);
-				uploader.add("chat", online == null ? null : online.getUUID(), name, styled(who, 8), null, text, "web");
+				if (name == null) {
+					uploader.add("chat", null, null, styled(who, 8), null, text, "admin");
+				} else {
+					ServerPlayer online = s.getPlayerList().getPlayerByName(name);
+					uploader.add("chat", online == null ? null : online.getUUID(), name, styled(who, 8), null, text, "web");
+				}
 				uploader.flushSoon();
 				done.complete("");
 			} catch (RuntimeException e) {

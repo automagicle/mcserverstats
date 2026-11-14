@@ -51,6 +51,8 @@ ignores `roster-*.json`; see `roster.example.json` for the format:
 `email` can be a list) and run `npm run roster:remote` after each change; it replaces the season's roster, takes effect
 at once and needs no deploy. `npm run roster:local` does the same for local development.
 A player's emails are who may send chat from the dashboard as them; they're never shown on the page.
+`"admins": ["someone@example.org"]` beside the teams lets people who aren't players send chat too; their messages show
+with a yellow **Admin** tag instead of a name (in game: `[Web] [Admin] message`).
 
 **Sample data**: `/?dummydata` fills the main page with made-up activity for the season's real players (from the roster), to
 see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
