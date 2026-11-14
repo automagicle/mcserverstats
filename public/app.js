@@ -3765,7 +3765,8 @@ const CAUSE_LABELS = {
 const mobLabel = (mob) => mob.replace(/^.*:/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 // What ended a death no player caused: the creature if there was one, else how.
 const naturalCause = (d) => (d.mob ? mobLabel(d.mob) : CAUSE_LABELS[d.cause] || 'Other');
-const SWORD_ICON = ['M13 3 6.5 9.5', 'M4.8 7.8l3.4 3.4', 'M6 10l-2.8 2.8', 'M13 3h-2.4M13 3v2.4'];
+// a sword, point up and to the right: blade, crossguard, grip, pommel
+const SWORD_ICON = ['M13.5 2.5 10.6 3 4.9 8.7', 'M13.5 2.5 13 5.4 7.3 11.1', 'M3.4 7.2l5.4 5.4', 'M6.1 9.9 3.4 12.6', 'M2.7 13.3h.01'];
 const TEAMS = ['red', 'blue'];
 const TEAM_SHORT = { red: 'Red', blue: 'Blue' };
 const teamOf = (name) => rosterOf(name)?.team ?? null;
@@ -4190,10 +4191,10 @@ function renderCombatLeaderboard() {
   moveRows(root, oldTops);
 }
 
-/* the death log: every death message, newest first */
+/* the death log: every death message, oldest at the top and newest at the bottom, like the chat log */
 
 const deathLog = {
-  items: [], // newest first, as /api/combat/log gives them
+  items: [], // newest first, as /api/combat/log gives them (drawn the other way up)
   more: false,
   busy: false,
   loaded: false,
@@ -4222,7 +4223,7 @@ function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
 function renderDeathLog(fresh = new Set()) {
   const frag = document.createDocumentFragment();
   let day = null;
-  for (const m of deathLog.items) {
+  for (const m of deathLog.items.toReversed()) {
     const d = hourInfo(m.ts / 1000).date;
     if (d !== day) {
       frag.append(el('div', { class: 'chat-day dl-day', role: 'separator' }, el('span', { text: relativeDay(d, { weekday: 'short', month: 'short', day: 'numeric' }) })));
@@ -4240,14 +4241,15 @@ function renderDeathLog(fresh = new Set()) {
       el('strong', { text: deathLog.type === 'pvp' ? 'No kills yet' : 'No deaths yet' }),
       el('div', { text: deathLog.type ? 'Nothing of this kind has been logged this season.' : 'Deaths show up here as the server logs them.' })));
   } else if (deathLog.busy) edge.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading older deaths…' }));
-  else if (!deathLog.more) edge.replaceChildren(el('div', { class: 'chat-note', text: 'That’s every death this season.' }));
+  else if (!deathLog.more) edge.replaceChildren(el('div', { class: 'chat-note', text: 'This is the first death of the season.' }));
   else edge.replaceChildren();
   for (const b of $('#dl-type').children) b.setAttribute('aria-pressed', String(b.dataset.v === deathLog.type));
 }
 
+const deathLogEnd = () => { const s = $('#dl-scroll'); s.scrollTop = s.scrollHeight; };
 const deathLogPath = (extra) => `/api/combat/log?limit=${DEATH_PAGE}${deathLog.type ? `&type=${deathLog.type}` : ''}${extra}`;
 
-// First page (or again from the top after the filter changes).
+// The latest page (or again after the filter changes), opened at the bottom, on the newest death.
 async function loadDeathLog() {
   const req = ++deathLog.req;
   deathLog.busy = true;
@@ -4261,10 +4263,12 @@ async function loadDeathLog() {
     if (req === deathLog.req) {
       deathLog.busy = false;
       renderDeathLog();
+      deathLogEnd();
     }
   }
 }
 
+// Scrolling up to the top loads older deaths above, without moving what's on screen.
 async function loadOlderDeaths() {
   if (deathLog.busy || !deathLog.more || !deathLog.items.length) return;
   const req = deathLog.req;
@@ -4279,13 +4283,16 @@ async function loadOlderDeaths() {
     deathLog.more = res.more;
   } finally {
     if (req === deathLog.req) {
+      const scroll = $('#dl-scroll');
+      const fromEnd = scroll.scrollHeight - scroll.scrollTop;
       deathLog.busy = false;
       renderDeathLog();
+      scroll.scrollTop = scroll.scrollHeight - fromEnd;
     }
   }
 }
 
-// New deaths since the top one slide in above it.
+// New deaths since the latest one slide in under it; the log follows them if it was at the bottom.
 async function refreshDeathLog() {
   if (!deathLog.loaded || deathLog.busy) return;
   if (!deathLog.items.length) return loadDeathLog();
@@ -4293,20 +4300,20 @@ async function refreshDeathLog() {
   const first = deathLog.items[0];
   const res = await api(deathLogPath(`&after=${first.ts}:${first.id}`));
   if (req !== deathLog.req || !res.results.length) return;
-  if (res.more) return loadDeathLog(); // more new ones than a page: start over from the top
+  if (res.more) return loadDeathLog(); // more new ones than a page: start over from the latest
   const have = new Set(deathLog.items.map((m) => m.id));
   const fresh = res.results.filter((m) => !have.has(m.id));
   if (!fresh.length) return;
   const scroll = $('#dl-scroll');
-  const before = scroll.scrollHeight, top = scroll.scrollTop;
+  const atEnd = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 60;
   deathLog.items = fresh.concat(deathLog.items);
   renderDeathLog(new Set(fresh.map((m) => m.id)));
-  if (top > 40) scroll.scrollTop = top + scroll.scrollHeight - before; // reading further down: stay put
+  if (atEnd) deathLogEnd(); // reading further up: stay put
 }
 
 $('#dl-scroll').addEventListener('scroll', () => {
   const s = $('#dl-scroll');
-  if (s.scrollHeight - s.scrollTop - s.clientHeight < 300) loadOlderDeaths().catch((e) => showError(e.message));
+  if (s.scrollTop < 300) loadOlderDeaths().catch((e) => showError(e.message));
 }, { passive: true });
 $('#dl-type').addEventListener('click', (e) => {
   const b = e.target.closest('button');
@@ -4316,7 +4323,6 @@ $('#dl-type').addEventListener('click', (e) => {
   deathLog.items = [];
   deathLog.loaded = false;
   renderDeathLog();
-  $('#dl-scroll').scrollTop = 0;
   loadDeathLog().catch((err) => showError(err.message));
 });
 
@@ -4326,6 +4332,7 @@ function setDeathLogOpen(open) {
   $('#dl-open').hidden = open;
   remember('deathLog', open ? 'open' : 'closed');
   fitDeathLog();
+  if (open) deathLogEnd();
   // the charts were measured at the other width
   for (const [root, redraw] of redraws) if (root.isConnected && root.offsetParent) redraw();
 }
@@ -4377,6 +4384,7 @@ async function showCombat({ refresh = false } = {}) {
     (first ? loadDeathLog() : refresh ? refreshDeathLog() : null),
   ]);
   fitDeathLog();
+  if (!refresh) deathLogEnd(); // opening the page always lands on the newest death
 }
 
 /* a player's combat card */
