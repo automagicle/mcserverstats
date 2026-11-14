@@ -5,8 +5,9 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 
 - **Collector**: a Cron-triggered Worker asks [mcstatus.io](https://mcstatus.io) about the server every minute and records the player count plus each named player's session in D1 (SQLite).
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
-- **Chat log and gear** (optional): a small Fabric server mod in `mod/` posts public chat, and what each player wears and
-  carries, to the Worker, which stores them in D1. It also shows chat typed on the dashboard in game (web chat).
+- **Chat log, combat and gear** (optional): a small Fabric server mod in `mod/` posts public chat, every death (who died,
+  who or what did it, and how), and what each player wears and carries, to the Worker, which stores them in D1. It also
+  shows chat typed on the dashboard in game (web chat).
   See [mod/README.md](mod/README.md) for setup.
 - **Seasons**: the main page shows the current season (season 2); `/s1/` is the season 1 archive. Seasons split the
   recorded data by time, so nothing is copied or deleted (see [Seasons](#seasons)).
@@ -40,6 +41,12 @@ keeps recording. When season 2 begins:
    hourly totals are per hour).
 2. If it's on a new server, update the address: `npx wrangler secret put MC_SERVER`.
 3. `npm run deploy`.
+
+**Recording before the official start**: to test before a season opens, set `SEASON2_START` to when recording should
+begin and `SEASON2_OPENS` to the official start. Everything from `SEASON2_START` on is season 2 and counts; charts hatch
+the time before `SEASON2_OPENS` ("Season starts Sun 7:30 PM", then "Before the season") with what was recorded drawn
+over it, and a line at the top says the season hasn't started. To drop the test data once the season is on, move
+`SEASON2_START` to the official time (it then counts as the end of season 1) and remove `SEASON2_OPENS`.
 
 From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
 total, the leaderboard opens on All, and it stops refreshing.
@@ -98,6 +105,24 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   per advancement; clicking one previews it, with a button to open the chat log there. It opens on the last 24 hours. Player data is fetched when you
   hover a leaderboard row or online chip, so pages usually open instantly; otherwise placeholders show until it loads.
 
+- **Combat** (its own page): every death the mod logs, for the range picked at the top (all time by default; up to two
+  days is drawn by the hour, longer by the day).
+  - **Red vs Blue**: one bar. Left of the divider is every Blue death: the ones no enemy caused (hatched), Blue's own
+    team kills, then Red's kills up to the divider. Right of it, mirrored, every Red death. Each side's kills hang off
+    the divider.
+  - **Kills and deaths over time**: stacked bars per hour or day (Red kills, Blue kills, other deaths), or running
+    totals as lines.
+  - **Leaderboard**: kills, deaths and K/D (kills ÷ deaths) for everyone on the roster. Click a heading to sort by it,
+    again to reverse; the sorted column is highlighted and the bar under each name follows it. The sort is remembered.
+  - **Death log** (beside the page, foldable): every death message, newest first, as the game worded it, with a bar in
+    the killer's faction color; All / PvP / Other filters it, a row's time opens the chat log at that moment, and new
+    deaths slide in as they're logged.
+  A kill is a death the game credits to another player (being knocked off a cliff counts). Deaths logged before mod
+  1.4.0 are worked out from the message itself.
+- **Player pages: egg and combat**: an **egg card** (what the player's Egg SMP egg does: passive, primary, secondary
+  and their cost, from `public/eggdata.js`, plus its level and energy as the mod last reported them) and a **combat
+  card** (kills, deaths, K/D and where that ranks, who they kill most, who kills them most, what else kills them, and
+  their latest kills and deaths).
 - **3D player model**: player pages show the player in 3D with their skin, the armor they last wore (trims, leather dye
   and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, axe, pickaxe,
   shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
@@ -150,5 +175,6 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   Smaller dips are left alone, since someone may really have relogged.
 - Usage on Cloudflare's free tier: about 1,440 Cron runs per day, plus a few D1 rows written per check (1 per player).
   The chat mod adds at most one request every 3 seconds while people are talking (one row per message), and an open
-  Chat log page checks for new messages every 10 seconds while it's visible. Web chat uses one Durable Object holding
+  Chat log page checks for new messages every 10 seconds while it's visible. The Combat page loads the season's deaths
+  once, then only what's new each minute. Web chat uses one Durable Object holding
   the mod's WebSocket, which sleeps while idle (the mod's pings are answered without waking it).

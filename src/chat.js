@@ -1,3 +1,4 @@
+import { deathInsert } from './combat.js';
 import { OPEN_ENDED } from './seasons.js';
 import { json, UUID_RE } from './util.js';
 
@@ -52,6 +53,7 @@ function cleanRich(d) {
 
 // POST /api/ingest/chat from the server mod: { events: [{ id, ts, kind, uuid?, name?, display?, rich?, text, via? }] }.
 // via is 'web' for a message sent from the dashboard (see link.js), 'admin' for one an admin sent there.
+// A death message can carry death: { cause, killer?, killer_uuid?, mob?, weapon? } (see combat.js).
 // Cloudflare Access only lets it through with the service token; the bearer token is checked here too.
 export async function ingestChat(request, env) {
   const secret = env.CHAT_INGEST_TOKEN || '';
@@ -76,6 +78,7 @@ export async function ingestChat(request, env) {
 
   const now = Date.now();
   const rows = [];
+  const deaths = []; // [event id, what's needed to say who did it]
   for (const e of events) {
     const valid = e && typeof e === 'object'
       && typeof e.id === 'string' && ID_RE.test(e.id)
@@ -87,7 +90,10 @@ export async function ingestChat(request, env) {
     if (!valid) continue;
     const text = clean(e.text, MAX_TEXT);
     if (!text) continue;
-    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, e.name ? clean(e.name, 40) || null : null, text, cleanDisplay(e.display), cleanRich(e.rich), e.via === 'web' || e.via === 'admin' ? e.via : null]);
+    const name = e.name ? clean(e.name, 40) || null : null;
+    const rich = cleanRich(e.rich);
+    rows.push([e.id, e.ts, e.kind, e.uuid ? e.uuid.toLowerCase() : null, name, text, cleanDisplay(e.display), rich, e.via === 'web' || e.via === 'admin' ? e.via : null]);
+    if (e.kind === 'death' && name) deaths.push([e.id, { name, text, rich: rich ? JSON.parse(rich) : null, death: e.death }]);
   }
 
   if (rows.length) {
@@ -96,7 +102,8 @@ export async function ingestChat(request, env) {
       `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text, display, rich, via)
        VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7, ?8, ?9)`
     );
-    await env.DB.batch(rows.map((r) => stmt.bind(...r)));
+    // each death also goes in the deaths table, with who did it (after its message, in the same batch)
+    await env.DB.batch([...rows.map((r) => stmt.bind(...r)), ...deaths.map(([id, m]) => deathInsert(env.DB, id, m))]);
   }
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }

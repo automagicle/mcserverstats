@@ -1298,3 +1298,234 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
   .p-model-card { width: auto; }
   .p-model { min-height: 260px; }
 }
+
+/* ---------- combat page ---------- */
+
+.page-title { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.combat { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; align-items: start; margin-top: 4px; }
+.combat.log-closed { grid-template-columns: minmax(0, 1fr); }
+.combat.log-closed .death-log { display: none; }
+.combat-main { min-width: 0; }
+.combat-main > .card:last-child { margin-bottom: 0; }
+.combat-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-height: 32px; margin: 4px 0 12px; }
+.combat-bar .card-title { align-items: baseline; margin-right: auto; }
+.combat-bar .range-ctl { margin-left: 0; }
+.dl-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.dl-open:hover { color: var(--ink); background: var(--grid); }
+.dl-open[hidden] { display: none; }
+
+/* Red vs Blue */
+.fb-counts { position: relative; height: 50px; }
+.fb-count { position: absolute; bottom: 8px; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; font-size: 13px; color: var(--ink-2); }
+.fb-count strong { font-size: 28px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.fb-count.fb-red { padding-right: 10px; flex-direction: row-reverse; }
+.fb-count.fb-blue { padding-left: 10px; }
+.fb-count.fb-red strong { color: var(--team-red); }
+.fb-count.fb-blue strong { color: var(--team-blue); }
+.fb-bar { position: relative; display: flex; gap: 2px; height: 34px; }
+.fb-bar.empty { border-radius: 8px; background: var(--surface-2); align-items: center; justify-content: center; }
+.fb-none { font-size: 13px; color: var(--muted); }
+.fb-seg {
+  flex: 1 1 0;
+  min-width: 3px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--page);
+  transition: filter 0.12s;
+}
+.fb-seg:hover { filter: brightness(1.1) saturate(1.1); }
+.fb-seg:first-child { border-radius: 8px 0 0 8px; }
+.fb-seg:nth-last-child(2) { border-radius: 0 8px 8px 0; }
+.fb-seg:first-child:nth-last-child(2) { border-radius: 8px; }
+.fb-kills.fb-red { background: var(--team-red); }
+.fb-kills.fb-blue { background: var(--team-blue); }
+/* deaths nobody on the other side caused: the faction's color, greyed and hatched */
+.fb-other { color: var(--ink-2); }
+.fb-other.fb-blue { --c: var(--team-blue); }
+.fb-other.fb-red { --c: var(--team-red); }
+.fb-other.fb-mix, .fb-own.fb-mix { --c: var(--muted); }
+.fb-other {
+  background-color: color-mix(in oklab, var(--c) 20%, var(--surface-2));
+  background-image: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in oklab, var(--c) 42%, transparent) 5px 6.5px);
+}
+/* killed by their own faction: its color in tight stripes */
+.fb-own.fb-blue { --c: var(--team-blue); }
+.fb-own.fb-red { --c: var(--team-red); }
+.fb-own {
+  background-image: repeating-linear-gradient(45deg, var(--c) 0 3px, color-mix(in oklab, var(--c) 45%, var(--surface)) 3px 6px);
+}
+.fb-mid { position: absolute; top: -6px; bottom: -6px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 2px var(--surface); }
+.fb-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+.fb-ends strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.fb-legend { flex-wrap: wrap; gap: 6px 16px; margin: 12px 0 0; font-size: 12.5px; }
+.fb-key { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border-radius: 3px; vertical-align: -1.5px; }
+
+/* kills and deaths over time */
+.cb-legend { flex-wrap: wrap; gap: 4px 16px; }
+.cb-key { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2.5px; background: var(--c); vertical-align: -0.5px; }
+.cb-key.line { width: 14px; height: 2.5px; border-radius: 2px; vertical-align: middle; }
+.cb-key.other, .cb-other { opacity: 0.55; }
+.cb-stack.hover { filter: brightness(1.12); }
+.cb-line { fill: none; stroke-width: 2.25; stroke-linejoin: round; stroke-linecap: round; }
+.cb-line.other { stroke-width: 1.75; stroke-dasharray: 4 4; opacity: 0.7; }
+.cb-dot { stroke: var(--surface); stroke-width: 1.5; }
+
+/* the leaderboard: headings sort, and the sorted column stands out */
+.cb-table { table-layout: fixed; }
+.cb-table th { padding: 0 0 4px; }
+.cb-table th:first-child { width: 30px; }
+.cb-table th.num { width: 88px; }
+.cb-table td { overflow: hidden; }
+.cb-table th.sortable button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.cb-table th.sortable button:hover { color: var(--ink); background: var(--hover); }
+.cb-table th.sortable button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+.cb-table th.sorted button { color: var(--ink); font-weight: 700; background: color-mix(in srgb, var(--series-1) 13%, transparent); }
+.sort-arrow path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0.3; }
+.sort-arrow path.on { opacity: 1; stroke: var(--series-1); stroke-width: 2; }
+.cb-table td.num { color: var(--ink-2); }
+.cb-table td.sorted { color: var(--ink); font-weight: 700; background: color-mix(in srgb, var(--series-1) 7%, transparent); }
+.cb-table td.sorted .pname a { font-weight: 700; }
+.cb-table td.zero:not(.sorted), .cb-table tr.quiet td.num { color: var(--muted); font-weight: 400; }
+.cb-table tr.quiet .pname { opacity: 0.6; }
+.cb-table tr.link:hover td.sorted { background: color-mix(in srgb, var(--series-1) 11%, transparent); }
+.bar.bar-deaths { background: var(--muted); }
+.cb-table .bar { transition: width 0.3s; }
+
+/* the death log, beside the page */
+.death-log { position: sticky; top: 12px; display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; height: calc(100vh - 110px); min-height: 320px; }
+.dl-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--grid); }
+.dl-head h2 { margin-right: auto; white-space: nowrap; }
+.dl-head .seg button { padding: 3px 9px; font-size: 12.5px; }
+.dl-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; outline: none; }
+.dl-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--series-1); }
+.dl-day { margin: 12px 14px 4px; font-size: 11.5px; }
+.dl-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: start;
+  padding: 6px 12px 6px 11px;
+  border-left: 3px solid transparent;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+.dl-row:hover { background: var(--hover); }
+.dl-row.by-red { border-left-color: var(--team-red); }
+.dl-row.by-blue { border-left-color: var(--team-blue); }
+.dl-icon { display: flex; padding-top: 2px; color: var(--muted); }
+.dl-row.pvp .dl-icon { color: var(--ink); }
+.dl-row.by-red .dl-icon { color: var(--team-red); }
+.dl-row.by-blue .dl-icon { color: var(--team-blue); }
+.dl-text { min-width: 0; overflow-wrap: anywhere; }
+.dl-text .msg-name { font-weight: 600; text-decoration: none; }
+.dl-text a.msg-name:hover { text-decoration: underline; }
+.dl-time { padding: 1px 0 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; }
+.dl-time:hover { color: var(--series-1); text-decoration: underline; }
+.death-log .chat-empty { padding: 40px 16px; }
+
+/* ---------- player page: egg and combat ---------- */
+
+.grid2.p-egg-combat { grid-template-columns: 340px minmax(0, 1fr); align-items: stretch; }
+.grid2.p-egg-combat.no-egg { grid-template-columns: minmax(0, 1fr); }
+.card-link { font-size: 13px; color: var(--series-1); text-decoration: none; white-space: nowrap; }
+.card-link:hover { text-decoration: underline; }
+
+.egg-card[hidden] { display: none; }
+.egg-head { display: flex; align-items: center; gap: 12px; }
+.egg-icon { flex: none; width: 44px; height: 44px; image-rendering: pixelated; }
+.egg-title { min-width: 0; margin-right: auto; }
+.egg-title h2 { font-size: 16px; }
+.egg-facts { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.egg-facts:empty { display: none; }
+.egg-fact { display: flex; align-items: center; gap: 7px; font-size: 12.5px; white-space: nowrap; }
+.egg-fact-label { color: var(--muted); }
+.egg-pips { display: inline-flex; gap: 3px; }
+.egg-pips i { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--axis); }
+.egg-pips i.on { background: var(--series-3); box-shadow: none; }
+.egg-cracked { padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical); font-size: 11px; font-weight: 700; }
+.egg-rows { display: grid; gap: 9px; margin-top: 14px; }
+.egg-row-label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.egg-tag { padding: 0 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.egg-row-text { margin-top: 1px; font-size: 13px; line-height: 1.42; color: var(--ink-2); }
+.egg-row-text strong { color: var(--ink); font-weight: 650; }
+.egg-cost { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
+.egg-row.locked .egg-row-text { opacity: 0.55; }
+.egg-none { margin-top: 12px; font-size: 13px; }
+.egg-asof { margin-top: 12px; font-size: 11.5px; }
+
+.pcb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.pcb-stat { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); min-width: 0; }
+.pcb-label { font-size: 12.5px; color: var(--ink-2); }
+.pcb-value { font-size: 26px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.pcb-sub { min-height: 17px; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcb-lists { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.pcb-list h3, .pcb-recent h3 { margin: 0 0 5px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.pcb-list ul { margin: 0; padding: 0; list-style: none; }
+.pcb-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2.5px 0; font-size: 13px; }
+.pcb-who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; text-decoration: none; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.pcb-who:hover { text-decoration: underline; }
+.pcb-who img { flex: none; border-radius: 3px; image-rendering: pixelated; }
+.pcb-who span { overflow: hidden; text-overflow: ellipsis; }
+.pcb-n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pcb-none { font-size: 13px; }
+.pcb-recent { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.pcb-recent .dl-row { padding: 4px 0 4px 8px; margin-left: -2px; }
+.pcb-recent .dl-row.is-kill .dl-icon { color: var(--good); }
+.pcb-recent .dl-row.is-death .dl-icon { color: var(--critical); }
+.pcb-recent .dl-row { border-left-color: transparent; }
+
+@media (max-width: 900px) {
+  .combat { grid-template-columns: minmax(0, 1fr); }
+  .death-log { position: static; height: auto; max-height: 72vh; }
+  .grid2.p-egg-combat { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  /* narrow: tighter number columns, and only the sorted heading keeps its arrow, so names have room */
+  .cb-table th:first-child { width: 22px; }
+  .cb-table th.num { width: 46px; }
+  .cb-table th.num:nth-child(4) { width: 58px; }
+  .cb-table th.num:nth-child(5) { width: 50px; }
+  .cb-table th.sortable button { padding: 5px 4px; gap: 3px; }
+  .cb-table th.sortable:not(.sorted) .sort-arrow { display: none; }
+  .cb-table td { padding-left: 4px; padding-right: 6px; }
+  .cb-table .pname { gap: 6px; }
+  .cb-table .pname img { width: 18px; height: 18px; }
+  .fb-count strong { font-size: 22px; }
+  .fb-legend { font-size: 12px; }
+  .pcb-lists { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .pcb-value { font-size: 22px; }
+  .egg-head { flex-wrap: wrap; }
+  .egg-facts { flex-direction: row; gap: 12px; width: 100%; }
+}

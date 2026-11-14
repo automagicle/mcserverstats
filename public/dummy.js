@@ -2,8 +2,9 @@
 
 // Made-up activity for /?dummydata, to see the page full before the season has real data.
 // It answers the same /api/* requests the server does, all worked out from one set of generated
-// sessions, so the charts, leaderboard, player pages and cards agree with each other. The chat log
-// is left empty on purpose.
+// sessions, so the charts, leaderboard, player pages and cards agree with each other. Kills and
+// deaths happen during those sessions (more of them on faction-war nights). The chat log is left
+// empty on purpose.
 //
 // The season "began" SEASON_DAYS ago with a launch event, and follows a school-week rhythm:
 // short after-school sessions, busier evenings, Friday and Saturday faction-war nights,
@@ -11,7 +12,7 @@
 // time of day; casual players drift off as the novelty wears off, and a couple joined late.
 // The same day always generates the same data, so live refreshes and reloads stay consistent.
 
-window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los_Angeles' } = {}) {
+window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los_Angeles', eggIds = {} } = {}) {
   const POLL = 60;
   const DAY = 86400;
   const SEASON_DAYS = 18;
@@ -224,6 +225,85 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
   for (const { s, e } of all) for (let t = s; t <= e; t += 60) counts[(t - seasonStart) / 60]++;
   const countAt = (t) => (down.has(t) ? 0 : counts[(t - seasonStart) / 60] || 0);
 
+  /* ---------- kills and deaths ---------- */
+
+  // While someone's on, now and then they kill an enemy who's on too (grinders more often), and
+  // now and then the world gets them. Each death is a row like the server's: who, by whom, how.
+  const teamByName = new Map(list.map((p) => [p.ign.toLowerCase(), p.team]));
+  const TEAM_COLOR = { red: '#ff5555', blue: '#5555ff' };
+  const SKILL = { grinder: 1.6, regular: 1, casual: 0.55, rare: 0.35 };
+  const PVP_WAYS = [
+    [0.62, 'melee', (v, k) => [' was slain by ', k]],
+    [0.14, 'shot', (v, k) => [' was shot by ', k]],
+    [0.08, 'explosion', (v, k) => [' was blown up by ', k]],
+    [0.08, 'fall', (v, k) => [' hit the ground too hard whilst trying to escape ', k]],
+    [0.08, 'magic', (v, k) => [' was killed by ', k, ' using magic']],
+  ];
+  const WORLD_WAYS = [
+    [0.2, 'fall', null, ' fell from a high place'],
+    [0.14, 'melee', 'zombie', ' was slain by Zombie'],
+    [0.12, 'shot', 'skeleton', ' was shot by Skeleton'],
+    [0.11, 'explosion', 'creeper', ' was blown up by Creeper'],
+    [0.09, 'lava', null, ' tried to swim in lava'],
+    [0.07, 'melee', 'enderman', ' was slain by Enderman'],
+    [0.06, 'drown', null, ' drowned'],
+    [0.06, 'fire', null, ' burned to death'],
+    [0.05, 'melee', 'wither_skeleton', ' was slain by Wither Skeleton'],
+    [0.04, 'void', null, ' fell out of the world'],
+    [0.03, 'melee', 'warden', ' was slain by Warden'],
+    [0.03, 'starve', null, ' starved to death'],
+  ];
+  const weighted = (r, ways) => {
+    let x = r() * ways.reduce((a, w) => a + w[0], 0);
+    for (const w of ways) if ((x -= w[0]) <= 0) return w;
+    return ways[0];
+  };
+  const SWORDS = ['Excalibur', 'Blue Tears', 'Faction Ender', 'Stabby', 'The Negotiator'];
+  const deaths = [];
+  {
+    const r = rng(hash(`combat:${startDate}`));
+    const onAt = (t) => all.filter((x) => x.s <= t && x.e >= t).map((x) => x.p);
+    const piece = (name) => ({ t: name, c: TEAM_COLOR[teamByName.get(name.toLowerCase())], p: name });
+    for (const x of all) {
+      const hours = (x.e - x.s) / 3600;
+      const dow = local(x.s).dow;
+      const war = dow === 5 || dow === 6 ? 2.2 : 1;
+      const team = teamByName.get(x.p.name.toLowerCase());
+      // kills by this player during this session
+      for (let n = hours * 0.42 * SKILL[x.p.habit] * war; n > 0; n--) {
+        if (r() > n) break;
+        const t = Math.floor(x.s + r() * (x.e - x.s));
+        const others = onAt(t).filter((o) => o !== x.p);
+        const enemies = others.filter((o) => teamByName.get(o.name.toLowerCase()) !== team);
+        const pool = r() < 0.04 ? others : enemies; // rarely, a teammate
+        if (!pool.length) continue;
+        const victim = pool[Math.floor(r() * pool.length)];
+        const [, cause, words] = weighted(r, PVP_WAYS);
+        const parts = words(victim.name, x.p.name);
+        const weapon = cause === 'melee' && r() < 0.3 ? SWORDS[Math.floor(r() * SWORDS.length)] : null;
+        const rich = [piece(victim.name), ...parts.map((w) => (w === x.p.name ? piece(w) : { t: w }))];
+        if (weapon) rich.push({ t: ' using ' }, { t: `[${weapon}]`, c: '#55ffff' });
+        deaths.push({ ts: t, victim, killer: x.p.name, cause, mob: null, rich });
+      }
+      // and the world getting them
+      for (let n = hours * 0.2 / Math.sqrt(SKILL[x.p.habit]); n > 0; n--) {
+        if (r() > n) break;
+        const [, cause, mob, words] = weighted(r, WORLD_WAYS);
+        deaths.push({ ts: Math.floor(x.s + r() * (x.e - x.s)), victim: x.p, killer: null, cause, mob, rich: [piece(x.p.name), { t: words }] });
+      }
+    }
+    deaths.sort((a, b) => a.ts - b.ts);
+    deaths.forEach((d, i) => {
+      d.id = i + 1;
+      d.text = d.rich.map((p) => p.t).join('');
+    });
+  }
+  const deathMessage = (d) => ({
+    id: d.id, ts: d.ts * 1000, kind: 'death', uuid: d.victim.uuid, name: d.victim.name, text: d.text,
+    display: [{ t: d.victim.name, c: TEAM_COLOR[teamByName.get(d.victim.name.toLowerCase())] }], rich: d.rich,
+    killer: d.killer, cause: d.cause, mob: d.mob,
+  });
+
   /* ---------- answering requests ---------- */
 
   // A session as of now: not started yet (null), in progress (ends now), or over.
@@ -320,6 +400,32 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
       return { from, to, poll_seconds: POLL, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows };
     },
 
+    '/api/combat': (q, now) => {
+      const after = Number(q.get('after')) || 0;
+      const rows = deaths.filter((d) => d.ts <= now && d.id > after);
+      const uuids = {};
+      for (const p of people) uuids[p.name.toLowerCase()] = p.uuid;
+      return {
+        cols: ['id', 'ts', 'victim', 'killer', 'cause', 'mob'],
+        rows: rows.map((d) => [d.id, d.ts, d.victim.name, d.killer, d.cause, d.mob]),
+        uuids,
+        max_id: rows.length ? rows.at(-1).id : after,
+      };
+    },
+    '/api/combat/log': (q, now) => {
+      const limit = Math.min(100, Number(q.get('limit')) || 40);
+      const player = q.get('player')?.toLowerCase();
+      const type = q.get('type');
+      const cursor = (key) => /^(\d+):(\d+)$/.exec(q.get(key) || '')?.slice(1).map(Number);
+      const before = cursor('before'), after = cursor('after');
+      const rows = deaths.filter((d) => d.ts <= now
+        && (!player || d.victim.name.toLowerCase() === player || d.killer?.toLowerCase() === player)
+        && (type === 'pvp' ? d.killer : type === 'other' ? !d.killer : true)
+        && (!before || d.ts * 1000 < before[0] || (d.ts * 1000 === before[0] && d.id < before[1]))
+        && (!after || d.ts * 1000 > after[0] || (d.ts * 1000 === after[0] && d.id > after[1]))).reverse();
+      return { results: rows.slice(0, limit).map(deathMessage), more: rows.length > limit };
+    },
+
     // The chat log stays empty.
     '/api/chat': () => ({ messages: [], more_before: false, more_after: false, max_id: 0, unread: 0 }),
     '/api/chat/search': () => ({ results: [], more: false }),
@@ -377,7 +483,11 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
     if (r() < (p.habit === 'grinder' ? 0.55 : 0.15)) items.push({ id: 'mace', glint: r() < 0.6 });
     else if (r() < 0.15) items.push({ id: 'trident', glint: true });
     for (const it of items) if (!it.glint) delete it.glint;
-    return { ts: nowMin() - Math.floor(r() * 5 * 3600), armor, mainhand: items[1], items };
+    // their egg: the roster's, mostly upgraded for the keen, with whatever energy dying has left them
+    const eggKey = list.find((x) => x.ign === p.name)?.egg;
+    const eggType = Number(Object.keys(eggIds).find((id) => eggIds[id] === eggKey)) || 0;
+    const egg = eggType ? { type: eggType, tier: r() < (p.habit === 'grinder' ? 0.9 : p.habit === 'regular' ? 0.6 : 0.2) ? 2 : 1, energy: Math.floor(r() * 6) } : undefined;
+    return { ts: nowMin() - Math.floor(r() * 5 * 3600), armor, mainhand: items[1], items, ...(egg && { egg }) };
   }
 
   return async function dummyApi(path) {

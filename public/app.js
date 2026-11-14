@@ -171,7 +171,7 @@ let dummy = null;
 function dummyApi() {
   dummy ??= new Promise((resolve, reject) => {
     const script = el('script', { src: '/dummy.js' });
-    script.onload = () => rosterLoad.then((players) => resolve(window.createDummyApi({ roster: players, tz: TZ })));
+    script.onload = () => rosterLoad.then((players) => resolve(window.createDummyApi({ roster: players, tz: TZ, eggIds: EGG_BY_ID })));
     script.onerror = () => reject(new Error('couldn’t load the sample data'));
     document.head.append(script);
   });
@@ -255,7 +255,16 @@ const EGGS = {
   combo: ['Combo Egg', '#7DD3FF', 'allay_spawn_egg'],
   electric: ['Electric Egg', '#4FD8FF', 'glow_squid_spawn_egg'],
   deadshot: ['Deadshot Egg', '#E04848', 'pillager_spawn_egg'],
+  purpur: ['Purpur Egg', '#C9A0DC', 'shulker_spawn_egg'],
 };
+// The egg mod's number for each egg (its egg.type score), which the server mod reports with a player's gear.
+const EGG_BY_ID = {
+  1: 'life', 2: 'hunger', 3: 'sky', 4: 'gravity', 5: 'gambler', 7: 'fire', 8: 'blood', 9: 'echo', 10: 'aqua', 11: 'meteor',
+  12: 'wizard', 13: 'train', 14: 'redstone', 15: 'binding', 16: 'murica', 17: 'dung', 18: 'fat', 19: 'woods', 20: 'smite',
+  21: 'stash', 22: 'sulfur', 23: 'subzero', 24: 'combo', 25: 'electric', 26: 'deadshot', 27: 'purpur',
+};
+// A player's egg: the one the server last reported them having, else the one the roster gives them.
+const playerEggId = (name, gear) => EGG_BY_ID[gear?.egg?.type] || rosterOf(name)?.egg || null;
 // An egg the datapack doesn't have (yet): its name from the id, drawn as a plain egg.
 const eggInfo = (id) => {
   if (!id) return null;
@@ -753,8 +762,19 @@ function renderWeekGrid(root, grid, describe, { animate = false, cellColor = nul
 
 /* ---------- "no data yet" block ---------- */
 
+// Where charts mark the season as beginning. Normally that's the first recorded check; when the
+// season has an official start later than that (recording began early, to test), it's the official
+// start: what was recorded before it still shows, drawn over the hatching.
+const seasonOpens = () => state.status?.season?.opens ?? null;
+const chartStart = () => Math.max(state.dataStart ?? 0, seasonOpens() ?? 0) || null;
+function hatchText() {
+  const opens = seasonOpens();
+  if (!opens || opens <= (state.dataStart ?? 0)) return 'No data yet';
+  return nowSec() < opens ? `Season starts ${fmt(opens, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'Before the season';
+}
+
 // A quiet grey rectangle with sparse diagonal lines, covering x0..x1 of a plot.
-function noDataBlock(svg, parent, id, x0, x1, top, height, { label = true } = {}) {
+function noDataBlock(svg, parent, id, x0, x1, top, height, { label = true, text = hatchText() } = {}) {
   const w = x1 - x0;
   if (w < 1) return;
   if (!svg.querySelector(`#${CSS.escape(id)}`)) {
@@ -768,7 +788,7 @@ function noDataBlock(svg, parent, id, x0, x1, top, height, { label = true } = {}
   );
   if (label && w >= 70) {
     const t = sv('text', { x: x0 + w / 2, y: top + 16, 'text-anchor': 'middle', class: 'axis-text nodata-text' });
-    t.textContent = 'No data yet';
+    t.textContent = w >= 150 ? text : text.replace(/^Season starts /, 'Starts ');
     parent.append(t);
   }
 }
@@ -1678,6 +1698,9 @@ function renderSeasonNote() {
       ? ` It starts ${fmt(s.start, { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : '';
     kids = [el('strong', { text: `No Season ${SEASON} data yet.` }), `${when} `,
       el('a', { href: `/s${SEASON - 1}/`, text: `See Season ${SEASON - 1}’s archived stats →` })];
+  } else if (st && SEASON === CURRENT_SEASON && seasonOpens() && nowSec() < seasonOpens()) {
+    kids = [el('strong', { text: `Season ${SEASON} starts ${fmt(seasonOpens(), { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` }),
+      ' Until then this is test data; it’s already being recorded, and charts mark the time before the start.'];
   } else if (st && SEASON < CURRENT_SEASON && !$('#view-home').hidden) {
     kids = [el('strong', { text: `Season ${SEASON} archive` }),
       archived() ? ` · ${seasonSpan()}. ` : ` · still recording until Season ${SEASON + 1} starts. `,
@@ -1816,7 +1839,7 @@ async function renderServerDaily(animate = false, slide = 0) {
   }
   renderBars($('#heatmap'), {
     buckets: r.buckets, vals, windowKey: windowKey(w), labels: 'day',
-    fmtTick: (v) => `${v}h`, dataStart: state.dataStart,
+    fmtTick: (v) => `${v}h`, dataStart: chartStart(),
     describe: (i) => [
       { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
       { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
@@ -1987,7 +2010,7 @@ async function loadTimeline(slide = 0) {
     legend.replaceChildren(key(c1, 'Average online'), key(c3, 'Peak online'));
   }
   opts.key = windowKey(w);
-  opts.dataStart = state.dataStart;
+  opts.dataStart = chartStart();
   opts.yMin = state.status?.peak_ever; // same scale on every range: up to the most ever online
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
 }
@@ -2180,16 +2203,16 @@ async function loadSnapshots(from) {
   return state.snaps.rows.filter((r) => r[0] >= from);
 }
 
-// Shows one of the views ('home', 'player', 'chat') and marks its tab.
+// Shows one of the views ('home', 'player', 'chat', 'combat') and marks its tab.
 function showView(name) {
-  for (const v of ['home', 'player', 'chat']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['home', 'player', 'chat', 'combat']) $(`#view-${v}`).hidden = v !== name;
   if (name !== 'player') clearPlayerModel();
   document.body.classList.toggle('chat-mode', name === 'chat');
   $('#search-btn').hidden = name !== 'chat';
   if (name !== 'chat') closeSearch();
   if (state.status) renderSeasonNote();
-  const tab = name === 'chat' ? 'chat' : 'activity';
-  for (const t of ['activity', 'chat']) {
+  const tab = name === 'chat' || name === 'combat' ? name : 'activity';
+  for (const t of ['activity', 'chat', 'combat']) {
     if (t === tab) $(`#tab-${t}`).setAttribute('aria-current', 'page');
     else $(`#tab-${t}`).removeAttribute('aria-current');
   }
@@ -2258,6 +2281,10 @@ function showPlayerLoading(uuid) {
   renderWeekGrid($('#p-weekgrid'), empty, () => [{ value: 'Loading…' }]);
   weekPrev.delete($('#p-weekgrid'));
   $('#p-recent').replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+  $('#p-combat').replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+  $('#pcb-sub').textContent = '';
+  $('#p-egg-card').hidden = true;
+  $('#p-egg-combat').classList.add('no-egg');
 }
 
 let playerReq = 0;
@@ -2316,6 +2343,8 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   state.playerData = { name: player.name, sessions, liveSession: isOnline ? sessions.at(-1) : null, chat: chatInfo, gear: r.gear };
   renderPlayerName();
   renderPlayerModel(player.name, r.gear);
+  renderPlayerEgg(player.name, r.gear).catch((e) => console.error('egg card:', e));
+  renderPlayerCombat(player.name).catch((e) => console.error('combat card:', e));
   setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the ${archived() ? 'final' : 'last'} 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
@@ -2373,7 +2402,7 @@ function renderPlayerName() {
   const team = $('#p-team');
   team.hidden = !r;
   if (r) {
-    const egg = eggInfo(r.egg);
+    const egg = eggInfo(playerEggId(d.name, d.gear));
     team.replaceChildren(el('span', { class: `team-dot team-${r.team}` }),
       el('span', { class: `team-${r.team}`, text: TEAM_NAMES[r.team] || r.team }),
       el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }),
@@ -2397,7 +2426,7 @@ function renderPlayerModel(name, gear) {
     uuid: gear?.uuid ? gear.uuid.replace(/-/g, '') : null,
     armor: gear?.armor || {},
     mainhand: bestWeapon(gear),
-    offhand: heldEgg(gear, rosterOf(name)?.egg),
+    offhand: heldEgg(gear, playerEggId(name, gear)),
   };
   const key = JSON.stringify(spec);
   renderModelNote(spec, gear);
@@ -2426,7 +2455,7 @@ function renderModelNote(spec, gear) {
   const note = $('#p-model-note');
   const parts = [];
   if (spec.mainhand) parts.push(el('span', { text: itemName(spec.mainhand) }));
-  const egg = eggInfo(rosterOf(state.playerData?.name)?.egg);
+  const egg = eggInfo(playerEggId(state.playerData?.name, gear));
   if (egg) parts.push(el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: egg.name }));
   const when = gear?.ts ? `Gear updated ${ago(gear.ts)}` : 'No gear reported yet';
   note.replaceChildren(
@@ -2488,7 +2517,7 @@ function renderPlayerActivity(animate = false, slide = 0, grow = false) {
     labels: hourly ? 'hour' : 'day',
     fmtTick: (v) => (hourly ? `${v}m` : `${v}h`),
     scale: hourly ? { ymax: 60, ystep: 15 } : null, // minutes per hour: always the full hour, for fair comparison
-    dataStart: state.dataStart,
+    dataStart: chartStart(),
     describe: (i) => {
       const b = r.buckets[i];
       const when = hourly
@@ -3188,7 +3217,7 @@ async function loadChatGraph(slide = 0) {
     loadChatGraph.slideTimer = setTimeout(() => cursor.classList.remove('sliding'), SLIDE_MS);
   }
   renderLineChart($('#chat-chart'), {
-    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: state.dataStart, whoAt,
+    key: windowKey(w), from, to, step: POLL, ticks: 2, dataStart: chartStart(), whoAt,
     series: [{ name: 'online', cls: '1', color: 'var(--series-1)', area: true, pts: rows.map(([t, up, v]) => ({ t, v, down: !up })) }],
     fmtValue: (v) => `${v} ${v === 1 ? 'player' : 'players'}`,
     fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · click to read`,
@@ -3723,6 +3752,763 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+/* ---------- combat: kills and deaths ---------- */
+
+// Every death in the season comes from /api/combat once (then only what's new), and the Combat
+// page and each player's combat card are worked out from it here, for whatever range is picked.
+
+const CAUSE_LABELS = {
+  melee: 'Slain', shot: 'Shot', explosion: 'Explosion', fall: 'Fall', fire: 'Fire', lava: 'Lava', drown: 'Drowning',
+  void: 'The void', magic: 'Magic', wither: 'Wither', sonic: 'Sonic boom', lightning: 'Lightning', crush: 'Crushed',
+  suffocation: 'Suffocation', starve: 'Starvation', thorns: 'Thorns', freeze: 'Freezing', other: 'Other',
+};
+const mobLabel = (mob) => mob.replace(/^.*:/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+// What ended a death no player caused: the creature if there was one, else how.
+const naturalCause = (d) => (d.mob ? mobLabel(d.mob) : CAUSE_LABELS[d.cause] || 'Other');
+const SWORD_ICON = ['M13 3 6.5 9.5', 'M4.8 7.8l3.4 3.4', 'M6 10l-2.8 2.8', 'M13 3h-2.4M13 3v2.4'];
+const TEAMS = ['red', 'blue'];
+const TEAM_SHORT = { red: 'Red', blue: 'Blue' };
+const teamOf = (name) => rosterOf(name)?.team ?? null;
+
+const combat = {
+  rows: [], // every death this season, oldest first: { id, ts (seconds), victim, killer, cause, mob }
+  uuids: new Map(), // lowercased name -> uuid, for the players named in them
+  maxId: 0,
+  loaded: false,
+  pending: null,
+  sort: (() => {
+    const [key, dir] = (recall('combatSort') || '').split(':');
+    return ['name', 'kills', 'deaths', 'kd'].includes(key) ? { key, dir: dir === '1' ? 1 : -1 } : { key: 'kills', dir: -1 };
+  })(),
+  chartMode: recall('combatChart') === 'total' ? 'total' : 'each',
+  view: null, // what the page last drew: { from, to, rows, buckets, hourly }
+};
+
+// Loads the season's deaths; later calls fetch only what's been logged since.
+function loadCombat() {
+  if (combat.pending) return combat.pending;
+  if (combat.loaded && archived()) return Promise.resolve();
+  combat.pending = (async () => {
+    const res = await api(combat.loaded ? `/api/combat?after=${combat.maxId}` : '/api/combat');
+    for (const [name, uuid] of Object.entries(res.uuids || {})) combat.uuids.set(name, uuid);
+    const have = new Set(combat.rows.map((d) => d.id));
+    const fresh = res.rows.filter((r) => !have.has(r[0])).map(([id, ts, victim, killer, cause, mob]) => ({ id, ts, victim, killer, cause, mob }));
+    for (const d of fresh) {
+      for (const n of [d.victim, d.killer]) {
+        const uuid = n && combat.uuids.get(n.toLowerCase());
+        if (uuid && !knownNames.has(uuid)) knownNames.set(uuid, n);
+      }
+    }
+    if (fresh.length) combat.rows = combat.rows.concat(fresh).sort((a, b) => a.ts - b.ts || a.id - b.id);
+    combat.maxId = Math.max(combat.maxId, res.max_id || 0);
+    combat.loaded = true;
+    return fresh.length;
+  })().finally(() => { combat.pending = null; });
+  return combat.pending;
+}
+
+const combatUuid = (name) => combat.uuids.get(name.toLowerCase()) || uuidForName(name);
+
+// Kills, deaths and K/D for everyone in these deaths (and everyone on the roster, even with none).
+function combatPlayers(rows, { everyone = true } = {}) {
+  const by = new Map();
+  const get = (name) => {
+    const key = name.toLowerCase();
+    if (!by.has(key)) by.set(key, { key, name: rosterOf(name)?.ign || name, kills: 0, deaths: 0, pvpDeaths: 0 });
+    return by.get(key);
+  };
+  if (everyone) for (const p of roster.values()) get(p.ign);
+  for (const d of rows) {
+    const v = get(d.victim);
+    v.deaths++;
+    if (d.killer) {
+      v.pvpDeaths++;
+      get(d.killer).kills++;
+    }
+  }
+  for (const p of by.values()) p.kd = p.kills / Math.max(1, p.deaths);
+  return [...by.values()];
+}
+const fmtKd = (p) => (p.kills + p.deaths === 0 ? '–' : p.kd.toFixed(2));
+
+/* the range the whole page shows */
+
+const COMBAT_PRESETS = [
+  { v: '24h', label: '24h', unit: 'hour', count: 24, long: 'Last 24 hours' },
+  dayPreset(7), dayPreset(30),
+  { v: 'all', label: 'All', unit: 'all', count: 0, long: 'All time' },
+];
+
+// The picked range as { from, to, rows (the deaths in it), buckets, hourly }: one bucket per hour
+// for up to two days, else one per day.
+function combatView() {
+  const w = cbCtl.get();
+  let r = resolveWindow(w);
+  if (w.unit === 'all') {
+    const first = Math.min(state.dataStart ?? nowSec(), combat.rows[0]?.ts ?? nowSec());
+    const now = nowSec();
+    r = now - first <= 48 * 3600
+      ? resolveWindow({ unit: 'hour', count: Math.max(6, Math.ceil((currentHourEnd() - first) / 3600)), end: null })
+      : resolveWindow({ unit: 'day', count: Math.min(400, daysCovered(first)), end: null });
+    r = { ...r, all: true };
+  }
+  const rows = r.all ? combat.rows : combat.rows.filter((d) => d.ts >= r.from && d.ts < r.to);
+  return { ...r, w, rows, hourly: r.buckets[0].end - r.buckets[0].start <= 3600 };
+}
+
+/* Red vs Blue: each side's deaths, split by what caused them */
+
+function factionTotals(rows) {
+  const t = { red: { kills: 0, own: 0, other: 0, deaths: 0 }, blue: { kills: 0, own: 0, other: 0, deaths: 0 }, noTeam: 0 };
+  for (const d of rows) {
+    const vt = teamOf(d.victim);
+    const kt = d.killer ? teamOf(d.killer) : null;
+    if (!t[vt]) { t.noTeam++; continue; }
+    t[vt].deaths++;
+    if (kt && kt !== vt && t[kt]) t[kt].kills++;
+    else if (kt === vt) t[vt].own++;
+    else t[vt].other++;
+  }
+  return t;
+}
+
+// One long bar. Left of the divider is every Blue death: the ones nobody caused (hatched), then
+// Blue's own team kills, then Red's kills, ending at the divider. Right of it, mirrored, is every
+// Red death: Blue's kills from the divider out, then Red's team kills, then the rest.
+function renderFactionBar() {
+  const card = $('#cb-score-card');
+  card.hidden = !roster.size;
+  if (!roster.size || !combat.view) return;
+  const root = $('#cb-score');
+  const t = factionTotals(combat.view.rows);
+  const total = t.red.deaths + t.blue.deaths;
+  const seg = (cls, n, tipRows) => {
+    if (!n) return null;
+    const s = el('div', { class: `fb-seg ${cls}`, style: `flex-grow:${n}` }, n / total > 0.06 ? el('span', { text: String(n) }) : null);
+    s.tipRows = tipRows;
+    return s;
+  };
+  const tipRow = (n, what, color) => [{ value: n.toLocaleString(), label: what, color }];
+  const segs = [
+    seg('fb-other fb-blue', t.blue.other, tipRow(t.blue.other, 'Other Blue deaths: mobs, falls, lava…', 'var(--team-blue)')),
+    seg('fb-own fb-blue', t.blue.own, tipRow(t.blue.own, 'Blue players killed by their own faction', 'var(--team-blue)')),
+    seg('fb-kills fb-red', t.red.kills, tipRow(t.red.kills, 'Blue players killed by Red', 'var(--team-red)')),
+    seg('fb-kills fb-blue', t.blue.kills, tipRow(t.blue.kills, 'Red players killed by Blue', 'var(--team-blue)')),
+    seg('fb-own fb-red', t.red.own, tipRow(t.red.own, 'Red players killed by their own faction', 'var(--team-red)')),
+    seg('fb-other fb-red', t.red.other, tipRow(t.red.other, 'Other Red deaths: mobs, falls, lava…', 'var(--team-red)')),
+  ].filter(Boolean);
+
+  // the divider sits where Blue's deaths end; the kill counts hang off it, kept on screen
+  const split = total ? (t.blue.deaths / total) * 100 : 50;
+  const room = Math.min(42, (118 / Math.max(280, root.clientWidth || 600)) * 100);
+  const at = Math.min(100 - room, Math.max(room, split));
+  const kills = (team, style) => el('div', { class: `fb-count fb-${team}`, style },
+    el('strong', { text: t[team].kills.toLocaleString() }), el('span', { text: `${TEAM_SHORT[team]} ${t[team].kills === 1 ? 'kill' : 'kills'}` }));
+  const end = (team) => el('div', { class: `fb-end fb-${team}` },
+    el('strong', { text: t[team].deaths.toLocaleString() }), ` ${TEAM_SHORT[team]} ${t[team].deaths === 1 ? 'death' : 'deaths'}`);
+  const key = (cls, text) => el('span', {}, el('i', { class: `fb-key ${cls}` }), text);
+
+  const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...segs,
+    total ? el('i', { class: 'fb-mid', style: `left:${split}%` }) : el('span', { class: 'fb-none', text: 'No deaths in this range yet' }));
+  root.replaceChildren(
+    el('div', { class: 'fb-counts' }, kills('red', `right:${100 - at}%`), kills('blue', `left:${at}%`)),
+    bar,
+    el('div', { class: 'fb-ends' }, end('blue'), end('red')),
+    el('div', { class: 'legend fb-legend' },
+      key('fb-kills fb-red', 'Red kills'), key('fb-kills fb-blue', 'Blue kills'),
+      ...(t.red.own + t.blue.own ? [key('fb-own fb-mix', 'Killed by their own faction')] : []),
+      key('fb-other fb-mix', 'Other deaths (mobs, falls, lava…)'),
+      ...(t.noTeam ? [el('span', { class: 'muted', text: `${t.noTeam} by players without a faction not shown` })] : [])),
+  );
+  attachCellTips(bar, '.fb-seg', (s) => s.tipRows);
+  redraws.set(root, renderFactionBar);
+}
+
+/* kills and deaths over time */
+
+// The three things a death can be, for the chart: a kill by each faction, or anything else.
+// Without factions (an earlier season) it's kills by players and everything else.
+function combatSeries() {
+  if (!roster.size) {
+    return [
+      { key: 'pvp', label: 'Killed by a player', color: 'var(--series-1)', is: (d) => !!d.killer },
+      { key: 'other', label: 'Other deaths', color: 'var(--muted)', is: () => true },
+    ];
+  }
+  const by = (team) => (d) => d.killer && teamOf(d.killer) === team && teamOf(d.victim) !== team;
+  return [
+    { key: 'red', label: 'Red kills', color: 'var(--team-red)', is: by('red') },
+    { key: 'blue', label: 'Blue kills', color: 'var(--team-blue)', is: by('blue') },
+    { key: 'other', label: 'Other deaths', color: 'var(--muted)', is: () => true },
+  ];
+}
+
+function renderCombatChart() {
+  const v = combat.view;
+  if (!v) return;
+  const root = $('#cb-chart');
+  const series = combatSeries().map((s) => ({ ...s, vals: v.buckets.map(() => 0) }));
+  let i = 0;
+  for (const d of v.rows) {
+    while (i < v.buckets.length - 1 && d.ts >= v.buckets[i].end) i++;
+    if (d.ts < v.buckets[i].start) continue;
+    series.find((s) => s.is(d)).vals[i]++;
+  }
+  const total = combat.chartMode === 'total';
+  $('#cb-mode-each').textContent = v.hourly ? 'Per hour' : 'Per day';
+  for (const b of $('#cb-chart-mode').children) b.setAttribute('aria-pressed', String(b.dataset.v === combat.chartMode));
+  $('#cb-chart-label').textContent = total ? 'adding up since the start of the range' : v.hourly ? 'each hour' : 'each day';
+  $('#cb-legend').replaceChildren(...series.map((s) => el('span', {},
+    el('i', { class: `cb-key${total ? ' line' : ''}${s.key === 'other' ? ' other' : ''}`, style: `--c:${s.color}` }), s.label)));
+  if (!v.rows.length) {
+    redraws.delete(root);
+    root.replaceChildren(el('div', { class: 'empty-chart', text: combat.rows.length ? 'No kills or deaths in this range.' : 'No kills or deaths yet this season.' }));
+    return;
+  }
+  const spec = { buckets: v.buckets, hourly: v.hourly, series, total, start: chartStart() };
+  redraws.set(root, () => drawCombatChart(root, spec));
+  drawCombatChart(root, spec);
+}
+
+// Stacked bars per hour or day, or (total) one rising line per series.
+function drawCombatChart(root, spec) {
+  root.replaceChildren();
+  const { buckets, series, total, hourly } = spec;
+  const n = buckets.length;
+  const W = Math.max(280, root.clientWidth);
+  const H = root.clientHeight || 200;
+  const m = { l: 30, r: total ? 10 : 4, t: 10, b: 24 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const slot = pw / n;
+  const from = buckets[0].start, to = buckets[n - 1].end;
+
+  // running totals per series, or the height of each bucket's stack
+  const sums = series.map((s) => { let acc = 0; return s.vals.map((x) => (acc += x)); });
+  const vmax = total ? Math.max(1, ...sums.map((a) => a[n - 1])) : Math.max(1, ...buckets.map((_, i) => series.reduce((a, s) => a + s.vals[i], 0)));
+  const ystep = Math.max(1, niceStep(vmax / 4));
+  const ymax = Math.max(ystep * 2, Math.ceil(vmax / ystep) * ystep);
+  const y = (val) => m.t + ph - (val / ymax) * ph;
+  const xAt = (t) => {
+    if (t <= from) return m.l;
+    if (t >= to) return m.l + pw;
+    let lo = 0, hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (buckets[mid].start <= t) lo = mid; else hi = mid - 1;
+    }
+    return m.l + slot * (lo + (t - buckets[lo].start) / (buckets[lo].end - buckets[lo].start));
+  };
+
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Kills and deaths over time' });
+  for (let val = 0; val <= ymax + 1e-9; val += ystep) {
+    if (val > 0) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(val), y2: y(val), class: 'gridline' }));
+    const tx = sv('text', { x: m.l - 6, y: y(val) + 4, 'text-anchor': 'end', class: 'axis-text' });
+    tx.textContent = String(val);
+    svg.append(tx);
+  }
+  if (spec.start && spec.start > from) noDataBlock(svg, svg, `${root.id}-hatch`, m.l, xAt(spec.start), m.t, ph);
+
+  const labelEvery = hourly
+    ? (slot >= 36 ? 1 : slot >= 18 ? 2 : slot >= 12 ? 3 : 6)
+    : (slot >= 44 ? 1 : slot >= 22 ? 2 : slot >= 14 ? 3 : slot >= 7 ? 7 : 14);
+  const gap = slot >= 8 ? 2 * Math.max(2, slot * 0.15) : slot * 0.3;
+  const bw = Math.min(40, slot - gap);
+  const stacks = [];
+  buckets.forEach((b, i) => {
+    const cx = m.l + slot * (i + 0.5);
+    if (!total) {
+      const g = sv('g', { class: 'cb-stack' });
+      let acc = 0;
+      const live = series.filter((s) => s.vals[i] > 0);
+      live.forEach((s, k) => {
+        const y1 = y(acc), y0 = y(acc + s.vals[i]);
+        acc += s.vals[i];
+        const x0 = cx - bw / 2, x1 = cx + bw / 2;
+        const top = k === live.length - 1;
+        const r = top ? Math.min(3, (y1 - y0) / 2, bw / 2) : 0;
+        g.append(sv('path', {
+          d: `M${x0},${y1 - (k ? 1 : 0)}V${y0 + r}Q${x0},${y0} ${x0 + r},${y0}H${x1 - r}Q${x1},${y0} ${x1},${y0 + r}V${y1 - (k ? 1 : 0)}Z`,
+          style: `fill:${s.color}`, class: s.key === 'other' ? 'cb-other' : '',
+        }));
+      });
+      svg.append(g);
+      stacks[i] = g;
+    }
+    if ((n - 1 - i) % labelEvery === 0) {
+      const tx = sv('text', { x: cx, y: H - 6, 'text-anchor': 'middle', class: 'axis-text' });
+      if (hourly) tx.textContent = hourName(hourInfo(b.start).hour, true);
+      else {
+        const day = Number(b.date.slice(8));
+        tx.textContent = b.date === todayStr() && !archived() ? 'Today'
+          : day === 1 || slot >= 44 || i < labelEvery || labelEvery >= 7 ? fmtDay(b.date, { month: 'short', day: 'numeric' })
+          : String(day);
+      }
+      svg.append(tx);
+    }
+  });
+  svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
+
+  let cross = null;
+  const dots = [];
+  if (total) {
+    // "other" underneath, the factions on top
+    for (const k of series.map((_, idx) => idx).reverse()) {
+      const s = series[k];
+      let d = `M${m.l},${y(0)}`;
+      sums[k].forEach((val, i) => { d += `L${m.l + slot * (i + 1)},${y(val)}`; });
+      svg.append(sv('path', { d, class: `cb-line${s.key === 'other' ? ' other' : ''}`, style: `stroke:${s.color}` }));
+      const dot = sv('circle', { r: 3.5, class: 'cb-dot', style: `fill:${s.color}`, visibility: 'hidden' });
+      dots[k] = dot;
+    }
+    cross = sv('line', { y1: m.t, y2: m.t + ph, class: 'crosshair', visibility: 'hidden' });
+    svg.append(cross, ...dots.filter(Boolean));
+  }
+
+  const when = (b) => (hourly
+    ? `${fmt(b.start, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(b.start).hour)}–${hourName(hourInfo(b.end).hour)}`
+    : fmtDay(b.date));
+  let hovered = null;
+  const clear = () => {
+    hovered?.classList.remove('hover');
+    hovered = null;
+    cross?.setAttribute('visibility', 'hidden');
+    for (const d of dots) d?.setAttribute('visibility', 'hidden');
+    hideTip();
+  };
+  const move = (e) => {
+    const px = e.clientX - svg.getBoundingClientRect().left;
+    if (px < m.l || px > m.l + pw) return clear();
+    const i = Math.min(n - 1, Math.max(0, Math.floor((px - m.l) / slot)));
+    const b = buckets[i];
+    if (total) {
+      const x = m.l + slot * (i + 1);
+      cross.setAttribute('x1', x);
+      cross.setAttribute('x2', x);
+      cross.setAttribute('visibility', 'visible');
+      dots.forEach((d, k) => {
+        d.setAttribute('cx', x);
+        d.setAttribute('cy', y(sums[k][i]));
+        d.setAttribute('visibility', 'visible');
+      });
+    } else if (hovered !== stacks[i]) {
+      hovered?.classList.remove('hover');
+      hovered = stacks[i] || null;
+      hovered?.classList.add('hover');
+    }
+    showTip(e.clientX, e.clientY, [
+      { label: total ? `By the end of ${hourly ? hourName(hourInfo(b.start).hour) : fmtDay(b.date, { weekday: 'short', month: 'short', day: 'numeric' })}` : when(b) },
+      ...series.map((s, k) => ({ value: String(total ? sums[k][i] : s.vals[i]), label: s.label, color: s.color })),
+    ]);
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerdown', move);
+  svg.addEventListener('pointerleave', clear);
+  root.append(svg);
+}
+
+/* the leaderboard: click a column heading to sort by it */
+
+const COMBAT_COLS = [
+  { key: 'name', label: 'Player', first: 1, hint: 'Sort by name' },
+  { key: 'kills', label: 'Kills', first: -1, hint: 'Players they killed' },
+  { key: 'deaths', label: 'Deaths', first: -1, hint: 'Every time they died, to a player or not' },
+  { key: 'kd', label: 'K/D', first: -1, hint: 'Kills for every death' },
+];
+
+function sortCombat(players) {
+  const { key, dir } = combat.sort;
+  const byName = (a, b) => shownName(a.name).localeCompare(shownName(b.name), undefined, { sensitivity: 'base' });
+  return players.sort((a, b) => {
+    if (key === 'name') return dir * byName(a, b);
+    // players with no kills or deaths go last whichever way it's sorted
+    const quietA = a.kills + a.deaths === 0, quietB = b.kills + b.deaths === 0;
+    if (quietA !== quietB) return quietA ? 1 : -1;
+    return dir * (a[key] - b[key]) || b.kills - a.kills || a.deaths - b.deaths || byName(a, b);
+  });
+}
+
+function sortArrow(dir) {
+  const s = sv('svg', { width: 10, height: 12, viewBox: '0 0 10 12', 'aria-hidden': 'true', class: 'sort-arrow' });
+  s.append(sv('path', { d: 'M2 4.5 5 1.5l3 3', class: dir > 0 ? 'on' : '' }), sv('path', { d: 'M2 7.5l3 3 3-3', class: dir < 0 ? 'on' : '' }));
+  return s;
+}
+
+function renderCombatLeaderboard() {
+  const v = combat.view;
+  if (!v) return;
+  const root = $('#cb-leaderboard');
+  const players = sortCombat(combatPlayers(v.rows));
+  const { key, dir } = combat.sort;
+  const active = players.filter((p) => p.kills + p.deaths > 0).length;
+  $('#cb-lb-note').textContent = players.length
+    ? `${active} of ${players.length} ${players.length === 1 ? 'player has' : 'players have'} a kill or death · sorted by ${key === 'kd' ? 'K/D' : COMBAT_COLS.find((c) => c.key === key).label.toLowerCase()}`
+    : '';
+  if (!players.length) {
+    root.replaceChildren(el('div', { class: 'empty', text: 'No kills or deaths in this range yet.' }));
+    return;
+  }
+  const oldTops = rowTops(root);
+  // the bar under each name is the column it's sorted by
+  const barKey = key === 'name' ? 'kills' : key;
+  const top = Math.max(...players.map((p) => p[barKey]), 0) || 1;
+
+  const head = el('tr', {}, el('th', {}));
+  for (const c of COMBAT_COLS) {
+    const on = c.key === key;
+    const btn = el('button', { type: 'button', title: on ? `${c.hint} (click to reverse)` : c.hint }, el('span', { text: c.label }), sortArrow(on ? dir : 0));
+    btn.addEventListener('click', () => {
+      combat.sort = on ? { key, dir: -dir } : { key: c.key, dir: c.first };
+      remember('combatSort', `${combat.sort.key}:${combat.sort.dir}`);
+      renderCombatLeaderboard();
+    });
+    head.append(el('th', { class: `sortable${c.key === 'name' ? '' : ' num'}${on ? ' sorted' : ''}`, 'aria-sort': on ? (dir < 0 ? 'descending' : 'ascending') : 'none' }, btn));
+  }
+
+  const tbody = el('tbody');
+  players.forEach((p, i) => {
+    const uuid = combatUuid(p.name);
+    const team = teamOf(p.name);
+    const quiet = p.kills + p.deaths === 0;
+    const link = teamName(playerLink(el('a', { text: shownName(p.name) }), uuid, p.name), p.name);
+    delete link.dataset.card; // a click goes straight to their page, like the activity leaderboard
+    const cell = (k, text, title) => el('td', { class: `num${k === key ? ' sorted' : ''}${quiet || text === '0' ? ' zero' : ''}`, text, ...(title && { title }) });
+    const tr = el('tr', { class: `${uuid ? 'link' : ''}${quiet ? ' quiet' : ''}`, 'data-uuid': p.key },
+      el('td', { class: 'rank', text: String(i + 1) }),
+      el('td', { class: key === 'name' ? 'sorted' : '' },
+        el('div', { class: 'pname' }, headImg(p.name, 22), link),
+        el('div', { class: `bar${barKey === 'deaths' ? ' bar-deaths' : team ? ` team-${team}` : ''}`, style: `width:${quiet ? 0 : Math.max(1, (p[barKey] / top) * 100)}%` })),
+      cell('kills', p.kills.toLocaleString()),
+      cell('deaths', p.deaths.toLocaleString(), p.deaths ? `${p.pvpDeaths} by players · ${p.deaths - p.pvpDeaths} other` : null),
+      cell('kd', fmtKd(p), quiet ? null : `${p.kills} ${p.kills === 1 ? 'kill' : 'kills'} ÷ ${p.deaths} ${p.deaths === 1 ? 'death' : 'deaths'}`));
+    if (uuid) {
+      tr.addEventListener('click', (e) => { if (e.target !== link) location.hash = `#/player/${uuid}`; });
+      tr.addEventListener('pointerenter', () => prefetchPlayer(uuid));
+    }
+    tbody.append(tr);
+  });
+  root.replaceChildren(el('table', { class: 'cb-table' }, el('thead', {}, head), tbody));
+  moveRows(root, oldTops);
+}
+
+/* the death log: every death message, newest first */
+
+const deathLog = {
+  items: [], // newest first, as /api/combat/log gives them
+  more: false,
+  busy: false,
+  loaded: false,
+  type: ['pvp', 'other'].includes(recall('deathLogType')) ? recall('deathLogType') : '',
+  req: 0,
+};
+const DEATH_PAGE = 40;
+
+// One death, as the game worded it: every name is a link in its own colors.
+function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
+  const team = m.killer ? teamOf(m.killer) : null;
+  const text = el('div', { class: 'dl-text' });
+  if (m.rich) text.append(...richText(m));
+  else text.append(m.text);
+  const time = el('button', { type: 'button', class: 'dl-time', text: when,
+    title: `${fmt(m.ts / 1000, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · open the chat log here` });
+  time.addEventListener('click', () => {
+    chat.pendingJump = { id: m.id, ts: m.ts };
+    location.hash = '#/chat';
+  });
+  return el('div', { class: `dl-row${m.killer ? ' pvp' : ''}${team ? ` by-${team}` : ''}` },
+    el('span', { class: 'dl-icon', title: m.killer ? 'Killed by a player' : naturalCause(m) }, icon(m.killer ? SWORD_ICON : SYS_ICONS.death, 14)),
+    text, time);
+}
+
+function renderDeathLog(fresh = new Set()) {
+  const frag = document.createDocumentFragment();
+  let day = null;
+  for (const m of deathLog.items) {
+    const d = hourInfo(m.ts / 1000).date;
+    if (d !== day) {
+      frag.append(el('div', { class: 'chat-day dl-day', role: 'separator' }, el('span', { text: relativeDay(d, { weekday: 'short', month: 'short', day: 'numeric' }) })));
+      day = d;
+    }
+    const row = deathRow(m);
+    if (fresh.has(m.id)) row.classList.add('msg-new');
+    frag.append(row);
+  }
+  $('#dl-list').replaceChildren(frag);
+  const edge = $('#dl-edge');
+  if (!deathLog.loaded) edge.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading deaths…' }));
+  else if (!deathLog.items.length) {
+    edge.replaceChildren(el('div', { class: 'chat-empty' },
+      el('strong', { text: deathLog.type === 'pvp' ? 'No kills yet' : 'No deaths yet' }),
+      el('div', { text: deathLog.type ? 'Nothing of this kind has been logged this season.' : 'Deaths show up here as the server logs them.' })));
+  } else if (deathLog.busy) edge.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading older deaths…' }));
+  else if (!deathLog.more) edge.replaceChildren(el('div', { class: 'chat-note', text: 'That’s every death this season.' }));
+  else edge.replaceChildren();
+  for (const b of $('#dl-type').children) b.setAttribute('aria-pressed', String(b.dataset.v === deathLog.type));
+}
+
+const deathLogPath = (extra) => `/api/combat/log?limit=${DEATH_PAGE}${deathLog.type ? `&type=${deathLog.type}` : ''}${extra}`;
+
+// First page (or again from the top after the filter changes).
+async function loadDeathLog() {
+  const req = ++deathLog.req;
+  deathLog.busy = true;
+  try {
+    const res = await api(deathLogPath(''));
+    if (req !== deathLog.req) return;
+    deathLog.items = res.results;
+    deathLog.more = res.more;
+    deathLog.loaded = true;
+  } finally {
+    if (req === deathLog.req) {
+      deathLog.busy = false;
+      renderDeathLog();
+    }
+  }
+}
+
+async function loadOlderDeaths() {
+  if (deathLog.busy || !deathLog.more || !deathLog.items.length) return;
+  const req = deathLog.req;
+  const last = deathLog.items.at(-1);
+  deathLog.busy = true;
+  renderDeathLog();
+  try {
+    const res = await api(deathLogPath(`&before=${last.ts}:${last.id}`));
+    if (req !== deathLog.req) return;
+    const have = new Set(deathLog.items.map((m) => m.id));
+    deathLog.items = deathLog.items.concat(res.results.filter((m) => !have.has(m.id)));
+    deathLog.more = res.more;
+  } finally {
+    if (req === deathLog.req) {
+      deathLog.busy = false;
+      renderDeathLog();
+    }
+  }
+}
+
+// New deaths since the top one slide in above it.
+async function refreshDeathLog() {
+  if (!deathLog.loaded || deathLog.busy) return;
+  if (!deathLog.items.length) return loadDeathLog();
+  const req = deathLog.req;
+  const first = deathLog.items[0];
+  const res = await api(deathLogPath(`&after=${first.ts}:${first.id}`));
+  if (req !== deathLog.req || !res.results.length) return;
+  if (res.more) return loadDeathLog(); // more new ones than a page: start over from the top
+  const have = new Set(deathLog.items.map((m) => m.id));
+  const fresh = res.results.filter((m) => !have.has(m.id));
+  if (!fresh.length) return;
+  const scroll = $('#dl-scroll');
+  const before = scroll.scrollHeight, top = scroll.scrollTop;
+  deathLog.items = fresh.concat(deathLog.items);
+  renderDeathLog(new Set(fresh.map((m) => m.id)));
+  if (top > 40) scroll.scrollTop = top + scroll.scrollHeight - before; // reading further down: stay put
+}
+
+$('#dl-scroll').addEventListener('scroll', () => {
+  const s = $('#dl-scroll');
+  if (s.scrollHeight - s.scrollTop - s.clientHeight < 300) loadOlderDeaths().catch((e) => showError(e.message));
+}, { passive: true });
+$('#dl-type').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === deathLog.type) return;
+  deathLog.type = b.dataset.v;
+  remember('deathLogType', deathLog.type);
+  deathLog.items = [];
+  deathLog.loaded = false;
+  renderDeathLog();
+  $('#dl-scroll').scrollTop = 0;
+  loadDeathLog().catch((err) => showError(err.message));
+});
+
+// The log can be folded away (remembered); the rest of the page then takes the full width.
+function setDeathLogOpen(open) {
+  $('#combat').classList.toggle('log-closed', !open);
+  $('#dl-open').hidden = open;
+  remember('deathLog', open ? 'open' : 'closed');
+  fitDeathLog();
+  // the charts were measured at the other width
+  for (const [root, redraw] of redraws) if (root.isConnected && root.offsetParent) redraw();
+}
+$('#dl-close').addEventListener('click', () => setDeathLogOpen(false));
+$('#dl-open').addEventListener('click', () => {
+  setDeathLogOpen(true);
+  if (matchMedia('(max-width: 900px)').matches) $('#death-log').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+});
+
+// Beside the page, the log is as tall as the window allows and stays in view while the page scrolls.
+function fitDeathLog() {
+  const log = $('#death-log');
+  if ($('#view-combat').hidden) return;
+  if (matchMedia('(max-width: 900px)').matches) {
+    log.style.height = '';
+    return;
+  }
+  const top = Math.max(12, $('#combat').getBoundingClientRect().top);
+  log.style.height = `${Math.max(320, window.innerHeight - top - 12)}px`;
+}
+let fitQueued = false;
+const queueFit = () => {
+  if (fitQueued || $('#view-combat').hidden) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; fitDeathLog(); });
+};
+window.addEventListener('scroll', queueFit, { passive: true });
+window.addEventListener('resize', queueFit);
+
+function renderCombat() {
+  const w = cbCtl.get();
+  combat.view = combatView();
+  cbCtl.sync();
+  $('#cb-label').textContent = w.unit === 'all' ? (archived() ? 'The whole season' : 'All time') : windowLabel(w, combat.view, COMBAT_PRESETS);
+  renderFactionBar();
+  renderCombatChart();
+  renderCombatLeaderboard();
+}
+
+async function showCombat({ refresh = false } = {}) {
+  showView('combat');
+  document.title = `Combat · ${SITE}`;
+  await loadStatus();
+  fitDeathLog();
+  const first = !deathLog.loaded;
+  if (first) renderDeathLog();
+  await Promise.all([
+    loadCombat().then(renderCombat),
+    (first ? loadDeathLog() : refresh ? refreshDeathLog() : null),
+  ]);
+  fitDeathLog();
+}
+
+/* a player's combat card */
+
+async function renderPlayerCombat(name) {
+  const root = $('#p-combat');
+  const mine = (state.playerCombatReq = (state.playerCombatReq || 0) + 1);
+  if (!combat.loaded) root.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+  const [, log] = await Promise.all([
+    loadCombat(),
+    api(`/api/combat/log?player=${encodeURIComponent(name)}&limit=8`).catch(() => null),
+  ]);
+  if (mine !== state.playerCombatReq || state.playerData?.name !== name) return;
+  const is = (n) => n && n.toLowerCase() === name.toLowerCase();
+  const kills = combat.rows.filter((d) => is(d.killer));
+  const deaths = combat.rows.filter((d) => is(d.victim));
+  const me = { kills: kills.length, deaths: deaths.length, kd: kills.length / Math.max(1, deaths.length) };
+  $('#pcb-sub').textContent = archived() ? 'the whole season' : 'this season';
+
+  // where they stand among everyone with a kill or a death
+  const everyone = combatPlayers(combat.rows).filter((p) => p.kills + p.deaths > 0);
+  const rank = (key) => {
+    if (!me[key] || everyone.length < 2) return '';
+    return `#${1 + everyone.filter((p) => p[key] > me[key]).length} of ${everyone.length}`;
+  };
+  const stat = (label, value, sub, cls = '') => el('div', { class: `pcb-stat ${cls}` },
+    el('div', { class: 'pcb-label', text: label }), el('div', { class: 'pcb-value', text: value }), el('div', { class: 'pcb-sub', text: sub }));
+  const pvpDeaths = deaths.filter((d) => d.killer).length;
+  const stats = el('div', { class: 'pcb-stats' },
+    stat('Kills', me.kills.toLocaleString(), rank('kills'), 'kills'),
+    stat('Deaths', me.deaths.toLocaleString(), me.deaths ? `${pvpDeaths} PvP · ${me.deaths - pvpDeaths} other` : "", "deaths"),
+    stat('K/D', fmtKd(me), rank('kd')));
+
+  if (!me.kills && !me.deaths) {
+    root.replaceChildren(stats, el('div', { class: 'empty', text: 'No kills or deaths logged for them this season.' }));
+    return;
+  }
+
+  // who they kill, who kills them, and what else does
+  const tally = (list, keyOf) => {
+    const counts = new Map();
+    for (const d of list) {
+      const k = keyOf(d);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    return [...counts].sort((a, b) => b[1] - a[1]);
+  };
+  const person = ([who, n]) => {
+    const a = teamName(playerLink(el('a', { class: 'pcb-who' }, headImg(who, 16, { width: 16, height: 16 }), el('span', { text: shownName(who) })), combatUuid(who), who), who);
+    return el('li', {}, a, el('span', { class: 'pcb-n', text: `×${n}` }));
+  };
+  const thing = ([what, n]) => el('li', {}, el('span', { class: 'pcb-who', text: what }), el('span', { class: 'pcb-n', text: `×${n}` }));
+  const list = (title, items, render, none) => el('div', { class: 'pcb-list' }, el('h3', { text: title }),
+    items.length ? el('ul', {}, ...items.slice(0, 4).map(render)) : el('div', { class: 'muted pcb-none', text: none }));
+  const lists = el('div', { class: 'pcb-lists' },
+    list('Killed most', tally(kills, (d) => d.victim), person, 'No kills yet'),
+    list('Killed by most', tally(deaths.filter((d) => d.killer), (d) => d.killer), person, 'Never killed by a player'),
+    list('Other deaths', tally(deaths.filter((d) => !d.killer), naturalCause), thing, 'None'));
+
+  const recent = el('div', { class: 'pcb-recent' }, el('h3', { text: 'Latest kills and deaths' }));
+  if (log?.results.length) {
+    for (const m of log.results) {
+      const row = deathRow(m, { when: ago(m.ts / 1000) });
+      row.classList.add(is(m.killer) ? 'is-kill' : 'is-death');
+      row.querySelector('.dl-icon').title = is(m.killer) ? 'Their kill' : 'Their death';
+      recent.append(row);
+    }
+  } else recent.append(el('div', { class: 'muted pcb-none', text: log ? 'None yet' : 'Couldn’t load the latest ones.' }));
+  root.replaceChildren(stats, lists, recent);
+}
+
+/* a player's egg: what it does, and (from the server mod) its level and energy */
+
+let eggInfoLoad = null;
+const loadEggInfo = () => (eggInfoLoad ??= import('/eggdata.js').then((m) => m.EGG_INFO).catch(() => { eggInfoLoad = null; return {}; }));
+
+async function renderPlayerEgg(name, gear) {
+  const card = $('#p-egg-card');
+  const live = gear?.egg && EGG_BY_ID[gear.egg.type] ? gear.egg : null;
+  const id = (live && EGG_BY_ID[live.type]) || rosterOf(name)?.egg;
+  const egg = eggInfo(id);
+  $('#p-egg-combat').classList.toggle('no-egg', !egg);
+  card.hidden = !egg;
+  if (!egg) return;
+  const info = (await loadEggInfo())[egg.id];
+  if (state.playerData?.name !== name) return;
+
+  const head = el('div', { class: 'egg-head' },
+    el('img', { class: 'egg-icon', src: `/api/mc/textures/item/${egg.model}.png`, alt: '', width: 44, height: 44 }),
+    el('div', { class: 'egg-title' },
+      el('h2', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '' }, info?.symbol ? `${info.symbol} ` : '', egg.name),
+      el('div', { class: 'card-sub', text: info?.theme || 'Egg SMP egg' })));
+
+  const facts = el('div', { class: 'egg-facts' });
+  if (live) {
+    const tier = live.tier >= 2 ? 2 : 1;
+    const energy = Math.max(0, Math.min(5, live.energy ?? 0));
+    facts.append(
+      el('div', { class: 'egg-fact' }, el('span', { class: 'egg-fact-label', text: 'Level' }), el('strong', { text: tier === 2 ? 'II' : 'I' })),
+      el('div', { class: 'egg-fact', title: `${energy} of 5 energy. Dying costs 1; at 0 the egg is Cracked.` },
+        el('span', { class: 'egg-fact-label', text: 'Energy' }),
+        el('span', { class: 'egg-pips', role: 'img', 'aria-label': `${energy} of 5` },
+          ...Array.from({ length: 5 }, (_, i) => el('i', { class: i < energy ? 'on' : '' }))),
+        ...(energy === 0 ? [el('span', { class: 'egg-cracked', text: 'Cracked' })] : [])));
+  }
+  head.append(facts);
+
+  const body = [head];
+  if (!info) {
+    body.push(el('div', { class: 'muted egg-none', text: 'This egg isn’t in the egg datapack yet, so its abilities aren’t listed.' }));
+  } else {
+    const locked = live && live.tier < 2;
+    const row = (label, a, { second = false } = {}) => {
+      if (a === undefined) return null;
+      const off = second && locked && !a?.always;
+      return el('div', { class: `egg-row${off ? ' locked' : ''}` },
+        el('div', { class: 'egg-row-label' }, label, second && a && !a.always ? el('span', { class: 'egg-tag', text: off ? 'Locked · Level II' : 'Level II' }) : null),
+        a
+          ? el('div', { class: 'egg-row-text' }, ...(a.name ? [el('strong', { text: a.name }), ' '] : []), a.text,
+            a.cost ? el('span', { class: 'egg-cost', text: a.cost }) : null)
+          : el('div', { class: 'egg-row-text muted', text: 'None' }));
+    };
+    body.push(el('div', { class: 'egg-rows' },
+      row('Passive', { text: info.passive }),
+      row('Primary', info.primary),
+      row('Secondary', info.secondary, { second: true })));
+  }
+  if (live && gear.ts) body.push(el('div', { class: 'egg-asof muted', text: `Level and energy as of ${ago(gear.ts)}` }));
+  else if (!live) body.push(el('div', { class: 'egg-asof muted', text: 'Level and energy show once they’ve played with the server mod (1.4.0 or newer).' }));
+  $('#p-egg-body').replaceChildren(...body);
+}
+
 /* ---------- the IGN / Name switch: redraw names where they're showing ---------- */
 
 function rerenderNames() {
@@ -3733,6 +4519,10 @@ function rerenderNames() {
     loadLeaderboard().catch((e) => showError(e.message));
   } else if (!$('#view-player').hidden) {
     renderPlayerName();
+    if (state.playerData) renderPlayerCombat(state.playerData.name).catch(() => {});
+  } else if (!$('#view-combat').hidden && combat.loaded) {
+    renderCombat();
+    renderDeathLog();
   } else if (!$('#view-chat').hidden && chat.loaded) {
     const anchor = chatAnchor();
     renderChat();
@@ -3756,6 +4546,7 @@ async function route() {
   try {
     if (m) await showPlayer(m[1]);
     else if (location.hash === '#/chat') await showChat();
+    else if (location.hash === '#/combat') await showCombat();
     else await showHome();
     renderUnread();
   } catch (err) {
@@ -3901,6 +4692,27 @@ const lbCtl = rangeControl($('#lb-ctl'), {
   onChange: () => loadLeaderboard().catch((e) => showError(e.message)),
 });
 lbCtl.set(presetWindow(LB_PRESETS[0]));
+// Combat: one range for the whole page; up to two days is drawn by the hour, longer by the day.
+const cbCtl = rangeControl($('#cb-ctl'), {
+  presets: COMBAT_PRESETS, picker: 'datetime',
+  fromPicker: (from, to) => {
+    const w = pickPlayerRange(from, to);
+    return typeof w === 'string' ? w : { ...w, preset: matchPreset(COMBAT_PRESETS, w.unit, w.count) };
+  },
+  onChange: () => renderCombat(),
+});
+cbCtl.set(presetWindow(COMBAT_PRESETS.at(-1)));
+$('#cb-chart-mode').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === combat.chartMode) return;
+  combat.chartMode = b.dataset.v;
+  remember('combatChart', combat.chartMode);
+  renderCombatChart();
+});
+if (recall('deathLog') === 'closed') {
+  $('#combat').classList.add('log-closed');
+  $('#dl-open').hidden = false;
+}
 
 pinchZoom($('#timeline'), {
   ctl: tlCtl, toWindow: pickSeconds(TL_PRESETS), min: 30 * 60, max: 90 * 86400,
@@ -3935,6 +4747,7 @@ async function refresh() {
     const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
     if (m) await showPlayer(m[1], { refresh: true });
     else if (location.hash === '#/chat') await showChat({ refresh: true });
+    else if (location.hash === '#/combat') await showCombat({ refresh: true });
     else await showHome();
     renderUnread();
     showError('');

@@ -15,6 +15,9 @@ function parseStart(v) {
 }
 
 const startOf = (env, n) => (n <= 1 ? 0 : parseStart(env[`SEASON${n}_START`]));
+// When a season officially begins, if that's later than when its recording started (SEASONn_OPENS).
+// It doesn't change what's recorded or counted; the dashboard's charts mark it as the season's start.
+const opensAt = (env, n) => parseStart(env[`SEASON${n}_OPENS`]);
 
 // The time bounds for a request's ?season=N, as [lo, hi) in unix seconds.
 // Without ?season, nothing is filtered. Returns null for a malformed season.
@@ -34,6 +37,7 @@ export function seasonFor(env, url) {
     ended,
     start: start || null, // season 1 has no set start; its data starts at the first check
     end: next, // may be in the future: the season ends then
+    opens: start != null && opensAt(env, n) > start ? opensAt(env, n) : null,
   };
   if (!started) return { n, lo: FAR, hi: FAR, info };
   return { n, lo: start, hi: next != null && next > start ? next : FAR, info };

@@ -3,7 +3,7 @@
 	"id": "mcstats_chat",
 	"version": "${version}",
 	"name": "mcstats chat log",
-	"description": "Sends chat, joins, leaves, deaths and advancements, and what players wear and carry, to an mcstats dashboard, and shows chat sent from the dashboard in game.",
+	"description": "Sends chat, joins, leaves, deaths (with who did it) and advancements, and what players wear and carry, to an mcstats dashboard, and shows chat sent from the dashboard in game.",
 	"license": "MIT",
 	"environment": "server",
 	"entrypoints": {

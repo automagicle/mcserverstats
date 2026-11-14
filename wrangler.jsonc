@@ -45,6 +45,9 @@
     // Everything before it is season 1 (shown at /s1/); the main page shows only what comes after.
     // Until it's set, season 2 has no data and season 1 keeps going.
     "SEASON2_START": "2026-11-13T19:00:00-08:00",
+    // When the season officially begins, if recording started earlier (to test). Charts mark this as the
+    // season's start; what was recorded before it still shows and still counts. Remove it to show none.
+    "SEASON2_OPENS": "2026-11-15T19:30:00-08:00",
     // Filled in after enabling Cloudflare Access on the workers.dev URL.
     // Until both are set, every /api/* request is refused.
     "ACCESS_TEAM_DOMAIN": "magicle.cloudflareaccess.com",

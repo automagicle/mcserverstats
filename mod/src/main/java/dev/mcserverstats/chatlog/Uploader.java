@@ -84,6 +84,11 @@ final class Uploader {
 
 	// via: "web" for chat sent from the dashboard.
 	void add(String kind, UUID uuid, String name, JsonArray display, JsonArray rich, String text, String via) {
+		add(kind, uuid, name, display, rich, text, via, null);
+	}
+
+	// death: for a death message, how it happened ({ cause, killer?, killer_uuid?, mob?, weapon? }).
+	void add(String kind, UUID uuid, String name, JsonArray display, JsonArray rich, String text, String via, JsonObject death) {
 		if (text == null || text.isBlank()) return;
 		JsonObject e = new JsonObject();
 		e.addProperty("id", runId + "-" + seq.incrementAndGet());
@@ -95,6 +100,7 @@ final class Uploader {
 		if (rich != null) e.add("rich", rich);
 		e.addProperty("text", text);
 		if (via != null) e.addProperty("via", via);
+		if (death != null) e.add("death", death);
 		synchronized (queue) {
 			queue.addLast(e);
 			while (queue.size() > MAX_QUEUE) {

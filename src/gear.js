@@ -43,6 +43,14 @@ function cleanReport(p) {
     if (it) out[hand] = it;
   }
   out.items = (Array.isArray(p.items) ? p.items : []).slice(0, MAX_ITEMS).map(cleanItem).filter(Boolean);
+  // Egg SMP: which egg they have (its number in the egg mod), its level (1 or 2) and its energy (0 to 5)
+  const small = (v, max) => Number.isInteger(v) && v >= 0 && v <= max;
+  const e = p.egg;
+  if (e && typeof e === 'object' && small(e.type, 999) && e.type > 0) {
+    out.egg = { type: e.type };
+    if (small(e.tier, 9)) out.egg.tier = e.tier;
+    if (small(e.energy, 99)) out.egg.energy = e.energy;
+  }
   return out;
 }
 
@@ -78,7 +86,7 @@ export async function ingestGear(request, env) {
   return json({ stored: rows.length });
 }
 
-// The player's last report, as { ts, uuid, armor, mainhand?, offhand?, items }, or null.
+// The player's last report, as { ts, uuid, armor, mainhand?, offhand?, items, egg? }, or null.
 export async function gearFor(db, name) {
   const row = await db.prepare('SELECT ts, uuid, data FROM gear WHERE name = ?').bind(name).first();
   if (!row) return null;

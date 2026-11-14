@@ -23,6 +23,7 @@
       <nav class="tabs" aria-label="Pages">
         <a href="#/" id="tab-activity">Activity</a>
         <a href="#/chat" id="tab-chat">Chat log<span class="tab-badge" id="tab-chat-badge" hidden></span></a>
+        <a href="#/combat" id="tab-combat">Combat</a>
       </nav>
       <nav class="tabs seasons" aria-label="Seasons">
         <a href="/s1/" id="season-1" title="Season 1 (archived)">S1</a>
@@ -178,6 +179,19 @@
         </div>
       </div>
 
+      <div class="grid2 p-egg-combat" id="p-egg-combat">
+        <section class="card egg-card" id="p-egg-card" hidden>
+          <div id="p-egg-body"></div>
+        </section>
+        <section class="card pcombat-card" id="p-combat-card">
+          <div class="card-head">
+            <div class="card-title"><h2>Combat</h2><span class="card-sub" id="pcb-sub"></span></div>
+            <a class="card-link" href="#/combat">Combat page →</a>
+          </div>
+          <div id="p-combat"></div>
+        </section>
+      </div>
+
       <section class="card">
         <div class="card-head">
           <div class="card-title">
@@ -198,6 +212,66 @@
           <div class="card-head"><h2>Recent sessions</h2></div>
           <div id="p-recent"></div>
         </section>
+      </div>
+    </section>
+
+    <!-- Combat -->
+    <section id="view-combat" hidden>
+      <div class="combat" id="combat">
+        <div class="combat-main">
+          <div class="combat-bar">
+            <div class="card-title">
+              <h1 class="page-title">Combat</h1>
+              <span id="cb-label" class="card-sub"></span>
+            </div>
+            <div class="range-ctl" id="cb-ctl"></div>
+            <button type="button" class="dl-open" id="dl-open" aria-controls="death-log" hidden>
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.2a5 5 0 0 1 10 0v2.3l-1.5 1v2.5h-7v-2.5L3 9.5z"/><path d="M6.2 7.8h.01M9.8 7.8h.01"/></svg>
+              Death log
+            </button>
+          </div>
+
+          <section class="card" id="cb-score-card">
+            <div class="card-head">
+              <div class="card-title"><h2>Red vs Blue</h2><span class="card-sub">each faction's kills and deaths</span></div>
+            </div>
+            <div id="cb-score"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <div class="card-title"><h2>Kills and deaths over time</h2><span id="cb-chart-label" class="card-sub"></span></div>
+              <div class="seg" id="cb-chart-mode" role="group" aria-label="Chart shows">
+                <button type="button" data-v="each" id="cb-mode-each">Per day</button><button type="button" data-v="total">Running total</button>
+              </div>
+            </div>
+            <div id="cb-legend" class="legend cb-legend"></div>
+            <div id="cb-chart" class="chart chart-bars"></div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <div class="card-title"><h2>Leaderboard</h2><span id="cb-lb-note" class="card-sub"></span></div>
+            </div>
+            <div id="cb-leaderboard" class="cb-leaderboard"></div>
+          </section>
+        </div>
+
+        <aside class="card death-log" id="death-log" aria-label="Death log">
+          <div class="dl-head">
+            <h2>Death log</h2>
+            <div class="seg" id="dl-type" role="group" aria-label="Which deaths">
+              <button type="button" data-v="" title="Every death">All</button><button type="button" data-v="pvp" title="Killed by another player">PvP</button><button type="button" data-v="other" title="Everything else: mobs, falls, lava…">Other</button>
+            </div>
+            <button type="button" class="icon-btn" id="dl-close" aria-label="Hide the death log" title="Hide the death log">
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+            </button>
+          </div>
+          <div class="dl-scroll" id="dl-scroll" role="log" aria-label="Deaths, newest first" tabindex="0">
+            <div id="dl-list"></div>
+            <div class="dl-edge" id="dl-edge"></div>
+          </div>
+        </aside>
       </div>
     </section>
 

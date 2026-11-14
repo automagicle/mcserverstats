@@ -24,9 +24,13 @@ import net.minecraft.world.item.component.DyedItemColor;
 import net.minecraft.world.item.equipment.EquipmentAsset;
 import net.minecraft.world.item.equipment.Equippable;
 import net.minecraft.world.item.equipment.trim.ArmorTrim;
+import net.minecraft.world.scores.Objective;
+import net.minecraft.world.scores.ReadOnlyScoreInfo;
+import net.minecraft.world.scores.Scoreboard;
 
 // What each online player is wearing and carrying, for the 3D model on their dashboard page:
-// armor (with trims and dye), both hands, and the weapons, tools and eggs in their inventory.
+// armor (with trims and dye), both hands, the weapons, tools and eggs in their inventory, and
+// their Egg SMP egg's type, level and energy.
 // Checked every few seconds on the server thread; a player's report is only sent when it changed,
 // and at most once a minute, so the dashboard's database sees few writes.
 final class GearReporter {
@@ -89,7 +93,33 @@ final class GearReporter {
 			if (WEAPON.matcher(id(stack).replaceFirst("^minecraft:", "")).matches() || isEgg(stack)) items.add(item(stack));
 		}
 		out.add("items", items);
+
+		JsonObject egg = eggState(player);
+		if (egg != null) out.add("egg", egg);
 		return out;
+	}
+
+	// Egg SMP keeps each player's egg in scoreboard objectives: which egg (egg.type, its number in
+	// the egg mod), its level (egg.tier, 1 or 2) and its energy (egg.energy, 0 to 5). Read by name,
+	// so nothing here depends on that mod; without it there's simply nothing to report.
+	private static JsonObject eggState(ServerPlayer player) {
+		Scoreboard board = player.level().getScoreboard();
+		Integer type = score(board, player, "egg.type");
+		if (type == null || type <= 0) return null;
+		JsonObject egg = new JsonObject();
+		egg.addProperty("type", type);
+		Integer tier = score(board, player, "egg.tier");
+		if (tier != null) egg.addProperty("tier", tier);
+		Integer energy = score(board, player, "egg.energy");
+		if (energy != null) egg.addProperty("energy", energy);
+		return egg;
+	}
+
+	private static Integer score(Scoreboard board, ServerPlayer player, String objective) {
+		Objective o = board.getObjective(objective);
+		if (o == null) return null;
+		ReadOnlyScoreInfo info = board.getPlayerScoreInfo(player, o);
+		return info == null ? null : info.value();
 	}
 
 	private static void put(JsonObject into, String key, ItemStack stack) {

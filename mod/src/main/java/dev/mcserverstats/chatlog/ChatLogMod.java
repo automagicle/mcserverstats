@@ -16,13 +16,16 @@ import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ChatType;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.TextColor;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.scores.PlayerTeam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -137,6 +140,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		String kind = "system";
 		String name = null;
 		JsonArray display = null;
+		JsonObject death = null;
 		if (message.getContents() instanceof TranslatableContents tc) {
 			String key = tc.getKey();
 			if (key.startsWith("multiplayer.player.joined")) kind = "join";
@@ -148,6 +152,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 				name = plainName(who);
 				display = styled(who, 8);
 			}
+			if (kind.equals("death")) death = deathDetails(key, args);
 		}
 		UUID uuid = null;
 		if (name != null) {
@@ -155,7 +160,38 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 			if (player != null) uuid = player.getUUID();
 		}
 		// The whole message too, so other names in it (a killer) and item names keep their colors.
-		uploader.add(kind, uuid, name, display, kind.equals("system") ? null : styled(message, 32), message.getString());
+		uploader.add(kind, uuid, name, display, kind.equals("system") ? null : styled(message, 32), message.getString(), null, death);
+	}
+
+	// How a death happened, from the death message itself, for the dashboard's combat page:
+	// { cause, killer?, killer_uuid?, mob?, weapon? }. cause is the message's translation key
+	// (death.attack.player.item, death.fell.accident.generic, …). The second argument of a death
+	// message is who the game credits with it: a player (killer, killer_uuid) or another creature
+	// (mob, its entity type, like "zombie"). The third is the named item it was done with.
+	private static JsonObject deathDetails(String key, Object[] args) {
+		JsonObject d = new JsonObject();
+		d.addProperty("cause", key);
+		if (args.length > 1 && args[1] instanceof Component by) {
+			HoverEvent.EntityTooltipInfo info = entityOf(by);
+			if (info != null && info.type == EntityTypes.PLAYER) {
+				d.addProperty("killer", plainName(by));
+				d.addProperty("killer_uuid", info.uuid.toString());
+			} else if (info != null) {
+				String type = BuiltInRegistries.ENTITY_TYPE.getKey(info.type).toString();
+				d.addProperty("mob", type.startsWith("minecraft:") ? type.substring(10) : type);
+			}
+		}
+		if (args.length > 2 && args[2] instanceof Component item) {
+			String weapon = item.getString().replaceAll("^\\[|\\]$", "");
+			if (!weapon.isBlank()) d.addProperty("weapon", weapon.length() > 60 ? weapon.substring(0, 60) : weapon);
+		}
+		return d;
+	}
+
+	// The entity a name in a message stands for (names carry it as their hover text).
+	private static HoverEvent.EntityTooltipInfo entityOf(Component c) {
+		return c.visit((style, text) -> style.getHoverEvent() instanceof HoverEvent.ShowEntity show
+				? Optional.of(show.entity()) : Optional.<HoverEvent.EntityTooltipInfo>empty(), Style.EMPTY).orElse(null);
 	}
 
 	// Text as chat shows it (team prefixes, colors), as [{ t: text, c: "#rrggbb", p: player }] pieces.

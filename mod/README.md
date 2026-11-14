@@ -1,7 +1,8 @@
 # mcstats-chat (server mod)
 
-A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page, what each
-player wears and carries to the **3D model** on their player page, and shows chat sent from the dashboard in game.
+A small server-side Fabric mod that sends the server's public chat to the dashboard's **Chat log** page, every death
+to its **Combat** page, what each player wears and carries to the **3D model** on their player page, and shows chat
+sent from the dashboard in game.
 It's one jar with no other dependencies (the bits of Fabric API it uses are bundled inside), for
 Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anything.
 
@@ -9,6 +10,13 @@ Minecraft **26.2** on Fabric Loader 0.18.4 or newer. Players don't install anyth
 Names are sent as chat shows them (team prefix and colors), so the dashboard can match. Deaths and
 advancements are sent styled as a whole, so a killer's name, a named weapon or an advancement title keeps its color
 (needs 1.1.0 or newer; older versions still work, with plainer death messages).
+**Deaths** (1.4.0 or newer): each death message also says how it happened, for the Combat page: the game's own name for
+the cause (`death.attack.player.item`, `death.fell.accident.generic`, …), who the game credits with it (a player's name
+and UUID, or a creature's type like `zombie`) and the named item it was done with. All of it is read off the death
+message the game already broadcasts, so nothing extra is tracked. Older versions' deaths still count: the dashboard
+works out the killer from the message.
+**Egg** (1.4.0 or newer): with the gear report, each player's Egg SMP egg type, level and energy, read from the egg
+mod's scoreboard scores (`egg.type`, `egg.tier`, `egg.energy`); nothing is sent if those don't exist.
 **Gear** (1.2.0 or newer): each online player's armor (with trims and dye), both hands, and the weapons, tools and Egg SMP
 eggs in their inventory (nothing else from it). Checked every 10 seconds and sent only when it changed, at most once a
 minute per player, to `/api/ingest/gear` next to the chat url (same token, no extra setup).
@@ -69,7 +77,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.3.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.4.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -121,7 +129,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.3.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.4.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

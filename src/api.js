@@ -1,6 +1,7 @@
 import { signedIn } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
 import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
+import { combatData, combatLog } from './combat.js';
 import { clampRange, seasonFor } from './seasons.js';
 import { gearFor, ingestGear } from './gear.js';
 import { serveSkin, serveTexture } from './mcassets.js';
@@ -151,6 +152,8 @@ export async function handleApi(request, env, url) {
   if (path === '/api/chat/search') return searchChat(env, url, season);
   if (path === '/api/chat/players') return chatPlayers(env, season);
   if (path === '/api/chat/player') return playerChat(env, url, season);
+  if (path === '/api/combat') return combatData(env, url, season);
+  if (path === '/api/combat/log') return combatLog(env, url, season);
 
   const m = path.match(/^\/api\/player\/([^/]+)$/);
   if (m) {
