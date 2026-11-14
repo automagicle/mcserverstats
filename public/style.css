@@ -397,6 +397,8 @@ tr.link:hover td { background: var(--hover); }
 .tooltip .key { width: 12px; height: 2px; border-radius: 1px; flex: none; }
 
 .foot { max-width: 1120px; margin: 0 auto; padding: 0 16px 32px; font-size: 12px; color: var(--muted); }
+.foot a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.foot a:hover { color: var(--ink); }
 
 @media (max-width: 800px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -632,16 +634,14 @@ tr.link:hover td { background: var(--hover); }
   .top-left { display: contents; }
   .tabs { order: 2; width: 100%; }
   .tabs a { flex: 1; text-align: center; }
-  /* first row: name, then live status and theme; second row: pages, seasons and the IGN / Name switch */
+  /* first row: name, then live status and theme; second row: pages and the IGN / Name switch */
   .top { column-gap: 8px; }
   .top-right { display: contents; }
   .brand { margin-right: auto; }
   .top::after { content: ""; order: 1; flex-basis: 100%; margin-top: -10px; }
   .tabs { width: auto; }
-  .tabs:not(.seasons) { flex: 1 1 auto; }
+  .tabs { flex: 1 1 auto; }
   .tabs a { padding: 4px 8px; }
-  .seasons { order: 3; }
-  .seasons a { flex: none; }
 }
 
 /* ---------- chat log page: fills the window, only the log scrolls ---------- */
@@ -1223,7 +1223,6 @@ a.msg-name:hover { text-decoration: underline; }
 
 /* ---------- seasons ---------- */
 
-.seasons a { padding: 4px 9px; }
 .live[data-state="archived"] .dot { background: var(--muted); }
 .season-note { box-shadow: 0 0 0 1px var(--ring), inset 3px 0 0 var(--series-1); }
 .season-note.dummy { box-shadow: 0 0 0 1px var(--ring), inset 3px 0 0 var(--warning); }

@@ -198,9 +198,14 @@ const shownName = (ign) => (nameMode === 'real' && realName(ign)) || ign;
 const otherName = (ign) => (realName(ign) ? (nameMode === 'real' ? ign : realName(ign)) : null);
 
 // A styled name ([{ t, c }] pieces, as chat shows it) with the IGN swapped for the real name when that's shown.
+// The game puts a [RED] / [BLUE] team tag before each name; the name's color already says it.
+const TEAM_TAG = /\[(?:RED|BLUE)\]\s*/g;
+const noTag = (t) => t.replace(TEAM_TAG, '');
 function swapParts(parts, ign) {
   const real = nameMode === 'real' && ign && realName(ign);
-  return real ? parts.map((p) => (p.t.includes(ign) ? { ...p, t: p.t.replace(ign, real) } : p)) : parts;
+  return parts
+    .map((p) => ({ ...p, t: real && p.t.includes(ign) ? noTag(p.t).replace(ign, real) : noTag(p.t) }))
+    .filter((p) => p.t);
 }
 
 // Colors a name by team, with the other name on hover.
@@ -1673,9 +1678,15 @@ function renderLive() {
     text.textContent = `${last.online} online`;
   }
 
-  $('#foot').textContent = `Times shown in ${TZ.replace('_', ' ')} · checked every ${POLL / 60} min via mcstatus.io`
-    + (archived() ? ` · Season ${SEASON} archive` : last ? ` · last check ${fmt(last.ts, { hour: 'numeric', minute: '2-digit' })}` : '')
-    + (DUMMY ? ' · sample data' : '');
+  const zone = new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'short' })
+    .formatToParts(new Date()).find((x) => x.type === 'timeZoneName')?.value || TZ;
+  $('#foot').replaceChildren(
+    `Times in ${zone}`
+      + (archived() ? ` · Season ${SEASON} archive` : last ? ` · updated ${fmt(last.ts, { hour: 'numeric', minute: '2-digit' })}` : '')
+      + (DUMMY ? ' · sample data' : '') + ' · ',
+    SEASON === CURRENT_SEASON
+      ? el('a', { href: '/s1/', text: 'Season 1 archive' })
+      : el('a', { href: '/', text: 'Current season' }));
   renderSeasonNote();
 }
 
@@ -2626,7 +2637,9 @@ function mcStyle(hex) {
     // light page: the exact color; ones too pale to read on white (white, yellow, aqua) get
     // Minecraft's own text shadow, the same color at a quarter brightness
     const shadow = contrast(luminance(rgb), 0.96) < 2 ? `1px 1px 0 ${toHex(rgb.map((c) => c / 4))}` : 'none';
-    v = `--cl:${hex};--cs:${shadow};--cd:${toHex(dark)}`;
+    // the two team colors match the leaderboards on a dark page, which read better than the game's
+    const team = { '#ff5555': '#f27a72', '#5555ff': '#6ea8f5' }[hex.toLowerCase()];
+    v = `--cl:${hex};--cs:${shadow};--cd:${team || toHex(dark)}`;
     mcCache.set(hex, v);
   }
   return v;
@@ -2684,7 +2697,7 @@ function richText(m) {
       const run = [];
       while (i < pieces.length && pieces[i].p === who) run.push(pieces[i++]);
       const uuid = who === m.name ? m.uuid : uuidForName(who);
-      const shown = (t) => (shownName(who) === who ? t : t.replace(who, shownName(who)));
+      const shown = (t) => (shownName(who) === who ? noTag(t) : noTag(t).replace(who, shownName(who)));
       out.push(playerLink(el('a', { class: 'msg-name' },
         ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: shown(p.t) }) : shown(p.t)))), uuid, who));
     } else {
@@ -2717,7 +2730,7 @@ function sysRow(m) {
   else if (m.rich && m.kind !== 'join' && m.kind !== 'leave') body.append(...richText(m));
   else if (m.name && m.text.startsWith(displayText(m))) body.append(chatName(m), m.text.slice(displayText(m).length));
   else if (m.name && m.text.startsWith(m.name)) body.append(chatName({ ...m, display: null }), m.text.slice(m.name.length));
-  else body.append(m.text);
+  else body.append(noTag(m.text));
   return el('div', { class: `msg-sys sys-${m.kind}` },
     el('span', { class: 'msg-lead' }, lead), body, el('time', { class: 'msg-time', text: clock(m.ts / 1000) }));
 }
@@ -4208,7 +4221,7 @@ function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
   const team = m.killer ? teamOf(m.killer) : null;
   const text = el('div', { class: 'dl-text' });
   if (m.rich) text.append(...richText(m));
-  else text.append(m.text);
+  else text.append(noTag(m.text));
   const time = el('button', { type: 'button', class: 'dl-time', text: when,
     title: `${fmt(m.ts / 1000, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · open the chat log here` });
   time.addEventListener('click', () => {
@@ -4542,7 +4555,6 @@ function rerenderNames() {
   }
 }
 
-$(`#season-${SEASON}`)?.setAttribute('aria-current', 'page');
 syncNameToggle();
 
 /* ---------- routing & refresh ---------- */
