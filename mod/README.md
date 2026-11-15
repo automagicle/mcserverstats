@@ -15,6 +15,12 @@ the cause (`death.attack.player.item`, `death.fell.accident.generic`, …), who 
 and UUID, or a creature's type like `zombie`) and the named item it was done with. All of it is read off the death
 message the game already broadcasts, so nothing extra is tracked. Older versions' deaths still count: the dashboard
 works out the killer from the message.
+**Advancements** (1.6.0 or newer): the advancement tree as the game lays it out on its advancements screen (every
+advancement's title, description, icon, frame, parent and position, data packs' included), sent when the server starts
+and after a data pack reload; and each online player's progress in it (which they have and when they got each, and for
+the ones they're partway through, how far and which criteria are done), checked every 15 seconds and sent only when it
+changed, at most twice a minute per player. Both go to `/api/ingest/advancements` next to the chat url (same token, no
+extra setup). The dashboard draws them as the tree at the bottom of each player's page.
 **Weapon tooltips** (1.5.0 or newer): the item named in a death message (the weapon) is sent with the tooltip the game
 shows for it (name, enchantments, attributes, lore), so the dashboard can show it on hover.
 
@@ -80,7 +86,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.5.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.6.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -132,7 +138,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.5.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.6.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

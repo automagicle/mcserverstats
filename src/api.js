@@ -2,9 +2,10 @@ import { signedIn } from './auth.js';
 import { POLL_SECONDS } from './poll.js';
 import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
 import { combatData, combatLog } from './combat.js';
-import { clampRange, seasonFor } from './seasons.js';
+import { chatSeason, clampRange, seasonFor } from './seasons.js';
 import { gearFor, ingestGear } from './gear.js';
-import { serveSkin, serveTexture } from './mcassets.js';
+import { advancementsFor, ingestAdvancements } from './advancements.js';
+import { serveItem, serveSkin, serveTexture } from './mcassets.js';
 import { connectLink, sendWebChat, webChatMe } from './link.js';
 import { json, UUID_RE } from './util.js';
 
@@ -37,6 +38,10 @@ export async function handleApi(request, env, url) {
     if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
     return ingestGear(request, env);
   }
+  if (url.pathname === '/api/ingest/advancements') {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+    return ingestAdvancements(request, env);
+  }
 
   // The server mod's WebSocket, which carries chat sent from the dashboard into the game.
   if (url.pathname === '/api/ingest/link') return connectLink(request, env);
@@ -53,6 +58,7 @@ export async function handleApi(request, env, url) {
   if (url.pathname === '/api/chat/me') return webChatMe(env, who);
 
   // Game textures and skins, for the 3D player model.
+  if (url.pathname.startsWith('/api/mc/item/')) return serveItem(env, url.pathname.slice(13));
   if (url.pathname.startsWith('/api/mc/')) return serveTexture(env, url.pathname.slice(8));
   const skin = url.pathname.match(/^\/api\/skin\/([^/]+)$/);
   if (skin) return serveSkin(env, decodeURIComponent(skin[1]), (url.searchParams.get('uuid') || '').replace(/-/g, '').toLowerCase());
@@ -148,10 +154,13 @@ export async function handleApi(request, env, url) {
     return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
   }
 
-  if (path === '/api/chat') return readChat(env, url, season);
-  if (path === '/api/chat/search') return searchChat(env, url, season);
-  if (path === '/api/chat/players') return chatPlayers(env, season);
-  if (path === '/api/chat/player') return playerChat(env, url, season);
+  // The chat log starts over at each chat reset (CHAT_RESETS); what came before stays in the database.
+  const chat = chatSeason(env, season);
+  if (path === '/api/chat') return readChat(env, url, chat);
+  if (path === '/api/chat/search') return searchChat(env, url, chat);
+  if (path === '/api/chat/players') return chatPlayers(env, chat);
+  if (path === '/api/chat/player') return playerChat(env, url, chat);
+  if (path === '/api/advancements') return advancementsFor(env, url, season);
   if (path === '/api/combat') return combatData(env, url, season);
   if (path === '/api/combat/log') return combatLog(env, url, season);
 

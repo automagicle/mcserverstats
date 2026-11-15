@@ -148,7 +148,7 @@ const BIG = Number.MAX_SAFE_INTEGER;
 //   before=TS:ID      older than a message      after=TS:ID   newer than a message
 //   at=TS             up to and just after a moment (unix ms)
 //   since_id=ID       stored after that id (live updates), whatever their time; add unread_since=ID for a count
-// Only messages within the season's time span are returned.
+// Only messages within the season's time span, and since its last chat reset, are returned.
 export async function readChat(env, url, season) {
   const q = url.searchParams;
   const db = env.DB;
@@ -180,6 +180,8 @@ export async function readChat(env, url, season) {
     ]);
     const messages = withDisplay(rows.results.slice(0, limit)).sort((a, b) => a.ts - b.ts || a.id - b.id);
     const body = { messages, more_after: rows.results.length > limit, max_id: max.results[0]?.id ?? 0 };
+    // after a chat reset, when the log starts (unix ms), so a page left open drops what's older
+    if (season.reset) body.start = season.reset * 1000;
     // unread_since=ID: how many messages worth reading (chat, deaths, advancements; not joins or leaves) came after it, up to 1000
     if (q.has('unread_since')) {
       const seen = Math.max(0, Math.floor(Number(q.get('unread_since'))) || 0);

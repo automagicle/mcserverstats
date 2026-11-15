@@ -408,6 +408,34 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
       return { from, to, poll_seconds: POLL, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows };
     },
 
+    // The tree is the real server's (the game's own titles and descriptions aren't kept in this
+    // repository); only the player's progress in it is made up: the keener they are, the further in.
+    '/api/advancements': async (q, now) => {
+      const name = q.get('name') || '';
+      const real = await fetch(`/api/advancements?name=${encodeURIComponent(name)}`, { credentials: 'same-origin' })
+        .then((res) => (res.ok ? res.json() : null)).catch(() => null);
+      const tree = real?.tree || [];
+      const p = people.find((x) => x.name === name);
+      const body = { tree, ts: null, done: {}, part: {} };
+      if (!p || !tree.length) return body;
+      const first = p.sessions.map((x) => asOfNow(x, now)).filter(Boolean)[0]?.[0];
+      if (!first) return body;
+      const r = rng(hash(`adv:${name}`));
+      const keen = { grinder: 0.8, regular: 0.6, casual: 0.4, rare: 0.22 }[p.habit] ?? 0.4;
+      const byId = new Map(tree.map((a) => [a.id, a]));
+      const depth = (a) => (a.parent && byId.has(a.parent) ? depth(byId.get(a.parent)) + 1 : 0);
+      for (const a of [...tree].sort((x, y) => depth(x) - depth(y))) {
+        const from = a.parent ? body.done[a.parent] : first;
+        if (from == null) continue; // not there yet
+        const odds = a.parent ? keen * (a.frame === 'challenge' ? 0.35 : a.hidden ? 0.3 : 1) : 1;
+        const when = Math.floor(from + (a.parent ? 600 + r() * r() * 5 * 86400 : r() * 900));
+        if (r() < odds && when < now) body.done[a.id] = when;
+        else if (a.of > 1 && r() < 0.7) body.part[a.id] = { n: Math.floor(r() * a.of), of: a.of };
+      }
+      body.ts = now - Math.floor(r() * 3 * 3600);
+      return body;
+    },
+
     '/api/combat': (q, now) => {
       const after = Number(q.get('after')) || 0;
       const rows = deaths.filter((d) => d.ts <= now && d.id > after);

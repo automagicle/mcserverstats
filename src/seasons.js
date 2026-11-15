@@ -43,6 +43,20 @@ export function seasonFor(env, url) {
   return { n, lo: start, hi: next != null && next > start ? next : FAR, info };
 }
 
+// Chat resets: at each time in CHAT_RESETS (ISO times or unix seconds, separated by commas or
+// spaces) the chat log starts over. Nothing is deleted: messages from before the latest reset that
+// has passed are simply no longer shown or counted, and removing the time brings them back.
+// Returns the season narrowed to start at that reset, with `reset` set to it (unix seconds).
+export function chatSeason(env, season) {
+  const now = Date.now() / 1000;
+  let reset = 0;
+  for (const part of String(env.CHAT_RESETS ?? '').split(/[\s,]+/)) {
+    const t = parseStart(part);
+    if (t != null && t <= now && t > season.lo && t < season.hi && t > reset) reset = t;
+  }
+  return reset ? { ...season, lo: reset, reset } : season;
+}
+
 // [from, to] narrowed to the season.
 export const clampRange = (s, from, to) => [Math.max(from, s.lo), Math.min(to, s.hi)];
 

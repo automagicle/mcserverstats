@@ -49,6 +49,9 @@ final class Uploader {
 	private final ArrayDeque<JsonObject> queue = new ArrayDeque<>();
 	// Each player's latest gear report waiting to be sent (a newer one replaces an unsent older one).
 	private final Map<UUID, JsonObject> gear = new LinkedHashMap<>();
+	// The same for each player's advancements, and the advancement tree when it has yet to be sent.
+	private final Map<UUID, JsonObject> advancements = new LinkedHashMap<>();
+	private JsonObject advancementTree;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
 	private volatile Config config = Config.EMPTY;
@@ -124,6 +127,21 @@ final class Uploader {
 		}
 	}
 
+	// Called from the server thread.
+	void addAdvancements(UUID player, JsonObject report) {
+		synchronized (advancements) {
+			advancements.remove(player);
+			advancements.put(player, report);
+		}
+	}
+
+	// Called from the server thread.
+	void setAdvancementTree(JsonObject tree) {
+		synchronized (advancements) {
+			advancementTree = tree;
+		}
+	}
+
 	void start() {
 		if (exec != null) return;
 		loadPending();
@@ -161,6 +179,7 @@ final class Uploader {
 			lastFlush = now;
 			while (sendBatch(Duration.ofSeconds(15))) { }
 			if (now >= nextAttempt) sendGear();
+			if (now >= nextAttempt) sendAdvancements();
 		} catch (Throwable t) {
 			ChatLogMod.LOG.error("Chat upload failed unexpectedly", t);
 		}
@@ -270,6 +289,42 @@ final class Uploader {
 				for (UUID id : ids) {
 					JsonObject sent = players.get(ids.indexOf(id)).getAsJsonObject();
 					if (gear.get(id) == sent) gear.remove(id); // unless a newer report came in meanwhile
+				}
+			}
+			return;
+		}
+		fail(why(r.status(), r.fromAccess()));
+	}
+
+	// Sends the advancement tree (when it's new) and every waiting player's advancements in one
+	// request, to /api/ingest/advancements next to the chat url. An older dashboard without that
+	// endpoint (404) is skipped quietly.
+	private void sendAdvancements() {
+		JsonArray players = new JsonArray();
+		List<UUID> ids = new ArrayList<>();
+		JsonObject tree;
+		synchronized (advancements) {
+			tree = advancementTree;
+			advancements.forEach((id, report) -> {
+				if (ids.size() < 25) { // a full server's worth goes out over a few requests
+					ids.add(id);
+					players.add(report);
+				}
+			});
+		}
+		if (players.isEmpty() && tree == null) return;
+		JsonObject body = new JsonObject();
+		if (tree != null) body.add("tree", tree);
+		body.add("players", players);
+		Reply r = post(config.url().replaceFirst("/chat/?$", "/advancements"), body, Duration.ofSeconds(15));
+		if (r == null) return;
+		boolean done = r.status() >= 200 && r.status() < 300;
+		if (done || r.status() == 400 || r.status() == 404 || r.status() == 413) {
+			if (!done && r.status() != 404) ChatLogMod.LOG.error("Dashboard rejected advancements (HTTP {}): {}", r.status(), trim(r.body()));
+			synchronized (advancements) {
+				if (advancementTree == tree) advancementTree = null;
+				for (int i = 0; i < ids.size(); i++) {
+					if (advancements.get(ids.get(i)) == players.get(i).getAsJsonObject()) advancements.remove(ids.get(i));
 				}
 			}
 			return;

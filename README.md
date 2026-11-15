@@ -5,9 +5,9 @@ It runs on Cloudflare's free plan, so nothing needs to stay on at home.
 
 - **Collector**: a Cron-triggered Worker asks [mcstatus.io](https://mcstatus.io) about the server every minute and records the player count plus each named player's session in D1 (SQLite).
 - **Dashboard**: static files in `public/`, served by the same Worker. It shows players online over time, a GitHub-style daily heatmap, a leaderboard, busiest hours, and a page for each player.
-- **Chat log, combat and gear** (optional): a small Fabric server mod in `mod/` posts public chat, every death (who died,
-  who or what did it, and how), and what each player wears and carries, to the Worker, which stores them in D1. It also
-  shows chat typed on the dashboard in game (web chat).
+- **Chat log, combat, gear and advancements** (optional): a small Fabric server mod in `mod/` posts public chat, every death
+  (who died, who or what did it, and how), what each player wears and carries, and their advancements, to the Worker,
+  which stores them in D1. It also shows chat typed on the dashboard in game (web chat).
   See [mod/README.md](mod/README.md) for setup.
 - **Seasons**: the main page shows the current season (season 2); `/s1/` is the season 1 archive. Seasons split the
   recorded data by time, so nothing is copied or deleted (see [Seasons](#seasons)).
@@ -50,6 +50,12 @@ over it, and a line at the top says the season hasn't started. To drop the test 
 
 From then on `/s1/` is frozen at the end of season 1: its charts show its final days, the tiles show its length, peak and
 total, the leaderboard opens on All, and it stops refreshing.
+
+**Chat resets**: `CHAT_RESETS` (in `wrangler.jsonc`) is a list of times, separated by commas, like
+`"2026-11-15T18:00:00-08:00"`. At each one the chat log starts over: messages from before the latest reset that has
+passed are no longer shown, searched or counted (the unread badge and each player's message count included). Nothing is
+deleted: they stay in the database, and removing the time (and deploying) brings them back. A time in the future takes
+effect by itself when it arrives. Deaths on the Combat page are not affected.
 
 **Teams**: each season's teams, players' real names, their eggs and their login emails live in the database (the
 `roster` and `roster_email` tables), so they stay out of this public repository. Keep them in `roster-s2.json` (git
@@ -130,6 +136,15 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   shows just their skin and roster egg. Armor and item textures are read on demand from Mojang's official game client
   for `MC_VERSION` (in `wrangler.jsonc`; set it to the server's version) by `/api/mc/…`, so none of Mojang's files are in
   this repository; skins come from Mojang through `/api/skin/<name>`. Drawn with three.js, loaded only on player pages.
+- **Advancements**: the last card on a player's page is the game's advancements screen for that player: a tab per
+  category (Minecraft, Nether, The End, Adventure, Husbandry, plus any a data pack adds) with how many they have, and the
+  tree laid out exactly where the game puts each advancement, with the game's frames (gold once earned), connecting
+  lines, tab background and inventory-style icons, at twice the game's size. Hover (or tap) one for its title,
+  description, and when it was earned or how far along it is; drag or scroll to move around. Every advancement shows,
+  earned or not, except hidden ones, which appear once earned as in the game. The tree and progress come from the server
+  mod (1.6.0 or newer; the card stays hidden until the mod has sent the tree). Icons are drawn in the browser from the
+  game's own item models and textures (`public/mcicons.js`, through `/api/mc/item/<id>.json` and `/api/mc/textures/…`),
+  so blocks, chests, skulls and beds look as they do in an inventory.
 - **Player cards**: clicking a player's name or head (in the chat log, the online chips, who was online) opens a small card:
   their name as chat shows it, online or last seen, messages and time played today, time played this week, a little
   graph of when they're usually on (the last two weeks, by hour), and a button to their page. The leaderboard still

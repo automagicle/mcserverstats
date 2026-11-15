@@ -1279,7 +1279,8 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 }
 .p-model-card[hidden] { display: none; }
 .p-model { position: relative; flex: 1; min-height: 250px; background: radial-gradient(ellipse 60% 30% at 50% 92%, var(--surface-2), transparent 70%); }
-.p-model-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: pan-y; }
+.p-model-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none; }
+.p-model-canvas.dragging { cursor: grabbing; }
 .p-model.loading::after {
   content: '';
   position: absolute;
@@ -1537,3 +1538,59 @@ a.pcb-who:hover { text-decoration: underline; }
   .egg-head { flex-wrap: wrap; }
   .egg-facts { flex-direction: row; gap: 12px; width: 100%; }
 }
+
+/* ---------- advancements (a player's page) ---------- */
+
+.adv-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-2); max-width: 100%; }
+.adv-tabs button {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 13px; border: 0; background: transparent; color: var(--ink-2);
+  padding: 4px 9px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.adv-tabs button:hover { color: var(--ink); }
+.adv-tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--ring); }
+.adv-tabs button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+.adv-tab-icon { width: 16px; height: 16px; image-rendering: pixelated; flex: none; }
+.adv-tab-n { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; font-size: 12px; }
+
+/* the game's window: the tab's background tiled at twice its size, the tree scrolling inside it */
+.adv-view {
+  position: relative;
+  overflow: auto;
+  max-height: min(560px, 72vh);
+  border-radius: 8px;
+  background-color: #2b2b2b;
+  background-size: 32px 32px;
+  background-attachment: local;
+  image-rendering: pixelated;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+  scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
+  outline: none;
+}
+.adv-view.dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
+.adv-view.dragging .adv-node { pointer-events: none; }
+.adv-tree { position: relative; margin: 0 auto; }
+/* in the dark theme the brighter backgrounds (the adventure tab's map) are toned down a little */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .adv-view { background-blend-mode: multiply; background-color: #9a9a9a; } }
+:root[data-theme="dark"] .adv-view { background-blend-mode: multiply; background-color: #9a9a9a; }
+.adv-lines { position: absolute; left: 0; top: 0; shape-rendering: crispEdges; pointer-events: none; }
+.adv-line-edge { fill: none; stroke: #000; stroke-width: 3; stroke-linejoin: miter; }
+.adv-line { fill: none; stroke: #fff; stroke-width: 1; stroke-linejoin: miter; }
+.adv-node {
+  position: absolute; width: 52px; height: 52px; padding: 0; border: 0; background: none;
+  cursor: help; image-rendering: pixelated; -webkit-tap-highlight-color: transparent;
+}
+.adv-node:focus-visible { outline: 2px solid #fff; outline-offset: 1px; border-radius: 4px; }
+.adv-frame { position: absolute; inset: 0; width: 52px; height: 52px; }
+.adv-icon { position: absolute; left: 10px; top: 10px; width: 32px; height: 32px; }
+.adv-node:hover .adv-frame { filter: brightness(1.15); }
+
+/* hovering one: the title on the game's bar (blue until earned, gold after), the description under it */
+.tooltip.tip-adv { padding: 0; background: #212121; border-radius: 4px; overflow: hidden; max-width: 300px; box-shadow: 0 0 0 1px #000, 0 6px 20px rgba(0, 0, 0, 0.35); }
+.adv-tip-title { padding: 6px 10px; color: #fff; font-weight: 650; font-size: 13px; background: #036a96; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45); }
+.adv-tip.done .adv-tip-title { background: #a8782a; }
+.adv-tip-body { padding: 7px 10px 8px; font-size: 12.5px; line-height: 1.4; }
+.adv-tip-desc { color: #55ff55; }
+.adv-challenge .adv-tip-desc { color: #d67bd6; }
+.adv-tip-when { color: #b9b9b9; margin-top: 4px; font-size: 12px; }

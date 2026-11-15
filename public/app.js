@@ -321,7 +321,8 @@ function showTip(x, y, rows) {
       return row;
     })
   );
-  tip.classList.toggle('tip-item', rows.some((r) => r.node)); // an item's tooltip looks like the game's
+  tip.classList.toggle('tip-item', rows.some((r) => r.node && !r.adv)); // an item's tooltip looks like the game's
+  tip.classList.toggle('tip-adv', rows.some((r) => r.adv)); // and an advancement's like the advancements screen's
   tip.hidden = false;
   const w = tip.offsetWidth;
   const h = tip.offsetHeight;
@@ -1726,8 +1727,7 @@ function renderSeasonNote() {
     kids = [el('strong', { text: `No Season ${SEASON} data yet.` }), `${when} `,
       el('a', { href: `/s${SEASON - 1}/`, text: `See Season ${SEASON - 1}’s archived stats →` })];
   } else if (st && SEASON === CURRENT_SEASON && seasonOpens() && nowSec() < seasonOpens()) {
-    kids = [el('strong', { text: `Season ${SEASON} starts ${fmt(seasonOpens(), { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` }),
-      ' Until then this is test data; it’s already being recorded, and charts mark the time before the start.'];
+    kids = [el('strong', { text: `Season ${SEASON} starts ${fmt(seasonOpens(), { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` })];
   } else if (st && SEASON < CURRENT_SEASON && !$('#view-home').hidden) {
     kids = [el('strong', { text: `Season ${SEASON} archive` }),
       archived() ? ` · ${seasonSpan()}. ` : ` · still recording until Season ${SEASON + 1} starts. `,
@@ -2342,6 +2342,9 @@ function showPlayerLoading(uuid) {
   $('#pcb-sub').textContent = '';
   $('#p-egg-card').hidden = true;
   $('#p-egg-combat').classList.add('no-egg');
+  $('#p-adv-card').hidden = true;
+  adv.key = null;
+  adv.drawn = null;
 }
 
 let playerReq = 0;
@@ -2402,6 +2405,7 @@ async function showPlayer(uuid, { refresh = false } = {}) {
   renderPlayerModel(player.name, r.gear);
   renderPlayerEgg(player.name, r.gear).catch((e) => console.error('egg card:', e));
   renderPlayerCombat(player.name).catch((e) => console.error('combat card:', e));
+  renderPlayerAdvancements(player.name).catch((e) => console.error('advancements card:', e));
   setCounter($('#p-total'), dur(total), total, animate);
   $('#p-total-sub').textContent = `${dur(week)} in the ${archived() ? 'final' : 'last'} 7 days`;
   setCounter($('#p-sessions'), sessions.length.toLocaleString(), sessions.length, animate);
@@ -2465,6 +2469,175 @@ function renderPlayerName() {
       el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }),
       ...(egg ? [el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: `· ${egg.name}` })] : []));
   }
+}
+
+/* ---------- a player's advancements, as the game's advancements screen ---------- */
+
+// The tree comes from the server mod with the game's own layout: x is the column, y the row.
+// Drawn at twice the game's size: a 26-pixel frame every 28 pixels across and 27 down, joined by
+// the game's elbow lines, on the tab's background. Hidden advancements only show once earned.
+const ADV = { scale: 2, dx: 28, dy: 27, box: 26, pad: 9 };
+const adv = { key: null, tab: recall('advTab') || null, data: null };
+const advTexture = (path) => `/api/mc/textures/${path}.png`;
+let mcIcons = null;
+function setItemIcon(img, icon) {
+  mcIcons ??= import('/mcicons.js');
+  mcIcons.then((m) => m.itemIcon(icon.model || icon.id).then((url) => url || (icon.model ? m.itemIcon(icon.id) : null)))
+    .then((url) => { if (url) img.src = url; else img.remove(); })
+    .catch(() => img.remove());
+}
+
+async function renderPlayerAdvancements(name) {
+  const card = $('#p-adv-card');
+  const mine = (state.playerAdvReq = (state.playerAdvReq || 0) + 1);
+  const data = await api(`/api/advancements?name=${encodeURIComponent(name)}`).catch(() => null);
+  if (mine !== state.playerAdvReq || state.playerData?.name !== name) return;
+  if (!data?.tree?.length) { card.hidden = true; adv.key = null; return; }
+  const key = JSON.stringify([name, data.ts, data.tree.length, data.done, data.part]);
+  $('#adv-sub').textContent = advSummary(data);
+  if (key === adv.key) return; // nothing new: leave the tab and the scroll position alone
+  adv.key = key;
+  adv.data = data;
+  card.hidden = false;
+  drawAdvancements();
+}
+
+// Which advancements show: all of them, except hidden ones nobody has earned (or earned past) yet.
+function advShown(data) {
+  const kids = new Map();
+  for (const a of data.tree) if (a.parent) kids.set(a.parent, [...(kids.get(a.parent) || []), a]);
+  const earnedBelow = (a) => a.id in data.done || (kids.get(a.id) || []).some(earnedBelow);
+  return data.tree.filter((a) => !a.hidden || earnedBelow(a));
+}
+function advSummary(data) {
+  const shown = advShown(data);
+  const got = shown.filter((a) => a.id in data.done).length;
+  return `${got} of ${shown.length} · ${data.ts ? `updated ${ago(data.ts)}` : 'not reported yet'}`;
+}
+
+function drawAdvancements() {
+  hideTip(); // the advancement it was for is about to be redrawn
+  const data = adv.data;
+  const shown = advShown(data);
+  const byId = new Map(shown.map((a) => [a.id, a]));
+  const rootOf = (a) => { let r = a; for (let i = 0; i < 64 && r.parent && byId.has(r.parent); i++) r = byId.get(r.parent); return r; };
+  const tabs = new Map(); // root id -> its advancements
+  for (const a of shown) {
+    const r = rootOf(a);
+    if (r.parent) continue; // its root isn't in the tree: nowhere to draw it
+    if (!tabs.has(r.id)) tabs.set(r.id, []);
+    tabs.get(r.id).push(a);
+  }
+  // the game's own tabs first, in the game's order; then any a data pack adds
+  const ORDER = ['story/root', 'nether/root', 'end/root', 'adventure/root', 'husbandry/root'];
+  const rank = (id) => (ORDER.indexOf(id) + 1 || ORDER.length + 1);
+  const ordered = [...tabs].sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
+  if (!tabs.has(adv.tab)) adv.tab = ordered[0]?.[0];
+  const fresh = adv.drawn !== `${state.playerData?.name}/${adv.tab}`; // a tab not on screen yet starts on its root
+  adv.drawn = `${state.playerData?.name}/${adv.tab}`;
+
+  $('#adv-tabs').replaceChildren(...ordered.map(([id, list]) => {
+    const root = byId.get(id);
+    const icon = el('img', { class: 'adv-tab-icon', alt: '', width: 16, height: 16 });
+    setItemIcon(icon, root.icon);
+    const b = el('button', { type: 'button', role: 'tab', 'aria-selected': String(id === adv.tab), title: root.desc || null },
+      icon, el('span', { text: root.title }),
+      el('span', { class: 'adv-tab-n', text: `${list.filter((a) => a.id in data.done).length}/${list.length}` }));
+    b.addEventListener('click', () => {
+      if (adv.tab === id) return;
+      adv.tab = id;
+      remember('advTab', id);
+      drawAdvancements();
+    });
+    return b;
+  }));
+
+  const list = tabs.get(adv.tab) || [];
+  const root = byId.get(adv.tab);
+  const { scale: S, dx, dy, box, pad } = ADV;
+  const minX = Math.min(...list.map((a) => a.x)), minY = Math.min(...list.map((a) => a.y));
+  const at = (a) => [Math.floor((a.x - minX) * dx) + pad, Math.floor((a.y - minY) * dy) + pad]; // in game pixels
+  const w = Math.max(...list.map((a) => at(a)[0])) + box + pad, h = Math.max(...list.map((a) => at(a)[1])) + box + pad;
+
+  const tree = $('#adv-tree');
+  tree.style.width = `${w * S}px`;
+  tree.style.height = `${h * S}px`;
+  const view = $('#adv-view');
+  view.style.backgroundImage = root?.bg ? `url("${advTexture(root.bg)}")` : '';
+
+  // the lines: from the parent's middle to just past its frame, up or down, then to the child's middle
+  const lines = sv('svg', { class: 'adv-lines', width: w * S, height: h * S, viewBox: `0 0 ${w} ${h}`, 'aria-hidden': 'true' });
+  const paths = { line: [], got: [] };
+  for (const a of list) {
+    const p = a.parent && byId.get(a.parent);
+    if (!p) continue;
+    const [px, py] = at(p), [cx, cy] = at(a);
+    const mid = px + box + 4.5;
+    paths.line.push(`M${px + 13} ${py + 13.5}H${mid}V${cy + 13.5}H${cx + 13}`);
+  }
+  lines.append(sv('path', { class: 'adv-line-edge', d: paths.line.join('') }), sv('path', { class: 'adv-line', d: paths.line.join('') }));
+
+  const frames = { task: 'task', goal: 'goal', challenge: 'challenge' };
+  const nodes = list.map((a) => {
+    const [x, y] = at(a);
+    const done = a.id in data.done;
+    const part = data.part[a.id];
+    const node = el('button', {
+      type: 'button', class: `adv-node${done ? ' done' : ''}`, style: `left:${x * S}px;top:${y * S}px`,
+      'aria-label': `${a.title}: ${a.desc}. ${done ? 'Earned' : part ? `${part.n} of ${part.of}` : 'Not earned'}`,
+    },
+      el('img', { class: 'adv-frame', alt: '', src: advTexture(`gui/sprites/advancements/${frames[a.frame] || 'task'}_frame_${done ? 'obtained' : 'unobtained'}`) }));
+    const icon = el('img', { class: 'adv-icon', alt: '' });
+    setItemIcon(icon, a.icon);
+    node.append(icon);
+    const tipNode = () => {
+      const when = done && data.done[a.id]
+        ? `Earned ${fmt(data.done[a.id], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+        : done ? 'Earned' : part && part.of > 1 ? `In progress: ${part.n}/${part.of}` : 'Not earned yet';
+      return el('div', { class: `adv-tip${done ? ' done' : ''} adv-${a.frame}` },
+        el('div', { class: 'adv-tip-title', text: a.title }),
+        el('div', { class: 'adv-tip-body' },
+          el('div', { class: 'adv-tip-desc', text: a.desc }),
+          el('div', { class: 'adv-tip-when', text: `${a.frame === 'task' ? '' : `${a.frame === 'goal' ? 'Goal' : 'Challenge'} · `}${when}` })));
+    };
+    const show = (e) => showTip(e.clientX, e.clientY, [{ node: tipNode(), adv: true }]);
+    node.addEventListener('pointerenter', show);
+    node.addEventListener('pointermove', show);
+    node.addEventListener('pointerleave', hideTip);
+    node.addEventListener('focus', () => {
+      const r = node.getBoundingClientRect();
+      showTip(r.right - 14, r.top + 6, [{ node: tipNode(), adv: true }]);
+    });
+    node.addEventListener('blur', hideTip);
+    return node;
+  });
+  tree.replaceChildren(lines, ...nodes);
+  // like the game, a tab opens with its root in view: at the left, halfway down
+  if (fresh && root) view.scrollTo(0, Math.max(0, (at(root)[1] + box / 2) * S - view.clientHeight / 2));
+}
+
+// Dragging the tree with a mouse moves it around, like in the game (touch already scrolls it).
+{
+  const view = $('#adv-view');
+  let drag = null;
+  view.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button) return;
+    drag = { x: e.clientX, y: e.clientY, left: view.scrollLeft, top: view.scrollTop, moved: false };
+  });
+  addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+    drag.moved = true;
+    view.classList.add('dragging');
+    hideTip();
+    view.scrollLeft = drag.left - dx;
+    view.scrollTop = drag.top - dy;
+  });
+  addEventListener('pointerup', () => {
+    drag = null;
+    view.classList.remove('dragging');
+  });
 }
 
 // The player in 3D, wearing their armor, with their best weapon and their egg (public/player3d.js).
@@ -3066,6 +3239,8 @@ async function pollChat() {
   if (DUMMY || archived() || !chat.loaded || chat.loading || document.hidden || $('#view-chat').hidden) return;
   const res = await api(`/api/chat?since_id=${chat.maxId}&limit=200&unread_since=${chat.seenId ?? chat.maxId}`);
   if (res.more_after && !chat.moreAfter) return loadChatLatest().then(syncChatTime); // fell far behind
+  // the chat log was reset while this page was open: start over with what came after
+  if (res.start && chat.messages.length && chat.messages[0].ts < res.start) return loadChatLatest().then(syncChatTime);
   chat.maxId = Math.max(chat.maxId, res.max_id);
   chat.unread = res.unread ?? 0;
   renderUnread();

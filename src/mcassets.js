@@ -1,4 +1,5 @@
-// Minecraft's own textures (armor, trims, items, particles) and players' skins, for the 3D model on player pages.
+// Minecraft's own textures (armor, trims, items, blocks, particles, the advancements screen) and players'
+// skins, for the 3D model and the advancement tree on player pages.
 //
 // Textures come straight out of the official game client for the server's version (MC_VERSION),
 // downloaded from Mojang piece by piece: a .jar is a zip, so one ranged request reads its table of
@@ -8,7 +9,7 @@
 import { json } from './util.js';
 
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
-const TEXTURE_RE = /^textures\/(item|misc|particle|entity\/player\/(wide|slim)|entity\/equipment\/humanoid(_leggings)?|trims\/entity\/humanoid(_leggings)?|trims\/color_palettes)\/[a-z0-9_]{1,64}\.png$/;
+const TEXTURE_RE = /^textures\/(item|block|misc|particle|gui\/sprites\/advancements|gui\/advancements\/backgrounds|entity|entity\/(chest|bed|skeleton|zombie|creeper|piglin|enderdragon|decorated_pot|banner|shield)|entity\/player\/(wide|slim)|entity\/equipment\/humanoid(_leggings)?|trims\/entity\/humanoid(_leggings)?|trims\/color_palettes)\/[a-z0-9_]{1,64}\.png$/;
 const NAME_RE = /^[A-Za-z0-9_]{1,16}$/;
 const WEEK = 7 * 86400;
 
@@ -102,6 +103,103 @@ export async function serveTexture(env, path) {
   } catch (err) {
     console.error(`texture ${path}:`, err.message);
     return json({ error: 'texture unavailable' }, 502);
+  }
+}
+
+/* ---------- how an item is drawn in the inventory ---------- */
+
+const ITEM_RE = /^[a-z0-9_]{1,64}$/;
+const local = (id) => String(id).replace(/^minecraft:/, '');
+const GRASS = 0x7cbd6b; // the grass color the game uses for items
+
+async function jarJson(version, path) {
+  const data = await readFromJar(version, path);
+  return data ? JSON.parse(new TextDecoder().decode(data)) : null;
+}
+
+// The models an item definition (assets/…/items/<id>.json) shows in an inventory slot, in order:
+// [{ model, tints?, xf } | { special, base, xf }], xf being the transformations wrapped around it.
+function guiModels(m, xf = []) {
+  if (!m || typeof m !== 'object') return [];
+  if (m.transformation) xf = [...xf, m.transformation];
+  switch (local(m.type)) {
+    case 'model': return [{ model: local(m.model), tints: m.tints, xf }];
+    case 'special': return [{ special: { ...m.model, type: local(m.model?.type) }, base: local(m.base), xf }];
+    case 'composite': return (m.models || []).flatMap((c) => guiModels(c, xf));
+    case 'condition': return guiModels(m.on_false, xf);
+    case 'range_dispatch': return guiModels(m.fallback ?? m.entries?.[0]?.model, xf);
+    case 'select': {
+      const gui = local(m.property) === 'display_context'
+        && (m.cases || []).find((c) => [].concat(c.when).includes('gui'));
+      return guiModels(gui ? gui.model : m.fallback ?? m.cases?.[0]?.model, xf);
+    }
+    default: return [];
+  }
+}
+
+// A model with its parents folded in: { layers } for a flat item, or { elements, textures } for a
+// 3D one, plus how it sits in an inventory slot (gui) and how it's lit (light: front or side).
+async function resolveModel(version, id) {
+  const out = { textures: {} };
+  for (let depth = 0, at = id; at && depth < 10; depth++) {
+    if (at === 'builtin/generated') { out.generated = true; break; }
+    if (!/^[a-z0-9_/]{1,96}$/.test(at)) break;
+    const m = await jarJson(version, `assets/minecraft/models/${at}.json`);
+    if (!m) break;
+    for (const [k, v] of Object.entries(m.textures || {})) if (!(k in out.textures)) out.textures[k] = v;
+    out.elements ??= m.elements;
+    out.gui ??= m.display?.gui;
+    out.light ??= m.gui_light;
+    at = m.parent ? local(m.parent) : null;
+  }
+  const tex = (v, depth = 0) => (typeof v === 'string' && v.startsWith('#') && depth < 8 ? tex(out.textures[v.slice(1)], depth + 1) : v && local(v));
+  const textures = Object.fromEntries(Object.entries(out.textures).map(([k, v]) => [k, tex(v)]).filter(([, v]) => v));
+  const base = { gui: out.gui, light: out.light === 'front' || out.generated ? 'front' : 'side' };
+  if (out.generated || !out.elements) {
+    const layers = [];
+    for (let i = 0; textures[`layer${i}`]; i++) layers.push(textures[`layer${i}`]);
+    return { ...base, layers };
+  }
+  return { ...base, elements: out.elements, textures };
+}
+
+const tintColor = (t) => {
+  const v = local(t?.type) === 'grass' ? GRASS : local(t?.type) === 'constant' ? t.value : t?.default;
+  return Number.isInteger(v) ? v & 0xffffff : 0xffffff;
+};
+
+// GET /api/mc/item/<id>.json: everything needed to draw the item as its inventory icon:
+//   { gui: { rotation, translation, scale }, light, parts: [{ layers | elements + textures | special, tints, xf }] }
+export async function serveItem(env, path) {
+  const id = path.replace(/\.json$/, '');
+  if (!ITEM_RE.test(id)) return json({ error: 'not found' }, 404);
+  const version = env.MC_VERSION || '26.2';
+  try {
+    const res = await cached(`mc-item/2/${version}/${id}`, 30 * 86400, async () => {
+      const def = await jarJson(version, `assets/minecraft/items/${id}.json`);
+      if (!def) return json({ error: 'not found' }, 404);
+      const parts = [];
+      let gui, light;
+      for (const p of guiModels(def.model).slice(0, 8)) {
+        const m = await resolveModel(version, p.special ? p.base : p.model);
+        gui ??= m.gui;
+        light ??= m.light;
+        const part = { xf: p.xf };
+        if (p.special) part.special = p.special;
+        else if (m.layers) part.layers = m.layers;
+        else Object.assign(part, { elements: m.elements, textures: m.textures });
+        if (p.tints) part.tints = p.tints.map(tintColor);
+        parts.push(part);
+      }
+      return new Response(JSON.stringify({ gui: gui ?? null, light: light ?? 'front', parts }), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': `private, max-age=${WEEK}` },
+      });
+    });
+    if (!res.ok) return res;
+    return new Response(res.body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': `private, max-age=${WEEK}` } });
+  } catch (err) {
+    console.error(`item ${id}:`, err.message);
+    return json({ error: 'item unavailable' }, 502);
   }
 }
 

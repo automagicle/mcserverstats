@@ -48,6 +48,10 @@
     // When the season officially begins, if recording started earlier (to test). Charts mark this as the
     // season's start; what was recorded before it still shows and still counts. Remove it to show none.
     "SEASON2_OPENS": "2026-11-15T19:30:00-08:00",
+    // Chat resets: at each of these times (ISO with offset, separated by commas) the chat log starts over.
+    // Nothing is deleted; earlier messages stay in the database and are just no longer shown or counted.
+    // A time still in the future takes effect on its own when it arrives.
+    "CHAT_RESETS": "2026-11-15T18:00:00-08:00",
     // Filled in after enabling Cloudflare Access on the workers.dev URL.
     // Until both are set, every /api/* request is refused.
     "ACCESS_TEAM_DOMAIN": "magicle.cloudflareaccess.com",

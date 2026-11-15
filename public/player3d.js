@@ -1,7 +1,7 @@
 // A player drawn in 3D the way the game draws them: their skin, the armor they wear (with trims,
 // leather dye and the enchantment shimmer), their best weapon in the main hand and their egg in the
 // off hand with its particle aura. The model turns a little toward the mouse, and the head follows
-// it a bit more.
+// it a bit more; dragging turns the model all the way round.
 //
 // Textures come from /api/mc/… (the game's own, for the server's version) and /api/skin/<name>.
 // Loaded on demand by app.js: mountPlayer(container, { name, uuid?, armor, mainhand?, offhand?, aura?: { id, cracked }, signal? })
@@ -653,6 +653,7 @@ export async function mountPlayer(container, spec) {
   const target = { yaw: BASE_YAW, headYaw: 0, headPitch: 0 };
   const now = { yaw: BASE_YAW, headYaw: 0, headPitch: 0 };
   const onPointer = (e) => {
+    if (drag) return; // while dragging, the drag alone turns the model
     const r = renderer.domElement.getBoundingClientRect();
     const cx = r.left + r.width / 2, cy = r.top + r.height * 0.22; // around the head
     const nx = Math.max(-1, Math.min(1, (e.clientX - cx) / (innerWidth * 0.5)));
@@ -670,6 +671,50 @@ export async function mountPlayer(container, spec) {
   addEventListener('pointermove', onPointer, { passive: true });
   document.addEventListener('pointerout', onLeave);
 
+  // Dragging turns the model all the way round, on top of the small turn toward the pointer. It
+  // stays where it is left, keeps a little momentum on release, and a double click faces it front again.
+  const canvas = renderer.domElement;
+  const TURN = 0.012; // radians per pixel dragged: about half a turn across the card
+  let spin = 0, spinSpeed = 0, spinHome = false, drag = null;
+  const onDown = (e) => {
+    if (e.button) return;
+    drag = { id: e.pointerId, x: e.clientX, t: performance.now() };
+    spinSpeed = 0;
+    spinHome = false;
+    try { canvas.setPointerCapture(e.pointerId); } catch {}
+    canvas.classList.add('dragging');
+    e.preventDefault(); // no text selection while dragging
+  };
+  const onDrag = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const t = performance.now(), d = (e.clientX - drag.x) * TURN;
+    spin += d;
+    const v = d / Math.max(0.004, (t - drag.t) / 1000);
+    spinSpeed = spinSpeed * 0.6 + v * 0.4;
+    drag.x = e.clientX;
+    drag.t = t;
+    wake();
+  };
+  const onUp = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (performance.now() - drag.t > 80 || reducedMotion()) spinSpeed = 0; // held still before letting go
+    spinSpeed = Math.max(-12, Math.min(12, spinSpeed));
+    drag = null;
+    canvas.classList.remove('dragging');
+    wake();
+  };
+  const onHome = () => {
+    spin = Math.atan2(Math.sin(spin), Math.cos(spin)); // the short way round
+    spinSpeed = 0;
+    spinHome = true;
+    wake();
+  };
+  canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointermove', onDrag);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
+  canvas.addEventListener('dblclick', onHome);
+
   // The game's standing pose: an arm holding something is raised a tenth of a half turn, and both
   // sway gently.
   const HOLD = Math.PI / 10;
@@ -679,8 +724,10 @@ export async function mountPlayer(container, spec) {
     const x = Math.sin(t * 1.34) * 0.05 * sway;
     parts.rightArm.rotation.set((hasWeapon ? -HOLD : 0) + x, 0, -z);
     parts.leftArm.rotation.set((hasEgg ? -HOLD : 0) - x, 0, z);
-    root.rotation.y = now.yaw;
-    parts.head.rotation.set(now.headPitch, now.headYaw, 0, 'YXZ');
+    root.rotation.y = now.yaw + spin;
+    // the head looks at the pointer only as far as the model faces it
+    const facing = Math.max(0, Math.cos(spin));
+    parts.head.rotation.set(now.headPitch * facing, now.headYaw * facing, 0, 'YXZ');
   };
 
   let frame = 0, visible = true, last = performance.now(), auraTime = 0;
@@ -694,6 +741,16 @@ export async function mountPlayer(container, spec) {
       now[key] += (target[key] - now[key]) * k;
       if (Math.abs(target[key] - now[key]) > 0.001) moving = true;
     }
+    if (!drag && spinSpeed) {
+      spin += spinSpeed * dt;
+      spinSpeed *= Math.exp(-dt * 4);
+      if (Math.abs(spinSpeed) < 0.02) spinSpeed = 0; else moving = true;
+    }
+    if (spinHome) {
+      spin *= 1 - k;
+      if (Math.abs(spin) < 0.001) { spin = 0; spinHome = false; } else moving = true;
+    }
+    if (drag) moving = true;
     const t = ms / 1000;
     for (const g of glints) g.uniforms.time.value = t;
     if (aura) {

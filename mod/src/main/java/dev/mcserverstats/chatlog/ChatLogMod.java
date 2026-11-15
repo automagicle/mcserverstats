@@ -36,8 +36,8 @@ import org.slf4j.LoggerFactory;
 // Records public chat (plus joins, leaves, deaths and advancements) and hands it to the
 // uploader, which sends it to the dashboard in the background. Private messages
 // (/msg, /tell, /teammsg) are never recorded. Also reports what each player is wearing and
-// carrying (GearReporter), for the 3D model on their dashboard page, and shows chat sent from the
-// dashboard in game (WebChatLink).
+// carrying (GearReporter) and their advancements (AdvancementReporter), for their dashboard page,
+// and shows chat sent from the dashboard in game (WebChatLink).
 public final class ChatLogMod implements DedicatedServerModInitializer {
 	static final Logger LOG = LoggerFactory.getLogger("mcstats-chat");
 
@@ -78,6 +78,13 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 
 		GearReporter gear = new GearReporter(uploader);
 		ServerTickEvents.END_SERVER_TICK.register(gear::tick);
+
+		AdvancementReporter advancements = new AdvancementReporter(uploader);
+		ServerLifecycleEvents.SERVER_STARTED.register(advancements::sendTree);
+		ServerLifecycleEvents.END_DATA_PACK_RELOAD.register((server, resources, success) -> {
+			if (success) advancements.sendTree(server);
+		});
+		ServerTickEvents.END_SERVER_TICK.register(advancements::tick);
 
 		ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) ->
 				uploader.add("chat", sender.getUUID(), sender.getScoreboardName(), styled(params.name(), 8), null,
