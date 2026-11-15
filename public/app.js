@@ -4711,29 +4711,93 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
     const { l, r: right } = root.plotBox || { l: 0, r: 0 };
     const f = (clientX - box.left - l) / Math.max(1, box.width - l - right);
     g = { from: r.from, to: Math.min(r.to, nowSec()), f: Math.min(1, Math.max(0, f)), scale: 1 };
+    drawn = null;
     hideTip();
   };
-  const apply = () => {
-    timer = 0;
-    if (!g) return;
+  // The span the fingers ask for right now (not yet snapped to whole hours or days).
+  const wanted = () => {
     const span = Math.min(max, Math.max(min, (g.to - g.from) * g.scale));
     const at = g.from + g.f * (g.to - g.from);
     let from = at - g.f * span, to = from + span;
     const now = nowSec();
     if (to > now) { from -= to - now; to = now; }
+    return { from, to };
+  };
+  // Every frame the chart already on screen is stretched to the wanted span, which costs almost
+  // nothing, so the zoom follows the fingers. The chart is redrawn for real (new data, sharp
+  // labels) one drawing at a time behind that, and the stretch then starts again from the new one.
+  let drawn = null; // the span of the chart on screen
+  let busy = false, again = false, frame = 0, last = null;
+  const stretch = () => {
+    frame = 0;
+    if (!g || !drawn) return;
+    const { from, to } = wanted();
+    const { l, r: right } = root.plotBox || { l: 0, r: 0 };
+    const pw = Math.max(1, root.clientWidth - l - right);
+    const k = (drawn.to - drawn.from) / (to - from);
+    const dx = l * (1 - k) + ((drawn.from - from) / (to - from)) * pw;
+    const same = Math.abs(k - 1) < 1e-4 && Math.abs(dx) < 0.25;
+    for (const child of root.children) {
+      child.style.transformOrigin = '0 0';
+      child.style.transform = same ? '' : `translateX(${dx}px) scaleX(${k})`;
+    }
+  };
+  const unstretch = () => {
+    for (const child of root.children) child.style.transform = '';
+    root.style.overflow = '';
+  };
+  const shownSpan = () => {
+    const r = resolveWindow(ctl.get()); // what the chart's x axis covers
+    return { from: r.from, to: r.to };
+  };
+  const apply = () => {
+    timer = 0;
+    if (!g) return;
+    if (busy) { again = true; return; }
+    const { from, to } = wanted();
     const w = toWindow(Math.round(from), Math.round(to));
     if (typeof w === 'string' || windowKey(w) === windowKey(ctl.get())) return;
     ctl.set(w);
-    render();
+    busy = true;
+    const mine = g;
+    Promise.resolve(render()).catch(() => {}).then(() => {
+      busy = false;
+      if (g !== mine) { // the gesture ended meanwhile: draw where it ended, unstretched
+        unstretch();
+        if (last && typeof last !== 'string' && windowKey(last) !== windowKey(ctl.get())) {
+          ctl.set(last);
+          render();
+        }
+        last = null;
+        return;
+      }
+      drawn = shownSpan();
+      stretch();
+      if (again) { again = false; apply(); }
+    });
   };
   const zoomTo = (scale) => {
     const span = g.to - g.from;
     g.scale = Math.min(max / span, Math.max(min / span, scale));
-    if (!timer) timer = setTimeout(apply, 60);
+    if (!drawn) {
+      drawn = shownSpan();
+      root.style.overflow = 'hidden';
+    }
+    if (!frame && !reducedMotion()) frame = requestAnimationFrame(stretch);
+    if (!timer) timer = setTimeout(apply, 90);
   };
   const end = () => {
-    if (timer) { clearTimeout(timer); apply(); }
+    clearTimeout(timer);
+    cancelAnimationFrame(frame);
+    frame = 0;
+    again = false;
+    if (g && busy) {
+      const { from, to } = wanted();
+      last = toWindow(Math.round(from), Math.round(to));
+    } else if (g) apply();
     g = null;
+    drawn = null;
+    if (!busy) unstretch(); // otherwise the drawing in flight clears it when it lands
   };
 
   root.addEventListener('wheel', (e) => {
