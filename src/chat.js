@@ -35,7 +35,30 @@ function cleanDisplay(d) {
 
 // The whole message as the game shows it: up to 32 pieces of text, each with an optional color
 // and the name of the player it names (p), so the page can color and link every name in it.
+// Pieces of an item's name are marked w; the first also carries the item's in-game tooltip (i).
 const PLAYER_RE = /^[A-Za-z0-9_.-]{1,32}$/;
+
+// An item's tooltip: up to 24 lines of up to 8 pieces { t, c?, i? (italic) }. An empty line stays (a gap).
+function cleanTooltip(lines) {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  const out = [];
+  for (const line of lines.slice(0, 24)) {
+    if (!Array.isArray(line)) return null;
+    const pieces = [];
+    for (const p of line.slice(0, 8)) {
+      if (!p || typeof p.t !== 'string') return null;
+      const t = p.t.replace(/[\u0000-\u001f\u007f]|§[0-9a-fk-or]/gi, '').slice(0, 120);
+      if (!t) continue;
+      const piece = { t };
+      if (typeof p.c === 'string' && COLOR_RE.test(p.c)) piece.c = p.c.toLowerCase();
+      if (p.i === true) piece.i = 1;
+      pieces.push(piece);
+    }
+    out.push(pieces);
+  }
+  return out;
+}
+
 function cleanRich(d) {
   if (!Array.isArray(d) || !d.length || d.length > 32) return null;
   const out = [];
@@ -46,6 +69,11 @@ function cleanRich(d) {
     const piece = { t };
     if (typeof p.c === 'string' && COLOR_RE.test(p.c)) piece.c = p.c.toLowerCase();
     if (typeof p.p === 'string' && PLAYER_RE.test(p.p)) piece.p = p.p;
+    if (p.w === true) {
+      piece.w = 1;
+      const lines = cleanTooltip(p.i);
+      if (lines) piece.i = lines;
+    }
     out.push(piece);
   }
   return out.length ? JSON.stringify(out) : null;

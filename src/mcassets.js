@@ -1,4 +1,4 @@
-// Minecraft's own textures (armor, trims, items) and players' skins, for the 3D model on player pages.
+// Minecraft's own textures (armor, trims, items, particles) and players' skins, for the 3D model on player pages.
 //
 // Textures come straight out of the official game client for the server's version (MC_VERSION),
 // downloaded from Mojang piece by piece: a .jar is a zip, so one ranged request reads its table of
@@ -8,7 +8,7 @@
 import { json } from './util.js';
 
 const MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
-const TEXTURE_RE = /^textures\/(item|misc|entity\/player\/(wide|slim)|entity\/equipment\/humanoid(_leggings)?|trims\/entity\/humanoid(_leggings)?|trims\/color_palettes)\/[a-z0-9_]{1,64}\.png$/;
+const TEXTURE_RE = /^textures\/(item|misc|particle|entity\/player\/(wide|slim)|entity\/equipment\/humanoid(_leggings)?|trims\/entity\/humanoid(_leggings)?|trims\/color_palettes)\/[a-z0-9_]{1,64}\.png$/;
 const NAME_RE = /^[A-Za-z0-9_]{1,16}$/;
 const WEEK = 7 * 86400;
 

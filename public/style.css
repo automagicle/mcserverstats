@@ -391,6 +391,12 @@ tr.link:hover td { background: var(--hover); }
   font-size: 13px;
   max-width: 260px;
 }
+.tooltip.tip-item { background: #150a1f; box-shadow: 0 0 0 1px #100010, inset 0 0 0 2px #2f0a6b, 0 6px 20px rgba(0, 0, 0, 0.3); border-radius: 4px; padding: 8px 11px; max-width: 320px; }
+.item-tip { color: #fff; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; }
+.item-tip .it-name { font-weight: 650; margin-bottom: 2px; }
+.msg-item { font-weight: 600; }
+.msg-item.has-tip { cursor: help; }
+.msg-item.has-tip:hover, .msg-item.has-tip:focus-visible { text-decoration: underline dotted; text-underline-offset: 3px; outline: none; }
 .tooltip .tv { font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; }
 .tooltip .tl { color: var(--ink-2); }
 .tooltip .row { display: flex; align-items: center; gap: 6px; }
@@ -409,7 +415,10 @@ tr.link:hover td { background: var(--hover); }
 
 .chart-bars { height: 200px; }
 .dbar { fill: var(--series-1); }
-.dbar.hover { opacity: 0.75; }
+.dbar.team-red { fill: var(--team-red); }
+.dbar.team-blue { fill: var(--team-blue); }
+.dbar.hover, .dbar-stack.hover { opacity: 0.75; }
+.tip-player .team { font-weight: 600; }
 
 /* ---------- update effects ---------- */
 

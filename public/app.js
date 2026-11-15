@@ -313,6 +313,7 @@ function showTip(x, y, rows) {
   tip.replaceChildren(
     ...rows.map((r) => {
       if (r.players) return playerList(r.players);
+      if (r.node) return r.node;
       const row = el('div', { class: 'row' });
       if (r.color) row.append(el('span', { class: 'key', style: `background:${r.color}` }));
       if (r.value != null) row.append(el('span', { class: 'tv', text: r.value }));
@@ -320,6 +321,7 @@ function showTip(x, y, rows) {
       return row;
     })
   );
+  tip.classList.toggle('tip-item', rows.some((r) => r.node)); // an item's tooltip looks like the game's
   tip.hidden = false;
   const w = tip.offsetWidth;
   const h = tip.offsetHeight;
@@ -336,9 +338,12 @@ const TIP_PLAYERS = 10;
 const tipHeads = new Map(); // reused across tooltip redraws so heads don't blink while moving
 function playerList(names) {
   const list = el('div', { class: 'tip-players' });
+  // red team first, then blue, then anyone on neither; each in the order given
+  const rank = (name) => ({ red: 0, blue: 1 })[rosterOf(name)?.team] ?? 2;
+  names = names.map((name, i) => [rank(name), i, name]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
   for (const name of names.slice(0, TIP_PLAYERS)) {
     if (!tipHeads.has(name)) tipHeads.set(name, headImg(name, 14, { width: 14, height: 14, loading: 'eager' }));
-    list.append(el('div', { class: 'tip-player' }, tipHeads.get(name), el('span', { text: shownName(name) })));
+    list.append(el('div', { class: 'tip-player' }, tipHeads.get(name), teamName(el('span', { text: shownName(name) }), name)));
   }
   if (names.length > TIP_PLAYERS) list.append(el('div', { class: 'tip-more', text: `+${names.length - TIP_PLAYERS} more` }));
   return list;
@@ -1036,6 +1041,7 @@ function barScale(vals) {
 //   dataStart   hatch everything before it
 //   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
 //   scale?      { ymax, ystep } — fixed y-axis instead of fitting the values
+//   split?      [{ red, blue }] — each bar's share (0 to 1) that is the red and the blue team's
 // }
 // grow: bars rise from zero (first drawing for a newly opened page).
 function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {}) {
@@ -1122,12 +1128,22 @@ function drawBars(root, spec, f) {
     const top = Math.max(m.t, y(f.vals[i])), base = y(0);
     const h = base - top;
     if (h > 0.5) {
-      // rounded top, square base
-      const r = Math.min(4, h, bw / 2);
+      // rounded top, square base; with spec.split the bar is stacked: red at the bottom, then blue, then the rest
       const x0 = cx - bw / 2, x1 = cx + bw / 2;
-      const bar = sv('path', {
-        d: `M${x0},${base}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x1 - r}Q${x1},${top} ${x1},${top + r}V${base}Z`,
-        class: 'dbar',
+      const sp = spec.split?.[i];
+      const segs = (sp ? [['team-red', sp.red], ['team-blue', sp.blue], ['', 1 - sp.red - sp.blue]] : [['', 1]])
+        .filter(([, share]) => share * h > 0.5);
+      const bar = sv('g', { class: 'dbar-stack' });
+      let from = base;
+      segs.forEach(([cls, share], k) => {
+        const last = k === segs.length - 1;
+        const to = last ? top : from - share * h;
+        const r = last ? Math.min(4, from - to, bw / 2) : 0;
+        bar.append(sv('path', {
+          d: `M${x0},${from}V${to + r}Q${x0},${to} ${x0 + r},${to}H${x1 - r}Q${x1},${to} ${x1},${to + r}V${from}Z`,
+          class: `dbar ${cls}`,
+        }));
+        from = to;
       });
       svg.append(bar);
       bars[i] = bar;
@@ -1726,7 +1742,7 @@ function makeChip(p) {
   knownNames.set(p.uuid, p.name);
   const chip = playerLink(el('a', { class: 'chip', title: otherName(p.name) },
     headImg(p.name, 24),
-    colorName(el('span', { class: 'chip-name', text: shownName(p.name) }), p.uuid),
+    colorName(el('span', { class: 'chip-name', text: shownName(p.name) }), p.uuid, p.name),
     el('span', { class: 'since', text: `since ${fmt(p.start_ts, { hour: 'numeric', minute: '2-digit' })}` })
   ), p.uuid, p.name);
   chip.addEventListener('focus', () => prefetchPlayer(p.uuid));
@@ -1766,7 +1782,7 @@ function syncChips(list, players, bg = '--page') {
   for (const p of players) {
     const existing = current.get(p.uuid);
     if (existing) {
-      colorName(existing.querySelector('.chip-name'), p.uuid).textContent = shownName(p.name);
+      colorName(existing.querySelector('.chip-name'), p.uuid, p.name).textContent = shownName(p.name);
       if (otherName(p.name)) existing.title = otherName(p.name);
       else existing.removeAttribute('title');
       continue;
@@ -1848,14 +1864,44 @@ async function renderServerDaily(animate = false, slide = 0) {
     vals[i] += sum / 60;
     peaks[i] = Math.max(peaks[i], pk);
   }
+  const teams = await teamHoursPerBucket(r.buckets).catch(() => null);
+  if (dailyCtl.get() !== w) return;
+  // each team's share of the bar; sessions and the hourly counts can differ a little, so never more than the bar
+  const split = teams && r.buckets.map((b, i) => {
+    const whole = Math.max(vals[i], teams.red[i] + teams.blue[i]);
+    return whole > 0 ? { red: teams.red[i] / whole, blue: teams.blue[i] / whole } : { red: 0, blue: 0 };
+  });
+  const teamRow = (team, i) => ({ value: fmtHours(teams[team][i]), label: TEAM_NAMES[team], color: `var(--team-${team})` });
   renderBars($('#heatmap'), {
-    buckets: r.buckets, vals, windowKey: windowKey(w), labels: 'day',
+    buckets: r.buckets, vals, windowKey: windowKey(w), labels: 'day', split,
     fmtTick: (v) => `${v}h`, dataStart: chartStart(),
     describe: (i) => [
       { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
+      ...(teams && vals[i] ? [teamRow('red', i), teamRow('blue', i)] : []),
       { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
     ],
   }, { animate, slide });
+}
+
+// Hours each team played in every bucket ({ start, end }, in order), from everyone's sessions.
+// null when the season has no teams.
+async function teamHoursPerBucket(buckets) {
+  if (!roster.size || !buckets.length) return null;
+  const from = buckets[0].start, to = buckets[buckets.length - 1].end;
+  // asked for up to now in ten-minute steps, so today's bar keeps up without a request per redraw
+  const r = await memoApi(`/api/sessions?from=${from}&to=${Math.min(to, Math.ceil(nowSec() / 600) * 600)}`);
+  const out = { red: buckets.map(() => 0), blue: buckets.map(() => 0) };
+  const stop = Math.min(to, nowSec());
+  for (const [, name, a0, b0] of r.rows) {
+    const team = out[rosterOf(name)?.team];
+    if (!team) continue;
+    const a = Math.max(from, a0), b = Math.min(stop, b0 + r.poll_seconds);
+    for (let i = 0; i < buckets.length && buckets[i].start < b; i++) {
+      const over = Math.min(b, buckets[i].end) - Math.max(a, buckets[i].start);
+      if (over > 0) team[i] += over / 3600;
+    }
+  }
+  return out;
 }
 
 // Busiest times for everyone, one team, or both teams blended (red and blue mixed by their share).
@@ -2438,6 +2484,8 @@ function renderPlayerModel(name, gear) {
     armor: gear?.armor || {},
     mainhand: bestWeapon(gear),
     offhand: heldEgg(gear, playerEggId(name, gear)),
+    // the egg's particle aura (a dim one when it has no energy left)
+    aura: playerEggId(name, gear) ? { id: playerEggId(name, gear), cracked: gear?.egg?.energy === 0 } : null,
   };
   const key = JSON.stringify(spec);
   renderModelNote(spec, gear);
@@ -2645,7 +2693,13 @@ function mcStyle(hex) {
   return v;
 }
 
-function colorName(node, uuid) {
+function colorName(node, uuid, ign) {
+  if (ign && rosterOf(ign)) { // on a team: the team's color, as everywhere else
+    node.classList.remove('mc');
+    node.removeAttribute('style');
+    node.classList.add('team', `team-${rosterOf(ign).team}`);
+    return node;
+  }
   const c = nameColors.get(uuid);
   if (c) { node.classList.add('mc'); node.setAttribute('style', mcStyle(c)); }
   return node;
@@ -2691,6 +2745,17 @@ const uuidForName = (name) => {
 function richText(m) {
   const out = [];
   const pieces = m.rich;
+  const colored = (p, t = p.t) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: t }) : t);
+  // The weapon's name: marked by the server mod (w); in older messages, the [bracketed] part of a death.
+  let itemFrom = -1, itemTo = -1;
+  if (!pieces.some((p) => p.w) && m.kind === 'death') {
+    itemFrom = pieces.findIndex((p) => !p.p && p.t.trimStart().startsWith('['));
+    if (itemFrom >= 0) {
+      itemTo = pieces.findIndex((p, k) => k >= itemFrom && p.t.trimEnd().endsWith(']'));
+      if (itemTo < 0 || pieces.slice(itemFrom, itemTo + 1).some((p) => p.p)) itemFrom = itemTo = -1;
+    }
+  }
+  const isItem = (k) => pieces[k].w || (k >= itemFrom && k <= itemTo);
   for (let i = 0; i < pieces.length;) {
     const who = pieces[i].p;
     if (who) {
@@ -2698,14 +2763,36 @@ function richText(m) {
       while (i < pieces.length && pieces[i].p === who) run.push(pieces[i++]);
       const uuid = who === m.name ? m.uuid : uuidForName(who);
       const shown = (t) => (shownName(who) === who ? noTag(t) : noTag(t).replace(who, shownName(who)));
-      out.push(playerLink(el('a', { class: 'msg-name' },
-        ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: shown(p.t) }) : shown(p.t)))), uuid, who));
-    } else {
-      const p = pieces[i++];
-      out.push(p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t);
-    }
+      out.push(playerLink(el('a', { class: 'msg-name' }, ...run.map((p) => colored(p, shown(p.t)))), uuid, who));
+    } else if (isItem(i)) {
+      const run = [];
+      while (i < pieces.length && !pieces[i].p && isItem(i)) run.push(pieces[i++]);
+      out.push(itemSpan(run));
+    } else out.push(colored(pieces[i++]));
   }
   return out;
+}
+
+// An item named in a message, a little bolder like the players' names. Hovering (or tapping) shows
+// its tooltip as in game, when the server mod sent one.
+function itemSpan(run) {
+  const node = el('span', { class: 'msg-item' }, ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t)));
+  const lines = run.find((p) => p.i)?.i;
+  if (!lines) return node;
+  node.classList.add('has-tip');
+  node.tabIndex = 0;
+  const tipNode = () => el('div', { class: 'item-tip' }, ...lines.map((line, k) => el('div', { class: `it-line${k ? '' : ' it-name'}` },
+    ...(line.length ? line.map((p) => el('span', { style: `${p.c ? `color:${p.c};` : ''}${p.i ? 'font-style:italic' : ''}`, text: p.t })) : ['\u00a0']))));
+  const show = (e) => showTip(e.clientX, e.clientY, [{ node: tipNode() }]);
+  node.addEventListener('pointerenter', show);
+  node.addEventListener('pointermove', show);
+  node.addEventListener('pointerleave', hideTip);
+  node.addEventListener('focus', () => {
+    const r = node.getBoundingClientRect();
+    showTip(r.left, r.top, [{ node: tipNode() }]);
+  });
+  node.addEventListener('blur', hideTip);
+  return node;
 }
 
 const chatAvatar = (m, size) => (m.name && (m.uuid || m.kind !== 'say')
@@ -3278,7 +3365,7 @@ function renderOnlineThen(force = false) {
   }
   list.replaceChildren(...people.map((p) => {
     if (!onlineHeads.has(p.name)) onlineHeads.set(p.name, headImg(p.name, 16, { width: 16, height: 16, loading: 'eager' }));
-    return playerLink(el('a', { class: 'cg-person' }, onlineHeads.get(p.name), colorName(el('span', { text: shownName(p.name) }), p.uuid)), p.uuid, p.name);
+    return playerLink(el('a', { class: 'cg-person' }, onlineHeads.get(p.name), colorName(el('span', { text: shownName(p.name) }), p.uuid, p.name)), p.uuid, p.name);
   }));
 }
 

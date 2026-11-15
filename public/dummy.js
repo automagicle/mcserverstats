@@ -282,7 +282,15 @@ window.createDummyApi = function createDummyApi({ roster = [], tz = 'America/Los
         const parts = words(victim.name, x.p.name);
         const weapon = cause === 'melee' && r() < 0.3 ? SWORDS[Math.floor(r() * SWORDS.length)] : null;
         const rich = [piece(victim.name), ...parts.map((w) => (w === x.p.name ? piece(w) : { t: w }))];
-        if (weapon) rich.push({ t: ' using ' }, { t: `[${weapon}]`, c: '#55ffff' });
+        if (weapon) {
+          // as the server mod sends it: the item's name marked (w), with its in-game tooltip (i)
+          rich.push({ t: ' using ' }, {
+            t: `[${weapon}]`, c: '#55ffff', w: 1,
+            i: [[{ t: weapon, c: '#55ffff', i: 1 }], [{ t: 'Sharpness V', c: '#aaaaaa' }], [{ t: 'Sweeping Edge III', c: '#aaaaaa' }],
+              [{ t: 'Unbreaking III', c: '#aaaaaa' }], [], [{ t: 'When in Main Hand:', c: '#aaaaaa' }],
+              [{ t: ' 11 Attack Damage', c: '#00aa00' }], [{ t: ' 1.6 Attack Speed', c: '#00aa00' }]],
+          });
+        }
         deaths.push({ ts: t, victim, killer: x.p.name, cause, mob: null, rich });
       }
       // and the world getting them

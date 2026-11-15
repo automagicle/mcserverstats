@@ -1,9 +1,10 @@
 // A player drawn in 3D the way the game draws them: their skin, the armor they wear (with trims,
 // leather dye and the enchantment shimmer), their best weapon in the main hand and their egg in the
-// off hand. The model turns a little toward the mouse, and the head follows it a bit more.
+// off hand with its particle aura. The model turns a little toward the mouse, and the head follows
+// it a bit more.
 //
 // Textures come from /api/mc/… (the game's own, for the server's version) and /api/skin/<name>.
-// Loaded on demand by app.js: mountPlayer(container, { name, uuid?, armor, mainhand?, offhand?, signal? })
+// Loaded on demand by app.js: mountPlayer(container, { name, uuid?, armor, mainhand?, offhand?, aura?: { id, cracked }, signal? })
 // -> { dispose() }. Items are as the server mod reports them (see src/gear.js).
 
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
@@ -270,6 +271,214 @@ function itemGeometry(img) {
   return { geo, canvas: c, size: n };
 }
 
+// Where the game puts an item in a hand (third person). Its chain, from ItemInHandLayer and
+// ItemTransform in the game's code, starting at the arm's joint with the arm's own turn applied:
+//   turn -90° about x, 180° about y, move (±1, 2, -10) pixels to the hand,
+//   then the item model's own "thirdperson" display: move, turn (x, then y, then z), scale,
+//   and the item drawn as a 16-pixel square centred on that point, one pixel thick.
+// The display values are the game's (models/item/generated.json, handheld.json, handheld_mace.json).
+// For the left hand the game flips the display's x move and its y and z turns; handheld.json's own
+// left-hand entry is already the flipped one, so both hands end up with the same turn.
+const HELD = {
+  generated: { rot: [0, 0, 0], move: [0, 3, 1], scale: 0.55 }, // eggs and other plain items: flat on the hand, face up
+  handheld: { rot: [0, -90, 55], move: [0, 4, 0.5], scale: 0.85 }, // swords and tools: blade forward
+  mace: { rot: [0, -90, 55], move: [0, 4, 1], scale: 1 },
+};
+const HANDHELD_RE = /_(sword|axe|pickaxe|shovel|hoe|spear)$|^(stick|bone|blaze_rod|breeze_rod|fishing_rod|trident)$/;
+const displayOf = (id) => (id === 'mace' ? HELD.mace : HANDHELD_RE.test(id) ? HELD.handheld : HELD.generated);
+
+// The game's model space has y pointing down and the player facing -z; here y is up and the
+// player faces +z. Turning half way round the x axis takes one to the other.
+const FROM_GAME = new THREE.Matrix4().makeScale(1, -1, -1);
+const rad = (deg) => (deg * Math.PI) / 180;
+
+// The item's place inside its arm (the arm's joint at the origin, in pixels). size: the picture's width.
+function heldMatrix(display, right, size, slim) {
+  const side = right ? 1 : -1;
+  const m = new THREE.Matrix4().copy(FROM_GAME);
+  const mul = (x) => m.multiply(x);
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  if (slim) mul(T(0.5 * side, 0, 0)); // thinner arms hold things half a pixel further in
+  mul(new THREE.Matrix4().makeRotationX(rad(-90)));
+  mul(new THREE.Matrix4().makeRotationY(rad(180)));
+  mul(T(side, 2, -10));
+  mul(T(side * display.move[0], display.move[1], display.move[2]));
+  mul(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(rad(display.rot[0]), rad(display.rot[1]), rad(display.rot[2]), 'XYZ')));
+  const k = (display.scale * 16) / size;
+  mul(new THREE.Matrix4().makeScale(k, k, k));
+  return m;
+}
+
+/* ---------- the egg's particles ---------- */
+
+// Egg SMP shows a particle aura around a player holding their egg in the off hand (core/Aura.java
+// in the egg mod). Every game tick (20 a second), with spin counting 0 to 15:
+//   - a small dust speck in the egg's main color somewhere around the body,
+//   - a main-color speck on a ring 0.72 blocks out, a sixteenth of a turn further round each tick
+//     and rising from 0.25 to 1.3 blocks,
+//   - an accent-color speck opposite it, sinking from 1.3 to 0.25,
+//   - and when spin is 0, two of the egg's own accent particle at shoulder height.
+// Colors and accent particles are the egg mod's (core/EggType.java). A cracked egg (no energy)
+// gives dim smoke instead.
+const AURA = {
+  life: [1.0, 0.31, 0.55, 0.79, 0.09, 0.29, 'end_rod'],
+  hunger: [0.84, 0.89, 0.35, 0.88, 0.48, 0.0, 'happy_villager'],
+  sky: [0.49, 0.83, 0.99, 0.01, 0.52, 0.78, 'enchant'],
+  gravity: [0.61, 0.79, 1.0, 0.15, 0.39, 0.92, 'small_gust'],
+  gambler: [0.96, 0.77, 0.27, 0.24, 0.86, 0.52, 'happy_villager'],
+  fire: [1.0, 0.48, 0.12, 1.0, 0.18, 0.05, 'flame'],
+  blood: [0.77, 0.09, 0.09, 1.0, 0.16, 0.16, 'crimson_spore'],
+  echo: [0.18, 0.83, 0.75, 0.06, 0.46, 0.43, 'sculk_soul'],
+  aqua: [0.24, 0.86, 1.0, 0.08, 0.40, 0.90, 'nautilus'],
+  meteor: [1.0, 0.94, 0.62, 1.0, 0.86, 0.42, 'end_rod'],
+  train: [0.88, 0.23, 0.23, 0.60, 0.64, 0.69, 'smoke'],
+  binding: [0.77, 0.80, 0.84, 0.89, 0.70, 0.25, 'crit'],
+  murica: [0.78, 0.06, 0.18, 0.24, 0.43, 1.0, 'firework'],
+  dung: [0.63, 0.41, 0.23, 0.55, 0.64, 0.17, 'composter'],
+  wizard: [0.69, 0.29, 1.0, 0.42, 0.12, 0.69, 'portal'],
+  redstone: [1.0, 0.23, 0.23, 0.55, 0.0, 0.0, 'electric_spark'],
+  fat: [1.0, 0.62, 0.71, 0.79, 0.42, 0.54, 'heart'],
+  woods: [0.24, 0.56, 0.23, 0.61, 0.80, 0.40, 'happy_villager'],
+  smite: [0.17, 0.72, 0.63, 0.49, 0.30, 1.0, 'nautilus'],
+  stash: [0.24, 0.86, 0.59, 0.77, 0.64, 0.35, 'happy_villager'],
+  sulfur: [0.91, 0.83, 0.30, 0.23, 0.23, 0.23, 'ash'],
+  subzero: [0.56, 0.85, 1.0, 0.91, 0.98, 1.0, 'snowflake'],
+  combo: [0.49, 0.83, 1.0, 0.91, 0.97, 1.0, 'crit'],
+  electric: [0.31, 0.85, 1.0, 1.0, 0.94, 0.48, 'electric_spark'],
+  deadshot: [0.88, 0.28, 0.28, 0.91, 0.78, 0.45, 'crit'],
+  purpur: [0.79, 0.63, 0.86, 0.66, 0.43, 0.66, 'end_rod'],
+};
+const AURA_CRACKED = [0.45, 0.45, 0.48, 0.28, 0.28, 0.3, 'smoke'];
+
+const frames = (name, n, down = true) => Array.from({ length: n }, (_, i) => `${name}_${down ? n - 1 - i : i}`);
+const GENERIC = frames('generic', 8); // big to small, as dust and smoke shrink away
+// The accent particles, near enough to the game's: pictures (played through over its life, or one
+// picked at random), size in blocks, life in ticks, how it drifts (blocks per tick), and its tint.
+const ACCENT = {
+  end_rod: { tex: frames('glitter', 8), size: 0.11, life: [40, 60], vy: -0.004, spread: 0.02, fade: true },
+  happy_villager: { tex: ['glint'], size: 0.09, life: [16, 24], vy: 0, spread: 0.004 },
+  composter: { tex: ['glint'], size: 0.09, life: [16, 24], vy: 0.004, spread: 0.004 },
+  enchant: { tex: 'abcdefghijklmnopqrstuvwxyz'.split('').map((l) => `sga_${l}`), pick: true, size: 0.1, life: [30, 40], vy: -0.012, spread: 0.02, tint: [0.75, 0.8, 1] },
+  nautilus: { tex: ['nautilus'], size: 0.1, life: [30, 40], vy: -0.012, spread: 0.02 },
+  small_gust: { tex: frames('small_gust', 7, false), size: 0.28, life: [12, 16], vy: 0, spread: 0 },
+  flame: { tex: ['flame'], size: 0.12, life: [14, 22], vy: 0.006, spread: 0.004, shrink: true },
+  crimson_spore: { tex: ['generic_0'], size: 0.07, life: [40, 70], vy: -0.006, spread: 0.012, tint: [0.9, 0.4, 0.5] },
+  sculk_soul: { tex: frames('sculk_soul', 11, false), size: 0.16, life: [22, 30], vy: 0.02, spread: 0.004 },
+  smoke: { tex: GENERIC, size: 0.14, life: [10, 30], vy: 0.012, spread: 0.006, tint: [0.2, 0.2, 0.2] },
+  crit: { tex: ['critical_hit'], size: 0.1, life: [8, 14], vy: -0.004, spread: 0.02, shrink: true },
+  firework: { tex: frames('spark', 8), size: 0.1, life: [30, 46], vy: -0.004, spread: 0.02, fade: true },
+  portal: { tex: GENERIC, pick: true, size: 0.1, life: [30, 40], vy: 0.008, spread: 0.02, tint: [0.75, 0.25, 0.95], shrink: true },
+  electric_spark: { tex: ['glow'], size: 0.08, life: [6, 12], vy: 0, spread: 0.02, tint: [1, 0.9, 0.5] },
+  heart: { tex: ['heart'], size: 0.18, life: [16, 16], vy: 0.012, spread: 0.002 },
+  ash: { tex: ['generic_0'], size: 0.06, life: [30, 60], vy: -0.01, spread: 0.008, tint: [0.25, 0.25, 0.25] },
+  snowflake: { tex: GENERIC, size: 0.1, life: [20, 40], vy: -0.008, spread: 0.01, tint: [0.92, 0.98, 1] },
+};
+const BLOCK = 16 / 0.9375; // the game draws players a touch smaller than their model: this many pixels to a block
+const gauss = () => { // roughly a normal spread, like the game's
+  let t = 0;
+  for (let i = 0; i < 4; i++) t += Math.random();
+  return (t - 2) * 1.73;
+};
+
+// The aura around the model. Positions are in blocks (feet at the origin, the game's axes turned to
+// the scene's); tick() is one game tick, draw(part) places the sprites between ticks.
+async function makeAura(scene, look, keep) {
+  const [r, g, b, r2, g2, b2, accentName] = look;
+  const accent = ACCENT[accentName] || ACCENT.end_rod;
+  const names = [...new Set([...GENERIC, ...accent.tex])];
+  const textures = new Map();
+  await Promise.all(names.map(async (n) => {
+    const img = await loadImage(TEX(`particle/${n}`));
+    if (img) textures.set(n, keep(pixelTexture(img)));
+  }));
+  if (!textures.has('generic_0')) return null; // no particle pictures (an older Worker): no aura
+  const group = new THREE.Group();
+  scene.add(group);
+  const live = [];
+  const spare = [];
+  let n = 0;
+
+  const spawn = (p) => {
+    const sprite = spare.pop() || new THREE.Sprite(keep(new THREE.SpriteMaterial({ transparent: true, alphaTest: 0.05, depthWrite: false })));
+    sprite.material.color.setRGB(p.color[0], p.color[1], p.color[2], THREE.SRGBColorSpace);
+    sprite.material.opacity = 1;
+    group.add(sprite);
+    live.push({ age: 0, px: p.x, py: p.y, pz: p.z, ...p, sprite });
+  };
+  // A dust speck, as the game makes one: slightly varied color, a size and life that follow its
+  // scale, a slow drift that soon stops.
+  const dust = (x, y, z, cr, cg, cb, scale) => {
+    const f = Math.random() * 0.4 + 0.6;
+    const shade = () => (Math.random() * 0.2 + 0.8) * f;
+    spawn({
+      x, y, z, tex: GENERIC, color: [cr * shade(), cg * shade(), cb * shade()],
+      vx: gauss() * 0.004, vy: 0.01 + gauss() * 0.004, vz: gauss() * 0.004, drag: 0.96,
+      size: 0.1 * (Math.random() * 0.5 + 0.5) * 2 * 0.75 * scale * 2,
+      life: Math.max(1, Math.floor((8 / (Math.random() * 0.8 + 0.2)) * scale)), grow: true,
+    });
+  };
+  const ring = (yawDeg, y, radius) => { // the game's "rotated <yaw> 0, forward <radius>"
+    const a = rad(yawDeg);
+    return [-Math.sin(a) * radius, y, Math.cos(a) * radius];
+  };
+
+  return {
+    tick() {
+      for (let i = live.length - 1; i >= 0; i--) {
+        const p = live[i];
+        p.px = p.x; p.py = p.y; p.pz = p.z;
+        if (++p.age >= p.life) {
+          group.remove(p.sprite);
+          spare.push(p.sprite);
+          live.splice(i, 1);
+          continue;
+        }
+        p.x += p.vx; p.y += p.vy; p.z += p.vz;
+        p.vx *= p.drag; p.vy *= p.drag; p.vz *= p.drag;
+      }
+      const spin = n++ % 16;
+      dust(gauss() * 0.18, 0.75 + gauss() * 0.28, gauss() * 0.18, r, g, b, 0.45);
+      dust(...ring(spin * 22.5, 0.25 + 0.07 * spin, 0.72), r, g, b, 0.7);
+      dust(...ring(spin * 22.5 + 180, 1.3 - 0.07 * spin, 0.72), r2, g2, b2, 0.55);
+      if (spin === 0) {
+        for (let k = 0; k < 2; k++) {
+          const [x, y, z] = ring(90, 1.05, 0.85);
+          const life = accent.life[0] + Math.floor(Math.random() * (accent.life[1] - accent.life[0] + 1));
+          spawn({
+            x: x + gauss() * 0.08, y: y + gauss() * 0.08, z: z + gauss() * 0.08,
+            tex: accent.pick ? [accent.tex[Math.floor(Math.random() * accent.tex.length)]] : accent.tex,
+            color: accent.tint || [1, 1, 1], size: accent.size * (0.8 + Math.random() * 0.4), life,
+            vx: gauss() * accent.spread, vy: accent.vy + gauss() * accent.spread * 0.5, vz: gauss() * accent.spread, drag: 0.96,
+            fade: accent.fade, shrink: accent.shrink,
+          });
+        }
+      }
+    },
+    // part: how far into the current tick (0 to 1)
+    draw(part) {
+      for (const p of live) {
+        const t = (p.age + part) / p.life;
+        const tex = textures.get(p.tex[Math.min(p.tex.length - 1, Math.floor(t * p.tex.length))]) || textures.get('generic_0');
+        if (p.sprite.material.map !== tex) {
+          p.sprite.material.map = tex;
+          p.sprite.material.needsUpdate = true;
+        }
+        let size = p.size * BLOCK;
+        if (p.grow) size *= Math.min(1, t * 32);
+        if (p.shrink) size *= 1 - t * 0.6;
+        if (p.fade) p.sprite.material.opacity = t > 0.5 ? Math.max(0, 1 - (t - 0.5) * 2) : 1;
+        p.sprite.scale.set(size, size, 1);
+        p.sprite.position.set(
+          (p.px + (p.x - p.px) * part) * BLOCK, (p.py + (p.y - p.py) * part) * BLOCK, (p.pz + (p.z - p.pz) * part) * BLOCK);
+      }
+    },
+    clear() {
+      for (const p of live) group.remove(p.sprite);
+      live.length = 0;
+    },
+  };
+}
+
 /* ---------- the model ---------- */
 
 export async function mountPlayer(container, spec) {
@@ -381,8 +590,9 @@ export async function mountPlayer(container, spec) {
     }
   }));
 
-  // Held items: the weapon in the main (right) hand, the egg in the off (left) hand.
-  const holdItem = async (item, arm, handheld) => {
+  // Held items: the weapon in the main (right) hand, the egg in the off (left) hand, placed exactly
+  // as the game places them (see HELD above).
+  const holdItem = async (item, arm) => {
     const id = item && (item.model || item.id);
     if (!id || !ID_RE.test(id)) return false;
     const img = await loadImage(TEX(`item/${id}`));
@@ -390,42 +600,26 @@ export async function mountPlayer(container, spec) {
     const { geo, canvas: c, size } = itemGeometry(img);
     const tex = keep(pixelTexture(c));
     const mat = material(tex);
-    const s = 16 / size;
-    const it = new THREE.Mesh(keep(geo), mat);
     const holder = new THREE.Group();
-    const right = arm === 'rightArm';
-    const handX = right ? offset.rightArm[0] : offset.leftArm[0];
-    holder.position.set(handX, -10.5, 1);
-    if (handheld) {
-      // Held by the handle (the picture's lower left), the blade pointing forward and a little up.
-      it.scale.setScalar(0.85 * s);
-      it.position.set(4.6 * 0.85, 4.6 * 0.85, 0);
-      // As in the game: the blade points forward, tipped a little up, the picture's face turned to the side.
-      // Swung a little in toward the body so that face shows from where the camera looks.
-      holder.rotation.set(0, right ? -Math.PI / 2 + 0.3 : Math.PI / 2 - 0.3, -0.55, 'XYZ');
-    } else {
-      it.scale.setScalar(0.55 * s);
-      holder.position.y += 2.2;
-      holder.position.z += 1.4;
-      // held up toward the viewer rather than edge-on, as a trophy
-      holder.rotation.set(0.25, right ? 0.5 : -0.35, 0, 'XYZ');
-    }
-    holder.add(it);
+    holder.matrixAutoUpdate = false;
+    holder.matrix.copy(heldMatrix(displayOf(id), arm === 'rightArm', size, skin.slim));
+    holder.add(new THREE.Mesh(keep(geo), mat));
     if (item.glint && glintTex) {
       const gmat = keep(glintMaterial(tex, glintTex, new THREE.Vector2(0.5, 0.5)));
       glints.push(gmat);
-      const shine = new THREE.Mesh(geo, gmat);
-      shine.scale.copy(it.scale);
-      shine.position.copy(it.position);
-      holder.add(shine);
+      holder.add(new THREE.Mesh(geo, gmat));
     }
     parts[arm].add(holder);
     return true;
   };
   const [hasWeapon, hasEgg] = await Promise.all([
-    holdItem(spec.mainhand, 'rightArm', true),
-    holdItem(spec.offhand, 'leftArm', false),
+    holdItem(spec.mainhand, 'rightArm'),
+    holdItem(spec.offhand, 'leftArm'),
   ]);
+
+  // The egg's particles, only while the egg is in the hand and things may move.
+  const auraLook = spec.aura?.cracked ? AURA_CRACKED : AURA[spec.aura?.id];
+  const aura = hasEgg && auraLook && !reducedMotion() ? await makeAura(scene, auraLook, keep) : null;
 
   if (cancelled()) {
     for (const d of disposables) d.dispose?.();
@@ -476,18 +670,20 @@ export async function mountPlayer(container, spec) {
   addEventListener('pointermove', onPointer, { passive: true });
   document.addEventListener('pointerout', onLeave);
 
-  // A resting pose: arms slightly forward to hold their things, gently swaying like in the game.
+  // The game's standing pose: an arm holding something is raised a tenth of a half turn, and both
+  // sway gently.
+  const HOLD = Math.PI / 10;
   const pose = (t) => {
     const sway = reducedMotion() ? 0 : 1;
     const z = (Math.cos(t * 1.8) * 0.05 + 0.05) * sway;
     const x = Math.sin(t * 1.34) * 0.05 * sway;
-    parts.rightArm.rotation.set((hasWeapon ? -0.32 : 0) + x, 0, -z - 0.03);
-    parts.leftArm.rotation.set((hasEgg ? -0.28 : 0) - x, 0, z + 0.03);
+    parts.rightArm.rotation.set((hasWeapon ? -HOLD : 0) + x, 0, -z);
+    parts.leftArm.rotation.set((hasEgg ? -HOLD : 0) - x, 0, z);
     root.rotation.y = now.yaw;
     parts.head.rotation.set(now.headPitch, now.headYaw, 0, 'YXZ');
   };
 
-  let frame = 0, visible = true, last = performance.now();
+  let frame = 0, visible = true, last = performance.now(), auraTime = 0;
   const loop = (ms) => {
     frame = 0;
     const dt = Math.min(0.1, (ms - last) / 1000);
@@ -500,9 +696,16 @@ export async function mountPlayer(container, spec) {
     }
     const t = ms / 1000;
     for (const g of glints) g.uniforms.time.value = t;
+    if (aura) {
+      // the game's 20 ticks a second; after a pause (a hidden tab) start again rather than catch up
+      auraTime += dt * 20;
+      if (auraTime > 40) { aura.clear(); auraTime = 1; }
+      for (; auraTime >= 1; auraTime -= 1) aura.tick();
+      aura.draw(auraTime);
+    }
     pose(t);
     renderer.render(scene, camera);
-    if (visible && !document.hidden && (moving || !reducedMotion() || glints.length)) frame = requestAnimationFrame(loop);
+    if (visible && !document.hidden && (moving || !reducedMotion() || glints.length || aura)) frame = requestAnimationFrame(loop);
   };
   function wake() {
     if (!frame && visible && !document.hidden && !disposed) {

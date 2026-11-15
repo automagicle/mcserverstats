@@ -26,6 +26,9 @@ import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.scores.PlayerTeam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +47,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	private Uploader uploader;
 	private WebChatLink link;
 	private volatile MinecraftServer server;
+	private static volatile MinecraftServer current; // the same, for the static helpers
 	// set while this mod posts a web message itself, so the system-message logger doesn't log it again
 	private boolean postingWeb;
 
@@ -57,6 +61,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			this.server = server;
+			current = server;
 			uploader.start();
 			uploader.add("server", null, null, null, null, "Server started");
 			link.start();
@@ -68,6 +73,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 			uploader.stop();
 			this.server = null;
+			current = null;
 		});
 
 		GearReporter gear = new GearReporter(uploader);
@@ -198,6 +204,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	// p marks pieces of a player's name (its click-to-insert text), so the dashboard can link it.
 	static JsonArray styled(Component c, int max) {
 		JsonArray out = new JsonArray();
+		HoverEvent.ShowItem[] seen = new HoverEvent.ShowItem[1];
 		c.visit((style, text) -> {
 			if (!text.isEmpty() && out.size() < max) {
 				JsonObject piece = new JsonObject();
@@ -206,11 +213,52 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 				if (color != null) piece.addProperty("c", String.format("#%06x", color.getValue() & 0xFFFFFF));
 				String who = style.getInsertion();
 				if (who != null && PLAYER_NAME.matcher(who).matches()) piece.addProperty("p", who);
+				// An item's name (the weapon in a death message): marked, and the first piece of it
+				// carries what hovering over it shows in game.
+				if (style.getHoverEvent() instanceof HoverEvent.ShowItem show) {
+					piece.addProperty("w", true);
+					if (seen[0] != show) {
+						seen[0] = show;
+						JsonArray lines = tooltip(show);
+						if (lines != null) piece.add("i", lines);
+					}
+				}
 				out.add(piece);
 			}
 			return Optional.empty();
 		}, Style.EMPTY);
 		return out.isEmpty() ? null : out;
+	}
+
+	// An item's tooltip as the game shows it (name, enchantments, attributes, lore): a list of
+	// lines, each a list of { t, c?, i? (italic) } pieces. An empty list is a blank line.
+	private static JsonArray tooltip(HoverEvent.ShowItem show) {
+		try {
+			MinecraftServer s = current;
+			ItemStack stack = show.item().create();
+			Item.TooltipContext context = s == null ? Item.TooltipContext.EMPTY : Item.TooltipContext.of(s.registryAccess());
+			JsonArray lines = new JsonArray();
+			for (Component line : stack.getTooltipLines(context, null, TooltipFlag.NORMAL)) {
+				if (lines.size() >= 24) break;
+				JsonArray pieces = new JsonArray();
+				line.visit((style, text) -> {
+					if (!text.isEmpty() && pieces.size() < 8) {
+						JsonObject piece = new JsonObject();
+						piece.addProperty("t", text.length() > 120 ? text.substring(0, 120) : text);
+						TextColor color = style.getColor();
+						if (color != null) piece.addProperty("c", String.format("#%06x", color.getValue() & 0xFFFFFF));
+						if (style.isItalic()) piece.addProperty("i", true);
+						pieces.add(piece);
+					}
+					return Optional.empty();
+				}, Style.EMPTY);
+				lines.add(pieces);
+			}
+			return lines.isEmpty() ? null : lines;
+		} catch (RuntimeException e) {
+			LOG.debug("Couldn't read an item's tooltip", e);
+			return null;
+		}
 	}
 
 	// A player's display name can carry a team prefix; its click-to-insert text is the bare name.
