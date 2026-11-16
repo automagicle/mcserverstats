@@ -71,6 +71,18 @@ with a yellow **Admin** tag instead of a name (in game: `[Web] [Admin] message`)
 see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
 log is left empty.
 
+## Hiding a player
+
+A name in the `hidden_players` table is left out of the Activity and Combat pages as if it had never been on the
+server: its playtime, its place in player counts, peaks and lists, its player page, its deaths. It covers everything
+already recorded, and nothing more is recorded for it while it's listed. The chat log still shows its messages.
+Nothing is deleted, so taking the name off brings back what was recorded before it was added.
+
+```bash
+npx wrangler d1 execute mcstats --remote --command "INSERT OR IGNORE INTO hidden_players (name, note) VALUES ('Name', 'why')"
+npx wrangler d1 execute mcstats --remote --command "DELETE FROM hidden_players WHERE name = 'Name'"
+```
+
 ## Sign-in (Cloudflare Access)
 
 The Access application's **Allow** policy decides who can open the dashboard. Its **Include** rules are OR'd, so one

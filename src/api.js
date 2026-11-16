@@ -7,6 +7,7 @@ import { gearFor, ingestGear } from './gear.js';
 import { advancementsFor, ingestAdvancements } from './advancements.js';
 import { serveItem, serveSkin, serveTexture } from './mcassets.js';
 import { connectLink, sendWebChat, webChatMe } from './link.js';
+import { hiddenSessions, hourlyWithoutHidden, notHidden, withoutHidden } from './hidden.js';
 import { json, UUID_RE } from './util.js';
 
 const DAY = 86400;
@@ -79,17 +80,26 @@ export async function handleApi(request, env, url) {
     if (last) {
       const { results } = await db.prepare(
         `SELECT p.uuid, p.name, MAX(s.start_ts, ?2) AS start_ts FROM sessions s JOIN players p ON p.uuid = s.uuid
-         WHERE s.end_ts = ?1 ORDER BY s.start_ts`
+         WHERE s.end_ts = ?1 AND ${notHidden('p.name')} ORDER BY s.start_ts`
       ).bind(last.ts, lo).all();
       online = results;
+      const hidden = await hiddenSessions(db, last.ts, last.ts);
+      last.listed = withoutHidden(hidden, last.ts, last.listed);
+      last.online = withoutHidden(hidden, last.ts, last.online);
     }
     // From the start of tracking, "seen this season" is everyone first seen before it ended (cheap);
     // later seasons count who has a session in them.
     const totals = lo === 0
-      ? await db.prepare('SELECT COUNT(*) AS players FROM players WHERE first_seen < ?').bind(hi).first()
-      : await db.prepare('SELECT COUNT(DISTINCT uuid) AS players FROM sessions WHERE end_ts >= ? AND start_ts < ?').bind(lo, hi).first();
+      ? await db.prepare(`SELECT COUNT(*) AS players FROM players p WHERE first_seen < ? AND ${notHidden('p.name')}`).bind(hi).first()
+      : await db.prepare(
+        `SELECT COUNT(DISTINCT s.uuid) AS players FROM sessions s JOIN players p ON p.uuid = s.uuid
+         WHERE s.end_ts >= ? AND s.start_ts < ? AND ${notHidden('p.name')}`
+      ).bind(lo, hi).first();
     const first = await db.prepare('SELECT MIN(ts) AS ts FROM snapshots WHERE ts >= ? AND ts < ?').bind(lo, hi).first();
-    const peak = await db.prepare('SELECT MAX(peak) AS n FROM hourly WHERE hour_ts > ? AND hour_ts < ?').bind(lo - 3600, hi).first();
+    const peakRows = await hourlyWithoutHidden(db, await db.prepare(
+      'SELECT hour_ts, samples, up_samples, online_sum, peak FROM hourly WHERE hour_ts > ? AND hour_ts < ? ORDER BY hour_ts'
+    ).bind(lo - 3600, hi).raw());
+    const peak = { n: peakRows.reduce((n, r) => Math.max(n, r[4]), 0) };
     // The mod logs "Server stopped" when the server shuts down (it sleeps while nobody's on).
     const serverEvent = await db.prepare(
       "SELECT ts_ms AS ts, text FROM chat WHERE kind = 'server' AND ts_ms >= ? AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1"
@@ -119,7 +129,7 @@ export async function handleApi(request, env, url) {
               COUNT(*) AS sessions,
               MIN(MAX(s.end_ts), ?2 - ?3) AS last_seen
        FROM sessions s JOIN players p ON p.uuid = s.uuid
-       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2
+       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')}
        GROUP BY s.uuid ORDER BY secs DESC`
     ).bind(from, to, POLL_SECONDS).all();
     return json({ from, to, players: results });
@@ -130,6 +140,8 @@ export async function handleApi(request, env, url) {
     const [from, to] = clampRange(season, ...range(url, 1, 8));
     const rows = await db.prepare('SELECT ts, up, online FROM snapshots WHERE ts >= ? AND ts < ? AND ts <= ? ORDER BY ts')
       .bind(from, hi, to).raw();
+    const hidden = rows.length ? await hiddenSessions(db, rows[0][0], rows[rows.length - 1][0]) : [];
+    if (hidden.length) for (const r of rows) r[2] = withoutHidden(hidden, r[0], r[2]);
     return json({ from, to, cols: ['ts', 'up', 'online'], rows });
   }
 
@@ -138,9 +150,9 @@ export async function handleApi(request, env, url) {
     // An hour that a season starts partway through still belongs to it.
     const from = Math.max(reqFrom, Math.floor(lo / 3600) * 3600);
     const to = Math.min(reqTo, hi - 1);
-    const rows = await db.prepare(
+    const rows = await hourlyWithoutHidden(db, await db.prepare(
       'SELECT hour_ts, samples, up_samples, online_sum, peak FROM hourly WHERE hour_ts >= ? AND hour_ts <= ? ORDER BY hour_ts'
-    ).bind(from, to).raw();
+    ).bind(from, to).raw());
     return json({ from, to, cols: ['hour_ts', 'samples', 'up_samples', 'online_sum', 'peak'], rows });
   }
 
@@ -149,7 +161,7 @@ export async function handleApi(request, env, url) {
     const [from, to] = clampRange(season, ...range(url, 1, 120));
     const rows = await db.prepare(
       `SELECT s.uuid, p.name, MAX(s.start_ts, ?4), MIN(s.end_ts, ?5 - ?3) FROM sessions s JOIN players p ON p.uuid = s.uuid
-       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 ORDER BY s.start_ts`
+       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')} ORDER BY s.start_ts`
     ).bind(from, to, POLL_SECONDS, lo, hi).raw();
     return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
   }
@@ -168,7 +180,7 @@ export async function handleApi(request, env, url) {
   if (m) {
     const uuid = decodeURIComponent(m[1]);
     if (!UUID_RE.test(uuid)) return json({ error: 'bad uuid' }, 400);
-    const player = await db.prepare('SELECT uuid, name, first_seen FROM players WHERE uuid = ?').bind(uuid).first();
+    const player = await db.prepare(`SELECT uuid, name, first_seen FROM players p WHERE uuid = ? AND ${notHidden('p.name')}`).bind(uuid).first();
     if (!player) return json({ error: 'not found' }, 404);
     const sessions = await db.prepare(
       `SELECT MAX(start_ts, ?2), MIN(end_ts, ?3 - ?4) FROM sessions

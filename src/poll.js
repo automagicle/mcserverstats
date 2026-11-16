@@ -37,15 +37,24 @@ export async function poll(env, nowSeconds) {
       }
     }
   }
-  const online = up ? (data.players?.online ?? seen.size) : 0;
+  let online = up ? (data.players?.online ?? seen.size) : 0;
   const max = up ? (data.players?.max ?? null) : null;
 
   const db = env.DB;
-  const [dup, open] = await db.batch([
+  const [dup, open, hidden] = await db.batch([
     db.prepare('SELECT 1 FROM snapshots WHERE ts = ?').bind(ts),
     db.prepare('SELECT id, uuid FROM sessions WHERE end_ts >= ?').bind(ts - SESSION_GAP),
+    db.prepare('SELECT name FROM hidden_players'),
   ]);
   if (dup.results.length) return; // this minute was already recorded
+
+  // Hidden players (the hidden_players table) aren't recorded or counted at all.
+  const skip = new Set(hidden.results.map((r) => r.name.toLowerCase()));
+  for (const [uuid, name] of seen) {
+    if (!skip.has(name.toLowerCase())) continue;
+    seen.delete(uuid);
+    online = Math.max(0, online - 1);
+  }
 
   const openByUuid = new Map(open.results.map((r) => [r.uuid, r.id]));
   const hourTs = Math.floor(ts / 3600) * 3600;

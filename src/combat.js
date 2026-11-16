@@ -6,6 +6,7 @@
 // existed, it's worked out here from the message itself: the styled text marks every player it
 // names, and the wording says how it happened.
 
+import { notHidden } from './hidden.js';
 import { json } from './util.js';
 
 const NAME_RE = /^[A-Za-z0-9_.]{1,20}$/;
@@ -62,6 +63,8 @@ const BY_WORDING = [
 // or listed on the Combat page: they come from resets and border changes, not play. Their rows and their
 // chat messages stay.
 const COUNTED = `(cause IS NOT 'border' OR killer IS NOT NULL)`;
+// Hidden players (src/hidden.js): their deaths aren't shown, and a kill of theirs has no killer.
+const KILLER = (d) => `CASE WHEN ${d}killer IS NULL OR ${notHidden(`${d}killer`)} THEN ${d}killer END`;
 
 const causeFromText = (text) => BY_WORDING.find(([re]) => re.test(text))?.[1] || 'other';
 
@@ -148,8 +151,8 @@ export async function combatData(env, url, season) {
   await describePending(db);
   const after = Math.max(0, Math.floor(Number(url.searchParams.get('after'))) || 0);
   const rows = await db.prepare(
-    `SELECT id, ts_ms, victim, victim_uuid, killer, killer_uuid, cause, mob FROM deaths
-     WHERE ts_ms >= ? AND ts_ms < ? AND id > ? AND ${COUNTED} ORDER BY ts_ms, id LIMIT 50000`
+    `SELECT id, ts_ms, victim, victim_uuid, ${KILLER('')}, killer_uuid, cause, mob FROM deaths
+     WHERE ts_ms >= ? AND ts_ms < ? AND id > ? AND ${COUNTED} AND ${notHidden('victim')} ORDER BY ts_ms, id LIMIT 50000`
   ).bind(season.lo * 1000, season.hi * 1000, after).raw();
   const uuids = {};
   let maxId = after;
@@ -170,7 +173,7 @@ export async function combatData(env, url, season) {
 export async function combatLog(env, url, season) {
   const q = url.searchParams;
   const limit = Math.min(100, Math.max(1, Math.floor(Number(q.get('limit'))) || 40));
-  const where = ['d.ts_ms >= ?', 'd.ts_ms < ?', COUNTED];
+  const where = ['d.ts_ms >= ?', 'd.ts_ms < ?', COUNTED, notHidden('d.victim')];
   const args = [season.lo * 1000, season.hi * 1000];
   const player = q.get('player');
   if (player) {
@@ -178,8 +181,8 @@ export async function combatLog(env, url, season) {
     where.push('(d.victim = ? OR d.killer = ?)');
     args.push(player, player);
   }
-  if (q.get('type') === 'pvp') where.push('d.killer IS NOT NULL');
-  else if (q.get('type') === 'other') where.push('d.killer IS NULL');
+  if (q.get('type') === 'pvp') where.push(`${KILLER('d.')} IS NOT NULL`);
+  else if (q.get('type') === 'other') where.push(`${KILLER('d.')} IS NULL`);
   for (const [key, cmp] of [['before', '<'], ['after', '>']]) {
     if (!q.has(key)) continue;
     const c = /^(\d+):(\d+)$/.exec(q.get(key));
@@ -188,7 +191,7 @@ export async function combatLog(env, url, season) {
     args.push(Number(c[1]), Number(c[1]), Number(c[2]));
   }
   const { results } = await env.DB.prepare(
-    `SELECT c.id, c.ts_ms AS ts, c.kind, c.uuid, c.name, c.text, c.display, c.rich, d.killer, d.cause, d.mob
+    `SELECT c.id, c.ts_ms AS ts, c.kind, c.uuid, c.name, c.text, c.display, c.rich, ${KILLER('d.')} AS killer, d.cause, d.mob
      FROM deaths d JOIN chat c ON c.id = d.id
      WHERE ${where.join(' AND ')} ORDER BY d.ts_ms DESC, d.id DESC LIMIT ?`
   ).bind(...args, limit + 1).all();
