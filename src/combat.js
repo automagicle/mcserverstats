@@ -22,7 +22,7 @@ const BY_TYPE = {
   inFire: 'fire', onFire: 'fire', hotFloor: 'fire',
   lava: 'lava',
   drown: 'drown', dryout: 'drown',
-  outOfWorld: 'void', outsideBorder: 'void',
+  outOfWorld: 'void', outsideBorder: 'border',
   magic: 'magic', indirectMagic: 'magic', even_more_magic: 'magic', dragonBreath: 'magic',
   wither: 'wither', sonic_boom: 'sonic', lightningBolt: 'lightning',
   anvil: 'crush', fallingBlock: 'crush', fallingStalactite: 'crush', cramming: 'crush',
@@ -39,7 +39,8 @@ function causeFromKey(key) {
 
 // The same, from the English wording (messages logged without their key).
 const BY_WORDING = [
-  [/fell out of the world|didn't want to live in the same world|left the confines of this world/, 'void'],
+  [/left the confines of this world/, 'border'],
+  [/fell out of the world|didn't want to live in the same world/, 'void'],
   [/hit the ground too hard|fell (from|off|while|too far)|was doomed to fall|experienced kinetic energy|impaled on a stalagmite/, 'fall'],
   [/tried to swim in lava/, 'lava'],
   [/went up in flames|burned to death|walked into fire|burnt to a crisp|danger zone|floor was lava/, 'fire'],
@@ -57,6 +58,11 @@ const BY_WORDING = [
   [/froze to death|frozen to death/, 'freeze'],
   [/was slain by|stung to death|was smashed by|was speared by/, 'melee'],
 ];
+// Deaths to the world border ("left the confines of this world") with no player behind them aren't counted
+// or listed on the Combat page: they come from resets and border changes, not play. Their rows and their
+// chat messages stay.
+const COUNTED = `(cause IS NOT 'border' OR killer IS NOT NULL)`;
+
 const causeFromText = (text) => BY_WORDING.find(([re]) => re.test(text))?.[1] || 'other';
 
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
@@ -143,7 +149,7 @@ export async function combatData(env, url, season) {
   const after = Math.max(0, Math.floor(Number(url.searchParams.get('after'))) || 0);
   const rows = await db.prepare(
     `SELECT id, ts_ms, victim, victim_uuid, killer, killer_uuid, cause, mob FROM deaths
-     WHERE ts_ms >= ? AND ts_ms < ? AND id > ? ORDER BY ts_ms, id LIMIT 50000`
+     WHERE ts_ms >= ? AND ts_ms < ? AND id > ? AND ${COUNTED} ORDER BY ts_ms, id LIMIT 50000`
   ).bind(season.lo * 1000, season.hi * 1000, after).raw();
   const uuids = {};
   let maxId = after;
@@ -164,7 +170,7 @@ export async function combatData(env, url, season) {
 export async function combatLog(env, url, season) {
   const q = url.searchParams;
   const limit = Math.min(100, Math.max(1, Math.floor(Number(q.get('limit'))) || 40));
-  const where = ['d.ts_ms >= ?', 'd.ts_ms < ?'];
+  const where = ['d.ts_ms >= ?', 'd.ts_ms < ?', COUNTED];
   const args = [season.lo * 1000, season.hi * 1000];
   const player = q.get('player');
   if (player) {

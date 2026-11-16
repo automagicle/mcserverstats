@@ -1866,9 +1866,10 @@ async function renderServerDaily(animate = false, slide = 0) {
   }
   const teams = await teamHoursPerBucket(r.buckets).catch(() => null);
   if (dailyCtl.get() !== w) return;
-  // each team's share of the bar; sessions and the hourly counts can differ a little, so never more than the bar
+  // each team's share of the bar. The bar's height is the server's player count, which can run a little past
+  // the time of the players it names (it doesn't always list everyone), so the teams fill it in proportion.
   const split = teams && r.buckets.map((b, i) => {
-    const whole = Math.max(vals[i], teams.red[i] + teams.blue[i]);
+    const whole = teams.red[i] + teams.blue[i];
     return whole > 0 ? { red: teams.red[i] / whole, blue: teams.blue[i] / whole } : { red: 0, blue: 0 };
   });
   const teamRow = (team, i) => ({ value: fmtHours(teams[team][i]), label: TEAM_NAMES[team], color: `var(--team-${team})` });
@@ -4034,7 +4035,7 @@ document.addEventListener('keydown', (e) => {
 
 const CAUSE_LABELS = {
   melee: 'Slain', shot: 'Shot', explosion: 'Explosion', fall: 'Fall', fire: 'Fire', lava: 'Lava', drown: 'Drowning',
-  void: 'The void', magic: 'Magic', wither: 'Wither', sonic: 'Sonic boom', lightning: 'Lightning', crush: 'Crushed',
+  void: 'The void', border: 'World border', magic: 'Magic', wither: 'Wither', sonic: 'Sonic boom', lightning: 'Lightning', crush: 'Crushed',
   suffocation: 'Suffocation', starve: 'Starvation', thorns: 'Thorns', freeze: 'Freezing', other: 'Other',
 };
 const mobLabel = (mob) => mob.replace(/^.*:/, '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
