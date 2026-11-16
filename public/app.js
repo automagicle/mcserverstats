@@ -1114,7 +1114,9 @@ function drawBars(root, spec, f) {
   }
 
   const hatchId = `${root.id}-hatch`;
-  if (spec.dataStart && spec.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(spec.dataStart), m.t, ph);
+  // a bar stands for its whole bucket, so the hatch stops at the start of the one the data (or season) begins in
+  const firstBar = spec.dataStart && (buckets.find((bk) => spec.dataStart < bk.end)?.start ?? spec.dataStart);
+  if (spec.dataStart && firstBar > from) noDataBlock(svg, svg, hatchId, m.l, xAt(firstBar), m.t, ph);
 
   const gap = slot >= 8 ? 2 * Math.max(2, slot * 0.15) : slot * 0.3;
   const bw = Math.min(40, slot - gap);
@@ -3273,7 +3275,8 @@ async function pollChat() {
 
 // Players whose login email is on the roster can send chat; the server mod shows it in game as
 // "[Web] <name> message" and logs it, so it comes back into this log a few seconds later. Until
-// then it shows faded under the log.
+// the server says it showed it, it's faded under the log with a "sending…" tag; from then on it
+// looks like any other message, and its logged copy takes its place when it arrives.
 const compose = { me: null, sending: false, pending: [], checked: 0 };
 const chatInput = $('#chat-input');
 
@@ -3329,8 +3332,10 @@ function renderPending() {
   $('#chat-pending').replaceChildren(...compose.pending.map((p) => {
     const m = { kind: 'chat', name: p.name, ts: p.ts, text: p.text, uuid: null, via: p.admin ? 'admin' : 'web' };
     const group = msgGroup(m);
-    group.classList.add('msg-pending');
-    group.querySelector('.msg-meta').append(el('span', { class: 'msg-tag', text: p.sent ? 'sent' : 'sending…' }));
+    if (!p.sent) {
+      group.classList.add('msg-pending');
+      group.querySelector('.msg-meta').append(el('span', { class: 'msg-tag', text: 'sending…' }));
+    }
     group.lastChild.append(chatLine(m));
     return group;
   }));
@@ -3342,11 +3347,25 @@ function settlePending(fresh) {
   const before = compose.pending.length;
   for (const m of fresh) {
     if (m.via !== 'web' && m.via !== 'admin') continue;
-    const i = compose.pending.findIndex((p) => p.sent && p.text === m.text
+    const i = compose.pending.findIndex((p) => p.text === m.text
       && (p.admin ? m.via === 'admin' : m.via === 'web' && p.name.toLowerCase() === (m.name || '').toLowerCase()));
     if (i >= 0) compose.pending.splice(i, 1);
   }
   if (compose.pending.length !== before) renderPending();
+}
+
+// Checks the log every second and a half until this message's logged copy has replaced it. If it
+// hasn't after `ms`, it's taken down, and `missed` is called.
+function watchPending(p, ms, missed) {
+  const until = Date.now() + ms;
+  const timer = setInterval(() => {
+    if (!compose.pending.includes(p)) return clearInterval(timer);
+    if (Date.now() < until) return void pollChat().catch(() => {});
+    clearInterval(timer);
+    compose.pending.splice(compose.pending.indexOf(p), 1);
+    renderPending();
+    missed?.();
+  }, 1500);
 }
 
 async function sendChat() {
@@ -3376,14 +3395,19 @@ async function sendChat() {
       if (body.reason === 'offline') me.linked = false;
       throw new Error(body.error || `Couldn't send it (HTTP ${res.status}).`);
     }
-    p.sent = true;
-    renderPending();
-    // the mod logs it right away; it's usually back within a few seconds
-    for (const ms of [1500, 4000, 8000]) setTimeout(() => pollChat().catch(() => {}), ms);
-    setTimeout(() => {
-      const i = compose.pending.indexOf(p);
-      if (i >= 0) { compose.pending.splice(i, 1); renderPending(); }
-    }, 30_000);
+    if (body.unsure) {
+      // the server didn't answer in time, which isn't a no: it stays "sending…" while the log is watched for it
+      watchPending(p, 20_000, () => {
+        if (!chatInput.value) chatInput.value = text;
+        updateComposeCount();
+        composeError("The server didn't confirm that message and it hasn't shown up in the log, so it probably didn't arrive.");
+      });
+    } else {
+      p.sent = true;
+      renderPending();
+      // the mod logs it right away; its logged copy is usually back within a few seconds
+      watchPending(p, 60_000);
+    }
   } catch (err) {
     compose.pending.splice(compose.pending.indexOf(p), 1);
     renderPending();
@@ -4283,7 +4307,8 @@ function drawCombatChart(root, spec) {
     tx.textContent = String(val);
     svg.append(tx);
   }
-  if (spec.start && spec.start > from) noDataBlock(svg, svg, `${root.id}-hatch`, m.l, xAt(spec.start), m.t, ph);
+  const firstBar = spec.start && (buckets.find((bk) => spec.start < bk.end)?.start ?? spec.start);
+  if (spec.start && firstBar > from) noDataBlock(svg, svg, `${root.id}-hatch`, m.l, xAt(firstBar), m.t, ph);
 
   const labelEvery = hourly
     ? (slot >= 36 ? 1 : slot >= 18 ? 2 : slot >= 12 ? 3 : 6)

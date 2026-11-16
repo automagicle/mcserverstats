@@ -10,6 +10,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -26,7 +28,9 @@ final class WebChatLink {
 	// Answers "" if the message was shown, or why it wasn't. Called on a background thread.
 	// name is null for an admin (shown with an [Admin] tag instead of a name).
 	interface Handler {
-		CompletableFuture<String> say(String name, String text);
+		// claim is asked once, on the server thread, right before showing the message: false means the
+		// wait ran out and the sender was already told no, so it must not be shown (and never answer).
+		CompletableFuture<String> say(String name, String text, BooleanSupplier claim);
 	}
 
 	private static final long PING_MS = 30_000;
@@ -89,7 +93,7 @@ final class WebChatLink {
 					ChatLogMod.LOG.warn("Web chat connection went quiet; reconnecting");
 					close("no answer");
 				} else if (now - lastHeard > PING_MS) {
-					ws.sendText("ping", true);
+					send(ws, "ping");
 				}
 				return;
 			}
@@ -188,22 +192,39 @@ final class WebChatLink {
 			ack(ws, id, "bad message");
 			return;
 		}
-		handler.say(name, text)
-				.completeOnTimeout("the server is busy", 4, TimeUnit.SECONDS)
+		// Either the server thread takes the message within 4 seconds and its answer is the truth, or the
+		// wait wins and the message is dropped: never "busy" for a message that then shows anyway.
+		AtomicBoolean taken = new AtomicBoolean();
+		handler.say(name, text, () -> taken.compareAndSet(false, true))
 				.whenComplete((error, err) -> ack(ws, id, err != null ? "the server couldn't show it" : error));
+		ScheduledExecutorService e = exec;
+		if (e != null) {
+			try {
+				e.schedule(() -> {
+					if (taken.compareAndSet(false, true)) ack(ws, id, "the server is too busy to show it");
+				}, 4, TimeUnit.SECONDS);
+			} catch (RuntimeException ignored) { } // stopping
+		}
 	}
 
-	private static void ack(WebSocket ws, String id, String error) {
+	// The socket allows one send at a time (a second one while the first is still going out throws),
+	// and answers come from the server thread while pings come from this one's: each waits its turn.
+	private CompletableFuture<?> sending = CompletableFuture.completedFuture(null);
+
+	private synchronized void send(WebSocket ws, String text) {
+		sending = sending.handle((x, err) -> null).thenCompose(x -> ws.sendText(text, true)).exceptionally(err -> {
+			ChatLogMod.LOG.debug("Couldn't send on the web chat connection", err);
+			return null;
+		});
+	}
+
+	private void ack(WebSocket ws, String id, String error) {
 		JsonObject a = new JsonObject();
 		a.addProperty("type", "ack");
 		a.addProperty("id", id);
 		a.addProperty("ok", error == null || error.isEmpty());
 		if (error != null && !error.isEmpty()) a.addProperty("error", error);
-		try {
-			ws.sendText(a.toString(), true);
-		} catch (Exception e) {
-			ChatLogMod.LOG.debug("Couldn't answer a web chat message", e);
-		}
+		send(ws, a.toString());
 	}
 
 	// One line of plain text: no control characters or § formatting codes.

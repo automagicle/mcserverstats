@@ -109,11 +109,14 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	// the name in their team's colors, and logged as their chat (marked as from the web). An admin's
 	// (name null) shows as "[Web] [Admin] text" with the tag in yellow. Runs on the server thread;
 	// the answer is "" when it was shown.
-	private CompletableFuture<String> webMessage(String name, String text) {
+	// `claim` says whether it's still wanted: false once the wait for the server thread ran out and the
+	// sender was told it wasn't shown, so it mustn't turn up afterwards.
+	private CompletableFuture<String> webMessage(String name, String text, java.util.function.BooleanSupplier claim) {
 		MinecraftServer s = server;
 		if (s == null) return CompletableFuture.completedFuture("the server is starting or stopping");
 		CompletableFuture<String> done = new CompletableFuture<>();
 		s.execute(() -> {
+			if (!claim.getAsBoolean()) return;
 			try {
 				Component who;
 				MutableComponent line = Component.empty().append(Component.literal("[Web] ").withStyle(ChatFormatting.GRAY));

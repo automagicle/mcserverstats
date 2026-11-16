@@ -7,7 +7,8 @@
 // "[Web] <name> text" and logs it like any other chat (marked via = 'web'), so it comes back to
 // the chat log a few seconds later. Admins (the roster file's "admins" emails) send without a
 // player name: a yellow [Admin] tag stands in for it (via = 'admin'). Nothing is queued: if the server isn't connected, sending
-// fails right away rather than turning up in game later.
+// fails right away rather than turning up in game later. If the mod doesn't answer in time the reply
+// is 202 { unsure: true }: the message may or may not have been shown, and the log will tell.
 //
 // The socket hibernates while idle (the mod's pings are answered without waking the object), so an
 // idle link costs next to nothing.
@@ -144,7 +145,7 @@ export class ServerLink extends DurableObject {
       const id = crypto.randomUUID();
       const answer = new Promise((resolve) => {
         this.pending.set(id, resolve);
-        setTimeout(() => resolve({ ok: false, error: "The server didn't answer in time; the message may not have arrived." }), ACK_MS);
+        setTimeout(() => resolve({ ok: false, unsure: true }), ACK_MS);
       });
       try {
         ws.send(JSON.stringify(admin ? { type: 'say', id, admin: true, text } : { type: 'say', id, name, text }));
@@ -154,6 +155,9 @@ export class ServerLink extends DurableObject {
       }
       const r = await answer;
       this.pending.delete(id);
+      // No answer in time (or an older mod saying it's busy, which can still show the message a moment later)
+      // isn't a no: the page keeps the message as sending and watches the log for it.
+      if (r.unsure || r.error === 'the server is busy') return json({ ok: false, unsure: true, name, admin, text }, 202);
       return r.ok ? json({ ok: true, name, admin, text }) : json({ error: r.error || 'The server refused the message.', reason: 'refused' }, 502);
     }
 
