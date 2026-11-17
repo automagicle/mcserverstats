@@ -83,6 +83,20 @@ npx wrangler d1 execute mcstats --remote --command "INSERT OR IGNORE INTO hidden
 npx wrangler d1 execute mcstats --remote --command "DELETE FROM hidden_players WHERE name = 'Name'"
 ```
 
+## Merging a player's accounts
+
+The server runs in offline mode, so a player who changes their name gets a new account (a new UUID). A row in
+`player_aliases` merges the other account into the main one everywhere: playtime, player counts and lists, the player
+page (both accounts' sessions, chat, gear and advancements), Combat and team colors. Like hidden players it applies to
+everything already recorded and nothing is rewritten; delete the row and the accounts show apart again. Chat log
+messages still show the name they were sent under (with the main account's team color). Put the main name in the
+roster file.
+
+```bash
+npx wrangler d1 execute mcstats --remote --command "INSERT OR REPLACE INTO player_aliases (alias, name) VALUES ('OldName', 'MainName')"
+npx wrangler d1 execute mcstats --remote --command "DELETE FROM player_aliases WHERE alias = 'OldName'"
+```
+
 ## Sign-in (Cloudflare Access)
 
 The Access application's **Allow** policy decides who can open the dashboard. Its **Include** rules are OR'd, so one

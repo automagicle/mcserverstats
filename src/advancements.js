@@ -2,6 +2,7 @@
 // player's page: the tree as the game lays it out, and each player's progress in it.
 // Only the fields the dashboard uses are kept; everything is re-checked here.
 
+import { marks, playerGroup } from './aliases.js';
 import { sameSecret } from './chat.js';
 import { json, UUID_RE } from './util.js';
 
@@ -123,22 +124,29 @@ export async function ingestAdvancements(request, env) {
 export async function advancementsFor(env, url, season) {
   const name = url.searchParams.get('name') || '';
   if (!NAME_RE.test(name)) return json({ error: 'bad name' }, 400);
+  // all of their accounts (src/aliases.js): what any of them earned, and the newest one's progress
+  const names = (await playerGroup(env.DB, { name }))?.names || [name];
   const [t, p] = await env.DB.batch([
     env.DB.prepare('SELECT ts, data FROM advancement_tree WHERE id = 1'),
-    env.DB.prepare('SELECT ts, data FROM advancements WHERE name = ? AND ts >= ? AND ts < ?').bind(name, season.lo, season.hi),
+    env.DB.prepare(`SELECT ts, data FROM advancements WHERE name IN (${marks(names)}) AND ts >= ? AND ts < ? ORDER BY ts DESC`)
+      .bind(...names, season.lo, season.hi),
   ]);
   const body = { tree: [], ts: null, done: {}, part: {} };
   try {
     const tree = t.results[0];
     if (tree && tree.ts >= season.lo && tree.ts < season.hi) body.tree = JSON.parse(tree.data);
-    const mine = p.results[0];
-    if (mine) {
+    for (const [i, mine] of p.results.entries()) {
       const data = JSON.parse(mine.data);
-      body.ts = mine.ts;
-      body.done = data.done || {};
-      // which criteria are done is kept in the database but not needed by the page
-      body.part = Object.fromEntries(Object.entries(data.part || {}).map(([id, v]) => [id, { n: v.n, of: v.of }]));
+      if (i === 0) {
+        body.ts = mine.ts;
+        // which criteria are done is kept in the database but not needed by the page
+        body.part = Object.fromEntries(Object.entries(data.part || {}).map(([id, v]) => [id, { n: v.n, of: v.of }]));
+      }
+      for (const [id, at] of Object.entries(data.done || {})) {
+        if (!(id in body.done) || at < body.done[id]) body.done[id] = at; // the first time any account got it
+      }
     }
+    for (const id of Object.keys(body.done)) delete body.part[id];
   } catch {
     // unreadable rows: show nothing rather than fail
   }

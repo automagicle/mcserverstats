@@ -1,3 +1,4 @@
+import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
 import { deathInsert } from './combat.js';
 import { OPEN_ENDED } from './seasons.js';
 import { json, UUID_RE } from './util.js';
@@ -255,8 +256,10 @@ export async function searchChat(env, url, season) {
   const from = q.get('from');
   if (from) {
     if (!UUID_RE.test(from)) return json({ error: 'bad uuid' }, 400);
-    where.push('uuid = ?');
-    args.push(from.toLowerCase());
+    // all of their accounts (src/aliases.js)
+    const uuids = (await playerGroup(env.DB, { uuid: from.toLowerCase() }))?.uuids || [from.toLowerCase()];
+    where.push(`uuid IN (${marks(uuids)})`);
+    args.push(...uuids);
   }
   const kind = q.get('kind');
   if (kind && SEARCH_KINDS[kind]) where.push(SEARCH_KINDS[kind]);
@@ -277,10 +280,10 @@ export async function searchChat(env, url, season) {
 // GET /api/chat/players — everyone who played in the season, with how many messages they sent in it, for the search filter.
 export async function chatPlayers(env, season) {
   const { results } = await env.DB.prepare(
-    `SELECT p.uuid, p.name, COUNT(c.id) AS n FROM players p
+    `SELECT ${canonUuid('p.name', 'p.uuid')} AS uuid, ${canonName('p.name')} AS name, COUNT(c.id) AS n FROM players p
      LEFT JOIN chat c ON c.uuid = p.uuid AND c.kind IN ${TALK} AND c.ts_ms >= ?1 * 1000 AND c.ts_ms < ?2 * 1000
      WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.uuid = p.uuid AND s.end_ts >= ?1 AND s.start_ts < ?2)
-     GROUP BY p.uuid ORDER BY n DESC, p.name COLLATE NOCASE`
+     GROUP BY lower(${canonName('p.name')}) ORDER BY n DESC, name COLLATE NOCASE`
   ).bind(season.lo, season.hi).all();
   return json({ players: results });
 }
@@ -292,40 +295,32 @@ export async function playerChat(env, url, season) {
   const q = url.searchParams;
   const db = env.DB;
   const lo = season.lo * 1000, hi = season.hi * 1000;
-  let uuid = q.get('uuid');
-  let name = null;
-  if (uuid) {
-    if (!UUID_RE.test(uuid)) return json({ error: 'bad uuid' }, 400);
-    uuid = uuid.toLowerCase();
-  } else {
-    const row = await db.prepare('SELECT uuid FROM players WHERE name = ? COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1')
-      .bind(q.get('name') || '').first();
-    if (!row) return json({ error: 'not found' }, 404);
-    uuid = row.uuid;
-  }
+  const uuid = q.get('uuid');
+  if (uuid && !UUID_RE.test(uuid)) return json({ error: 'bad uuid' }, 400);
+  // all of their accounts (src/aliases.js), shown as the main one
+  const group = await playerGroup(db, uuid ? { uuid: uuid.toLowerCase() } : { name: q.get('name') || '' });
+  if (!group) return json({ error: 'not found' }, 404);
+  const ids = group.uuids, inIds = `uuid IN (${marks(ids)})`;
   const today = Math.floor(Number(q.get('today')) || 0) * 1000;
   const stmts = [
-    db.prepare('SELECT name FROM players WHERE uuid = ?').bind(uuid),
     // their name as chat showed it by the end of the season (or before it, if they haven't talked in it)
-    db.prepare('SELECT display FROM chat WHERE uuid = ? AND display IS NOT NULL AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1')
-      .bind(uuid, Math.max(hi, lo + 1)),
-    db.prepare(`SELECT COUNT(*) AS total, SUM(ts_ms >= ?) AS today FROM chat WHERE uuid = ? AND kind IN ${TALK} AND ts_ms >= ? AND ts_ms < ?`)
-      .bind(today, uuid, lo, hi),
+    db.prepare(`SELECT display FROM chat WHERE ${inIds} AND display IS NOT NULL AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1`)
+      .bind(...ids, Math.max(hi, lo + 1)),
+    db.prepare(`SELECT COUNT(*) AS total, SUM(ts_ms >= ?) AS today FROM chat WHERE ${inIds} AND kind IN ${TALK} AND ts_ms >= ? AND ts_ms < ?`)
+      .bind(today, ...ids, lo, hi),
     db.prepare('SELECT MIN(ts_ms) AS ts FROM chat WHERE ts_ms >= ? AND ts_ms < ?').bind(lo, hi),
   ];
   if (q.get('events') === '1') {
     stmts.push(db.prepare(
       `SELECT id, ts_ms, kind, substr(text, 1, 200) FROM chat
-       WHERE uuid = ? AND kind IN ('chat', 'say', 'emote', 'death', 'advancement') AND ts_ms >= ? AND ts_ms < ?
+       WHERE ${inIds} AND kind IN ('chat', 'say', 'emote', 'death', 'advancement') AND ts_ms >= ? AND ts_ms < ?
        ORDER BY ts_ms DESC LIMIT 20000`
-    ).bind(uuid, lo, hi));
+    ).bind(...ids, lo, hi));
   }
-  const [p, d, counts, first, events] = await db.batch(stmts);
-  name = p.results[0]?.name ?? null;
-  if (!name) return json({ error: 'not found' }, 404);
+  const [d, counts, first, events] = await db.batch(stmts);
   const body = {
-    uuid,
-    name,
+    uuid: group.uuid,
+    name: group.name,
     display: d.results[0] ? JSON.parse(d.results[0].display) : null,
     total: counts.results[0].total,
     today: counts.results[0].today ?? 0,

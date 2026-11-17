@@ -182,16 +182,20 @@ function dummyApi() {
 
 // The season's teams, from the server (its roster table, so real names stay out of the repository).
 const roster = new Map(); // lowercased IGN -> { ign, name, team }
+const rosterAliases = new Map(); // another account's lowercased name -> its player's lowercased IGN
 const TEAM_NAMES = { red: 'Red Faction', blue: 'Blue Faction' };
 let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN / Name switch shows
-const rosterLoad = api('/api/roster').then((r) => r.players, () => []).then((players) => {
+const rosterLoad = api('/api/roster').then((r) => {
+  for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
+  return r.players;
+}, () => []).then((players) => {
   for (const p of players) roster.set(p.ign.toLowerCase(), p);
   syncNameToggle();
   syncHeatToggle();
   return players;
 });
 
-const rosterOf = (ign) => (ign ? roster.get(ign.toLowerCase()) : null);
+const rosterOf = (ign) => (ign ? roster.get(ign.toLowerCase()) ?? roster.get(rosterAliases.get(ign.toLowerCase())) : null);
 const realName = (ign) => rosterOf(ign)?.name ?? null;
 const shownName = (ign) => (nameMode === 'real' && realName(ign)) || ign;
 // the name that isn't shown, for hovering

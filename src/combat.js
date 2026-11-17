@@ -6,6 +6,7 @@
 // existed, it's worked out here from the message itself: the styled text marks every player it
 // names, and the wording says how it happened.
 
+import { canonName, canonUuid } from './aliases.js';
 import { notHidden } from './hidden.js';
 import { json } from './util.js';
 
@@ -64,7 +65,9 @@ const BY_WORDING = [
 // chat messages stay.
 const COUNTED = `(cause IS NOT 'border' OR killer IS NOT NULL)`;
 // Hidden players (src/hidden.js): their deaths aren't shown, and a kill of theirs has no killer.
-const KILLER = (d) => `CASE WHEN ${d}killer IS NULL OR ${notHidden(`${d}killer`)} THEN ${d}killer END`;
+// Other accounts (src/aliases.js) are shown as the player they belong to.
+const KILLER = (d) => `CASE WHEN ${d}killer IS NOT NULL AND ${notHidden(`${d}killer`)} THEN ${canonName(`${d}killer`)} END`;
+const KILLER_UUID = (d) => canonUuid(`${d}killer`, `${d}killer_uuid`);
 
 const causeFromText = (text) => BY_WORDING.find(([re]) => re.test(text))?.[1] || 'other';
 
@@ -151,7 +154,7 @@ export async function combatData(env, url, season) {
   await describePending(db);
   const after = Math.max(0, Math.floor(Number(url.searchParams.get('after'))) || 0);
   const rows = await db.prepare(
-    `SELECT id, ts_ms, victim, victim_uuid, ${KILLER('')}, killer_uuid, cause, mob FROM deaths
+    `SELECT id, ts_ms, ${canonName('victim')}, ${canonUuid('victim', 'victim_uuid')}, ${KILLER('')}, ${KILLER_UUID('')}, cause, mob FROM deaths
      WHERE ts_ms >= ? AND ts_ms < ? AND id > ? AND ${COUNTED} AND ${notHidden('victim')} ORDER BY ts_ms, id LIMIT 50000`
   ).bind(season.lo * 1000, season.hi * 1000, after).raw();
   const uuids = {};
@@ -178,7 +181,7 @@ export async function combatLog(env, url, season) {
   const player = q.get('player');
   if (player) {
     if (!NAME_RE.test(player)) return json({ error: 'bad name' }, 400);
-    where.push('(d.victim = ? OR d.killer = ?)');
+    where.push(`(${canonName('d.victim')} = ? COLLATE NOCASE OR ${canonName('d.killer')} = ? COLLATE NOCASE)`);
     args.push(player, player);
   }
   if (q.get('type') === 'pvp') where.push(`${KILLER('d.')} IS NOT NULL`);

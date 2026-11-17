@@ -7,6 +7,7 @@ import { gearFor, ingestGear } from './gear.js';
 import { advancementsFor, ingestAdvancements } from './advancements.js';
 import { serveItem, serveSkin, serveTexture } from './mcassets.js';
 import { connectLink, sendWebChat, webChatMe } from './link.js';
+import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
 import { hiddenSessions, hourlyWithoutHidden, notHidden, withoutHidden } from './hidden.js';
 import { json, UUID_RE } from './util.js';
 
@@ -27,6 +28,11 @@ async function roster(db, season) {
   const { results } = await db.prepare('SELECT ign, name, team, egg FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE')
     .bind(season.n).all();
   return results;
+}
+
+// Other accounts' names and the player each belongs to (src/aliases.js), so the page can give them the same team.
+async function aliases(db) {
+  return (await db.prepare('SELECT alias, name FROM player_aliases').all()).results;
 }
 
 export async function handleApi(request, env, url) {
@@ -79,7 +85,7 @@ export async function handleApi(request, env, url) {
     let online = [];
     if (last) {
       const { results } = await db.prepare(
-        `SELECT p.uuid, p.name, MAX(s.start_ts, ?2) AS start_ts FROM sessions s JOIN players p ON p.uuid = s.uuid
+        `SELECT ${canonUuid('p.name', 'p.uuid')} AS uuid, ${canonName('p.name')} AS name, MAX(s.start_ts, ?2) AS start_ts FROM sessions s JOIN players p ON p.uuid = s.uuid
          WHERE s.end_ts = ?1 AND ${notHidden('p.name')} ORDER BY s.start_ts`
       ).bind(last.ts, lo).all();
       online = results;
@@ -90,9 +96,9 @@ export async function handleApi(request, env, url) {
     // From the start of tracking, "seen this season" is everyone first seen before it ended (cheap);
     // later seasons count who has a session in them.
     const totals = lo === 0
-      ? await db.prepare(`SELECT COUNT(*) AS players FROM players p WHERE first_seen < ? AND ${notHidden('p.name')}`).bind(hi).first()
+      ? await db.prepare(`SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM players p WHERE first_seen < ? AND ${notHidden('p.name')}`).bind(hi).first()
       : await db.prepare(
-        `SELECT COUNT(DISTINCT s.uuid) AS players FROM sessions s JOIN players p ON p.uuid = s.uuid
+        `SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM sessions s JOIN players p ON p.uuid = s.uuid
          WHERE s.end_ts >= ? AND s.start_ts < ? AND ${notHidden('p.name')}`
       ).bind(lo, hi).first();
     const first = await db.prepare('SELECT MIN(ts) AS ts FROM snapshots WHERE ts >= ? AND ts < ?').bind(lo, hi).first();
@@ -118,19 +124,19 @@ export async function handleApi(request, env, url) {
     });
   }
 
-  if (path === '/api/roster') return json({ players: await roster(env.DB, season) });
+  if (path === '/api/roster') return json({ players: await roster(env.DB, season), aliases: await aliases(env.DB) });
 
   if (path === '/api/leaderboard') {
     const [from, to] = clampRange(season, ...range(url, 36500));
     if (from >= to) return json({ from, to, players: [] });
     const { results } = await db.prepare(
-      `SELECT p.uuid, p.name, p.first_seen,
+      `SELECT ${canonUuid('p.name', 'p.uuid')} AS uuid, ${canonName('p.name')} AS name, MIN(p.first_seen) AS first_seen,
               SUM(MIN(s.end_ts + ?3, ?2) - MAX(s.start_ts, ?1)) AS secs,
               COUNT(*) AS sessions,
               MIN(MAX(s.end_ts), ?2 - ?3) AS last_seen
        FROM sessions s JOIN players p ON p.uuid = s.uuid
        WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')}
-       GROUP BY s.uuid ORDER BY secs DESC`
+       GROUP BY lower(${canonName('p.name')}) ORDER BY secs DESC`
     ).bind(from, to, POLL_SECONDS).all();
     return json({ from, to, players: results });
   }
@@ -160,7 +166,7 @@ export async function handleApi(request, env, url) {
     // Everyone's sessions overlapping a window, for "who was online" lookups.
     const [from, to] = clampRange(season, ...range(url, 1, 120));
     const rows = await db.prepare(
-      `SELECT s.uuid, p.name, MAX(s.start_ts, ?4), MIN(s.end_ts, ?5 - ?3) FROM sessions s JOIN players p ON p.uuid = s.uuid
+      `SELECT ${canonUuid('p.name', 'p.uuid')}, ${canonName('p.name')}, MAX(s.start_ts, ?4), MIN(s.end_ts, ?5 - ?3) FROM sessions s JOIN players p ON p.uuid = s.uuid
        WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')} ORDER BY s.start_ts`
     ).bind(from, to, POLL_SECONDS, lo, hi).raw();
     return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
@@ -180,16 +186,19 @@ export async function handleApi(request, env, url) {
   if (m) {
     const uuid = decodeURIComponent(m[1]);
     if (!UUID_RE.test(uuid)) return json({ error: 'bad uuid' }, 400);
-    const player = await db.prepare(`SELECT uuid, name, first_seen FROM players p WHERE uuid = ? AND ${notHidden('p.name')}`).bind(uuid).first();
-    if (!player) return json({ error: 'not found' }, 404);
+    // all of their accounts (src/aliases.js), shown as the main one
+    const group = await playerGroup(db, { uuid: uuid.toLowerCase() });
+    const hidden = group && await db.prepare('SELECT 1 FROM hidden_players WHERE name = ?').bind(group.name).first();
+    if (!group || hidden) return json({ error: 'not found' }, 404);
+    const player = { uuid: group.uuid, name: group.name, first_seen: group.first_seen };
     const sessions = await db.prepare(
-      `SELECT MAX(start_ts, ?2), MIN(end_ts, ?3 - ?4) FROM sessions
-       WHERE uuid = ?1 AND end_ts + ?4 > ?2 AND start_ts < ?3 ORDER BY start_ts`
-    ).bind(uuid, lo, hi, POLL_SECONDS).raw();
+      `SELECT MAX(start_ts, ?1), MIN(end_ts, ?2 - ?3) FROM sessions
+       WHERE uuid IN (${marks(group.uuids)}) AND end_ts + ?3 > ?1 AND start_ts < ?2 ORDER BY start_ts`
+    ).bind(lo, hi, POLL_SECONDS, ...group.uuids).raw();
     // first seen this season (null if they haven't played in it)
     player.first_seen = season.n ? (sessions[0]?.[0] ?? null) : player.first_seen;
     // what they last wore and carried (not limited to the season: it's their latest)
-    const gear = await gearFor(db, player.name);
+    const gear = await gearFor(db, group.names);
     return json({ player, poll_seconds: POLL_SECONDS, sessions, gear });
   }
 

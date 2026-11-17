@@ -87,8 +87,10 @@ export async function ingestGear(request, env) {
 }
 
 // The player's last report, as { ts, uuid, armor, mainhand?, offhand?, items, egg? }, or null.
-export async function gearFor(db, name) {
-  const row = await db.prepare('SELECT ts, uuid, data FROM gear WHERE name = ?').bind(name).first();
+// The latest of these names' (one player's accounts) gear reports.
+export async function gearFor(db, names) {
+  const row = await db.prepare(`SELECT ts, uuid, data FROM gear WHERE name IN (${names.map(() => '?').join(', ')}) ORDER BY ts DESC LIMIT 1`)
+    .bind(...names).first();
   if (!row) return null;
   try {
     return { ts: row.ts, uuid: row.uuid, ...JSON.parse(row.data) };
