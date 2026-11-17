@@ -155,6 +155,13 @@ function eachHourChunk(start, end, fn) {
 /* ---------- API ---------- */
 
 class AuthError extends Error {}
+// The database's free plan ran out of reads for the day; nothing loads until it resets.
+class DbLimitError extends Error {}
+function dbLimitMessage(resetsAt) {
+  const at = new Date((resetsAt || Math.ceil(Date.now() / 86_400_000) * 86_400) * 1000)
+    .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+  return `The site hit its database’s free-plan daily limit, so nothing can load until about ${at} today, when the limit resets. No data is lost; please check back then.`;
+}
 
 // Every request is for this page's season.
 async function api(path) {
@@ -162,6 +169,14 @@ async function api(path) {
   const url = `${path}${path.includes('?') ? '&' : '?'}season=${SEASON}`;
   const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
   if (res.status === 401) throw new AuthError('unauthorized');
+  if (res.status === 503) {
+    const body = await res.json().catch(() => null);
+    if (body?.error === 'db_limit') {
+      const msg = dbLimitMessage(body.resets_at);
+      showError(msg);
+      throw new DbLimitError(msg);
+    }
+  }
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json();
 }
@@ -4865,6 +4880,8 @@ async function route() {
     console.error(err);
     if (err instanceof AuthError) {
       showError('Not signed in. Reload the page to log in through Cloudflare Access.');
+    } else if (err instanceof DbLimitError) {
+      showError(err.message);
     } else {
       showError(`Couldn’t load data (${err.message}).`);
     }
@@ -5129,6 +5146,7 @@ async function refresh() {
     showError('');
   } catch (err) {
     if (err instanceof AuthError) showError('Your login expired. Reload the page to sign in again.');
+    else if (err instanceof DbLimitError) showError(err.message);
     // other errors: keep showing the last good data; the next tick retries
   } finally {
     refreshing = false;

@@ -140,7 +140,7 @@ export async function handleApi(request, env, url) {
               COUNT(*) AS sessions,
               MIN(MAX(s.end_ts), ?2 - ?3) AS last_seen
        FROM sessions s JOIN players p ON p.uuid = s.uuid
-       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')}
+       WHERE s.end_ts > ?1 - ?3 AND s.start_ts < ?2 AND ${notHidden('p.name')}
        GROUP BY lower(${canonName('p.name')}) ORDER BY secs DESC`
     ).bind(from, to, POLL_SECONDS).all();
     return json({ from, to, players: results });
@@ -172,7 +172,7 @@ export async function handleApi(request, env, url) {
     const [from, to] = clampRange(season, ...range(url, 1, 120));
     const rows = await db.prepare(
       `SELECT ${canonUuid('p.name', 'p.uuid')}, ${canonName('p.name')}, MAX(s.start_ts, ?4), MIN(s.end_ts, ?5 - ?3) FROM sessions s JOIN players p ON p.uuid = s.uuid
-       WHERE s.end_ts + ?3 > ?1 AND s.start_ts < ?2 AND ${notHidden('p.name')} ORDER BY s.start_ts`
+       WHERE s.end_ts > ?1 - ?3 AND s.start_ts < ?2 AND ${notHidden('p.name')} ORDER BY s.start_ts`
     ).bind(from, to, POLL_SECONDS, lo, hi).raw();
     return json({ from, to, poll_seconds: POLL_SECONDS, cols: ['uuid', 'name', 'start_ts', 'end_ts'], rows });
   }
@@ -198,7 +198,7 @@ export async function handleApi(request, env, url) {
     const player = { uuid: group.uuid, name: group.name, first_seen: group.first_seen };
     const sessions = await db.prepare(
       `SELECT MAX(start_ts, ?1), MIN(end_ts, ?2 - ?3) FROM sessions
-       WHERE uuid IN (${marks(group.uuids)}) AND end_ts + ?3 > ?1 AND start_ts < ?2 ORDER BY start_ts`
+       WHERE uuid IN (${marks(group.uuids)}) AND end_ts > ?1 - ?3 AND start_ts < ?2 ORDER BY start_ts`
     ).bind(lo, hi, POLL_SECONDS, ...group.uuids).raw();
     // first seen this season (null if they haven't played in it)
     player.first_seen = season.n ? (sessions[0]?.[0] ?? null) : player.first_seen;
