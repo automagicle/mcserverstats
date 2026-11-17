@@ -1806,7 +1806,7 @@ function renderOnlineChips() {
   if (!archived() && last && last.up && last.online > last.listed) {
     warn.replaceChildren(
       `The server reports ${last.online} players but only lists ${last.listed} by name, so some playtime isn't being counted. `,
-      'Turning on ', el('code', { text: 'enable-query=true' }), ' in server.properties gives the full list.'
+      'Installing mcstats-chat 1.7.0 or newer on the server gives the full list (the mod reports everyone in the tab list).'
     );
     warn.hidden = false;
   } else {

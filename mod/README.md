@@ -21,6 +21,10 @@ and after a data pack reload; and each online player's progress in it (which the
 the ones they're partway through, how far and which criteria are done), checked every 15 seconds and sent only when it
 changed, at most twice a minute per player. Both go to `/api/ingest/advancements` next to the chat url (same token, no
 extra setup). The dashboard draws them as the tree at the bottom of each player's page.
+**Who's online** (1.7.0 or newer): everyone in the server's tab list (UUID and name), sent to `/api/ingest/online` next
+to the chat url (same token, no extra setup) whenever it changes and every 20 seconds regardless, plus an empty list when
+the server shuts down. The dashboard adds these players to the ones the server-list ping names, which can leave some
+out (it lists at most a sample, and players who turned off "Allow Server Listings" appear as "Anonymous Player").
 **Weapon tooltips** (1.5.0 or newer): the item named in a death message (the weapon) is sent with the tooltip the game
 shows for it (name, enchantments, attributes, lore), so the dashboard can show it on hover.
 
@@ -89,7 +93,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.6.1.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.7.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -141,7 +145,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.6.1.jar
+./gradlew build      # → build/libs/mcstats-chat-1.7.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

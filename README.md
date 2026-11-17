@@ -208,8 +208,18 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 
 ## Notes
 
-- If the server reports more players than it names, the dashboard shows a warning. Set
-  `enable-query=true` in `server.properties` so mcstatus.io can read the full player list.
+- Who's online comes from two places, merged each minute: the server-list ping (through mcstatus.io), and the server
+  mod's list of everyone in the tab list (mod 1.7.0 or newer, sent every 20 seconds and whenever it changes). The ping
+  can leave players out: it names at most a sample, and players who turned off "Allow Server Listings" show as
+  "Anonymous Player". Each check counts everyone either one names, once. While the mod's list is recent (75 seconds),
+  the player count is that union and the server counts as up even if the ping fails; a mod shutdown report marks it
+  down. Without a recent list it's the ping alone, as before, and if the server reports more players than it names,
+  the dashboard shows a warning.
+- Minutes from before mod 1.7.0 where the server counted more players than it named can be filled in from the chat
+  log's joins and leaves: `node scripts/backfill-presence.mjs` (a dry run that shows what it would do), then with
+  `--apply`. It never names more players at a minute than the server counted then, pairs joins and leaves by name
+  (ignoring case), skips hidden players, saves an undo file (`presence-undo-…-backup.sql`) first, and changes nothing
+  on a second run.
 - Time played is counted in 1-minute steps. A player missing for up to 3.5 minutes stays in the same session.
 - Occasionally a check wrongly reports nobody online for a minute. When the same players are seen again within
   3.5 minutes, that empty (or offline) reading is replaced by the number of players whose sessions span it.

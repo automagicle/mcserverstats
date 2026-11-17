@@ -1,3 +1,5 @@
+import { modOnline } from './online.js';
+
 export const POLL_SECONDS = 60;
 
 // A player missing for up to this long (e.g. a failed check or two) keeps the same session.
@@ -15,7 +17,8 @@ export async function poll(env, nowSeconds) {
 
   const ts = Math.floor(nowSeconds / POLL_SECONDS) * POLL_SECONDS;
 
-  let data;
+  const db = env.DB;
+  let data = null;
   try {
     const res = await fetch(`https://api.mcstatus.io/v2/status/java/${address}`, {
       headers: { 'User-Agent': 'mcserverstats (personal stats tracker)' },
@@ -23,24 +26,17 @@ export async function poll(env, nowSeconds) {
     if (!res.ok) throw new Error(`mcstatus.io responded ${res.status}`);
     data = await res.json();
   } catch (err) {
-    // An API failure is not the server being offline, so record nothing.
     console.error('status check failed:', err.message);
-    return;
   }
+  const mod = await modOnline(db, nowSeconds);
+  // An API failure is not the server being offline, so without the mod's list either, record nothing.
+  if (!data && !mod) return;
 
-  const up = data.online === true;
-  const seen = new Map();
-  if (up) {
-    for (const p of data.players?.list ?? []) {
-      if (p.uuid && p.uuid !== NIL_UUID && !seen.has(p.uuid)) {
-        seen.set(p.uuid, p.name_clean || p.name_raw || 'unknown');
-      }
-    }
-  }
-  let online = up ? (data.players?.online ?? seen.size) : 0;
-  const max = up ? (data.players?.max ?? null) : null;
+  const merged = mergeOnline(data, mod);
+  if (merged.added) console.log(`the server mod's list added ${merged.added} player(s) the ping didn't name`);
+  const { up, seen, max } = merged;
+  let { online } = merged;
 
-  const db = env.DB;
   const [dup, open, hidden] = await db.batch([
     db.prepare('SELECT 1 FROM snapshots WHERE ts = ?').bind(ts),
     db.prepare('SELECT id, uuid FROM sessions WHERE end_ts >= ?').bind(ts - SESSION_GAP),
@@ -89,6 +85,38 @@ export async function poll(env, nowSeconds) {
 
   await db.batch(stmts);
   if (seen.size) await repairBlips(db, ts);
+}
+
+// What a check records, from the server-list ping (mcstatus.io's answer, or null if it failed) and the
+// server mod's recent list of who's online (src/online.js, or null without a recent one):
+//   up      the server is running: the ping says so or the mod's list is recent (and not a shutdown);
+//           a recent shutdown report wins over a ping that may still show the server as it was
+//   seen    Map uuid -> name: everyone either names, once (by UUID, and by name in case the two disagree)
+//   online  how many are on. With the mod's list: everyone in the union (its list is complete; the
+//           ping's count can lag behind). Without it: the ping's count, or how many it named if that's more.
+//   added   how many the mod's list had that the ping didn't name
+export function mergeOnline(data, mod) {
+  const pingUp = data?.online === true;
+  const modUp = !!mod && !mod.stopping;
+  const up = mod ? modUp : pingUp;
+  const seen = new Map();
+  const names = new Set();
+  if (!up) return { up, seen, online: 0, max: null, added: 0 };
+  const add = (uuid, name) => {
+    const id = typeof uuid === 'string' ? uuid.toLowerCase() : '';
+    if (!id || id === NIL_UUID || seen.has(id)) return false;
+    const n = name || 'unknown';
+    if (names.has(n.toLowerCase())) return false;
+    seen.set(id, n);
+    names.add(n.toLowerCase());
+    return true;
+  };
+  if (pingUp) for (const p of data.players?.list ?? []) add(p.uuid, p.name_clean || p.name_raw);
+  let added = 0;
+  if (modUp) for (const p of mod.players) if (add(p.uuid, p.name)) added++;
+  const reported = pingUp ? (data.players?.online ?? 0) : 0;
+  const online = modUp ? seen.size : Math.max(reported, seen.size);
+  return { up, seen, online, max: pingUp ? (data.players?.max ?? null) : null, added };
 }
 
 // Occasionally a check reports nobody online for a minute while everyone is still playing.

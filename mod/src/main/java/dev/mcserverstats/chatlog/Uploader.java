@@ -52,6 +52,8 @@ final class Uploader {
 	// The same for each player's advancements, and the advancement tree when it has yet to be sent.
 	private final Map<UUID, JsonObject> advancements = new LinkedHashMap<>();
 	private JsonObject advancementTree;
+	// The latest list of who's online, until it's sent (a newer one replaces it).
+	private JsonObject online;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
 	private volatile Config config = Config.EMPTY;
@@ -142,6 +144,13 @@ final class Uploader {
 		}
 	}
 
+	// Called from the server thread.
+	void setOnline(JsonObject report) {
+		synchronized (this) {
+			online = report;
+		}
+	}
+
 	void start() {
 		if (exec != null) return;
 		loadPending();
@@ -166,6 +175,7 @@ final class Uploader {
 		if (config.ready()) {
 			long deadline = System.currentTimeMillis() + 5_000;
 			while (System.currentTimeMillis() < deadline && sendBatch(Duration.ofSeconds(4))) { }
+			sendOnline(Duration.ofSeconds(3)); // "nobody's on" (OnlineReporter.stopping)
 		}
 		savePending();
 	}
@@ -178,6 +188,7 @@ final class Uploader {
 			if (now - lastFlush < FLUSH_MS && size() < BATCH) return;
 			lastFlush = now;
 			while (sendBatch(Duration.ofSeconds(15))) { }
+			if (now >= nextAttempt) sendOnline(Duration.ofSeconds(10));
 			if (now >= nextAttempt) sendGear();
 			if (now >= nextAttempt) sendAdvancements();
 		} catch (Throwable t) {
@@ -264,6 +275,27 @@ final class Uploader {
 					+ (e.getMessage() != null ? ": " + e.getMessage() : "") + ")");
 			return null;
 		}
+	}
+
+	// Sends the latest list of who's online to /api/ingest/online next to the chat url. An older
+	// dashboard without that endpoint (404) is skipped quietly.
+	private void sendOnline(Duration timeout) {
+		JsonObject report;
+		synchronized (this) {
+			report = online;
+		}
+		if (report == null) return;
+		Reply r = post(config.url().replaceFirst("/chat/?$", "/online"), report, timeout);
+		if (r == null) return;
+		boolean done = r.status() >= 200 && r.status() < 300;
+		if (done || r.status() == 400 || r.status() == 404 || r.status() == 413) {
+			if (!done && r.status() != 404) ChatLogMod.LOG.error("Dashboard rejected the online list (HTTP {}): {}", r.status(), trim(r.body()));
+			synchronized (this) {
+				if (online == report) online = null; // unless a newer one came in meanwhile
+			}
+			return;
+		}
+		fail(why(r.status(), r.fromAccess()));
 	}
 
 	// Sends every waiting gear report in one request, to /api/ingest/gear next to the chat url.

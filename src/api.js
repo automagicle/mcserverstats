@@ -5,6 +5,7 @@ import { combatData, combatLog } from './combat.js';
 import { chatSeason, clampRange, seasonFor } from './seasons.js';
 import { gearFor, ingestGear } from './gear.js';
 import { advancementsFor, ingestAdvancements } from './advancements.js';
+import { ingestOnline } from './online.js';
 import { serveItem, serveSkin, serveTexture } from './mcassets.js';
 import { connectLink, sendWebChat, webChatMe } from './link.js';
 import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
@@ -44,6 +45,10 @@ export async function handleApi(request, env, url) {
   if (url.pathname === '/api/ingest/gear') {
     if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
     return ingestGear(request, env);
+  }
+  if (url.pathname === '/api/ingest/online') {
+    if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+    return ingestOnline(request, env);
   }
   if (url.pathname === '/api/ingest/advancements') {
     if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);

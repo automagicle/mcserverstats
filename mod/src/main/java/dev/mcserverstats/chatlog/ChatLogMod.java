@@ -37,7 +37,7 @@ import org.slf4j.LoggerFactory;
 // uploader, which sends it to the dashboard in the background. Private messages
 // (/msg, /tell, /teammsg) are never recorded. Also reports what each player is wearing and
 // carrying (GearReporter) and their advancements (AdvancementReporter), for their dashboard page,
-// and shows chat sent from the dashboard in game (WebChatLink).
+// shows chat sent from the dashboard in game (WebChatLink), and reports who's online (OnlineReporter).
 public final class ChatLogMod implements DedicatedServerModInitializer {
 	static final Logger LOG = LoggerFactory.getLogger("mcstats-chat");
 
@@ -75,6 +75,10 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 			this.server = null;
 			current = null;
 		});
+
+		OnlineReporter online = new OnlineReporter(uploader);
+		ServerTickEvents.END_SERVER_TICK.register(online::tick);
+		ServerLifecycleEvents.SERVER_STOPPING.register(online::stopping);
 
 		GearReporter gear = new GearReporter(uploader);
 		ServerTickEvents.END_SERVER_TICK.register(gear::tick);
@@ -172,7 +176,13 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		}
 		UUID uuid = null;
 		if (name != null) {
-			ServerPlayer player = server.getPlayerList().getPlayerByName(name);
+			// exactly that name first: the game's own lookup ignores case, and on an offline-mode server
+			// "Name" and "name" are different accounts (both can be on, e.g. while one reconnects)
+			ServerPlayer player = null;
+			for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+				if (p.getScoreboardName().equals(name)) { player = p; break; }
+			}
+			if (player == null) player = server.getPlayerList().getPlayerByName(name);
 			if (player != null) uuid = player.getUUID();
 		}
 		// The whole message too, so other names in it (a killer) and item names keep their colors.
