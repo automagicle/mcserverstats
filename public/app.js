@@ -280,12 +280,13 @@ const EGGS = {
   electric: ['Electric Egg', '#4FD8FF', 'glow_squid_spawn_egg'],
   deadshot: ['Deadshot Egg', '#E04848', 'pillager_spawn_egg'],
   purpur: ['Purpur Egg', '#C9A0DC', 'shulker_spawn_egg'],
+  doggo: ['Doggo Egg', '#D9A066', 'wolf_spawn_egg'],
 };
 // The egg mod's number for each egg (its egg.type score), which the server mod reports with a player's gear.
 const EGG_BY_ID = {
   1: 'life', 2: 'hunger', 3: 'sky', 4: 'gravity', 5: 'gambler', 7: 'fire', 8: 'blood', 9: 'echo', 10: 'aqua', 11: 'meteor',
   12: 'wizard', 13: 'train', 14: 'redstone', 15: 'binding', 16: 'murica', 17: 'dung', 18: 'fat', 19: 'woods', 20: 'smite',
-  21: 'stash', 22: 'sulfur', 23: 'subzero', 24: 'combo', 25: 'electric', 26: 'deadshot', 27: 'purpur',
+  21: 'stash', 22: 'sulfur', 23: 'subzero', 24: 'combo', 25: 'electric', 26: 'deadshot', 27: 'purpur', 28: 'doggo',
 };
 // A player's egg: the one the server last reported them having, else the one the roster gives them.
 const playerEggId = (name, gear) => EGG_BY_ID[gear?.egg?.type] || rosterOf(name)?.egg || null;

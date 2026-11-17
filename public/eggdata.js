@@ -25,9 +25,9 @@ export const EGG_INFO = {
   },
   sky: {
     symbol: '✧', theme: '1.8 PvP and undead',
-    passive: 'Melee hits slowly heal you.',
-    primary: { name: '1.8 Renegade', text: 'No attack cooldown with a sword.', cost: cd(145) },
-    secondary: { name: 'Necromancy', text: 'Summons the last 2 mobs you killed.', cost: cd(270) },
+    passive: 'Every 8th melee hit heals half a heart.',
+    primary: { name: '1.8 Renegade', text: 'For 15s, 1.8-style spam with a sword: no attack cooldown and every click lands, at 63% damage. Sprint-jump hits crit for +50%.', cost: cd(145) },
+    secondary: { name: 'Necromancy', text: 'Raises the last 3 mobs you killed (any mob but bosses) for 75s. Like tamed wolves, they attack whatever you hit or whatever hurts you; each of their hits is capped at 4 hearts.', cost: cd(270) },
   },
   gravity: {
     symbol: '☁', theme: 'Mobility',
@@ -97,7 +97,7 @@ export const EGG_INFO = {
   },
   woods: {
     symbol: '☘', theme: 'Leather and moss',
-    passive: 'Resistance III, Haste I, Night Vision and Speed I while wearing a full set of leather armor.',
+    passive: 'Resistance III, Haste II and Speed I while wearing a full set of leather armor.',
     primary: { name: 'Snare', text: "A beam that gives Slowness X for 4 seconds and locks the hotbar slot a player is holding for 15.", cost: cd(60) },
     secondary: { name: 'Grove', text: 'The ground within 8 blocks turns to moss for 10 seconds: Regeneration II for you, Slowness and Nausea for others.', cost: cd(300) },
   },
@@ -115,9 +115,9 @@ export const EGG_INFO = {
   },
   sulfur: {
     symbol: '▲', theme: 'Cave dweller of the sulfur caves',
-    passive: 'Depth Strider; you and trusted players walk on water (sneak to sink); no extra dripstone fall damage and half damage from falling dripstone.',
+    passive: 'Depth Strider; you walk on water (sneak to sink); no extra dripstone fall damage and half damage from falling dripstone.',
     primary: { name: 'Cube Conundrum', text: 'Absorbs placed blocks of the kind you hold for 5 seconds.', cost: cd(30) },
-    secondary: { name: 'Collective Cage', text: 'A 30-second sulfur dome; spikes fall on untrusted players who come close.', cost: cd(235) },
+    secondary: { name: 'Collective Cage', text: 'A 30-second sulfur dome; spikes fall on any other player (trusted ones too) within 6 blocks. Sneak + right-click ends it early.', cost: cd(235) },
   },
   subzero: {
     symbol: '❄', theme: 'Frost-controlling duelist',
@@ -127,8 +127,8 @@ export const EGG_INFO = {
   },
   combo: {
     symbol: '✱', theme: 'Climbing crits',
-    passive: 'Melee crits deal 115% of a normal hit, +5% per crit within a second, up to 155%.',
-    primary: { name: 'Full-Crit', text: 'Your next 12 melee hits are crits.', cost: cd(75) },
+    passive: 'Melee crits deal 110% of a normal hit, +10% per crit within a second, up to 170% (instead of the usual 150%).',
+    primary: { name: 'Full-Crit', text: 'Your next 30 melee hits are crits, each giving the target Slowness III for a second.', cost: cd(75) },
     secondary: { name: 'Combo Zone', text: 'A 10-block circle follows you for 35 seconds: Slowness I, no block placing, webs and lava deleted.', cost: cd(50) },
   },
   electric: {
@@ -147,7 +147,13 @@ export const EGG_INFO = {
     symbol: '❖', theme: 'Shulker flier',
     passive: 'Shulker Wings: the egg is an elytra in the offhand that never breaks. Firework rockets do not boost it.',
     primary: { name: 'Speed Suppression', text: 'Trusted players nearby get +67% speed; enemies within 10 blocks get Levitation.', cost: cd(45) },
-    secondary: { name: 'Quick Dash', text: '20 blocks per second along the ground for 2 seconds, then Speed II and Regeneration II.', cost: cd(30) },
+    secondary: { name: 'Quick Dash', text: '20 blocks per second along the ground for 2 seconds, then Speed II and Regeneration II. Not usable within 15 seconds of hitting a player.', cost: cd(30) },
+  },
+  doggo: {
+    symbol: '✿', theme: 'Dog person',
+    passive: 'Wolf Armor: your tamed dogs within 48 blocks get wolf armor (once each) and never despawn.',
+    primary: { name: 'Pack Call', text: 'Summons 3 tamed dogs in wolf armor that fight for you and stay as pets, up to 6 out at once.', cost: cd(300) },
+    secondary: { name: 'Pack Mend', text: 'Heals your tamed dogs within 48 blocks to full and repairs or replaces their wolf armor.', cost: cd(900) },
   },
   wizard: {
     symbol: '✦', theme: 'Spellcasting',
