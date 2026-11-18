@@ -10,8 +10,11 @@
 // fails right away rather than turning up in game later. If the mod doesn't answer in time the reply
 // is 202 { unsure: true }: the message may or may not have been shown, and the log will tell.
 //
-// The socket hibernates while idle (the mod's pings are answered without waking the object), so an
-// idle link costs next to nothing.
+// The socket hibernates while idle, so an idle link costs next to nothing. The mod's pings (every 30
+// seconds) are answered by this object itself, not by Cloudflare's automatic reply: after a deploy
+// the automatic reply could keep answering for a connection this object no longer holds, so the mod
+// thought it was connected while the dashboard said it wasn't. Answered here, a connection the object
+// doesn't hold goes quiet, and the mod reconnects by itself within about 75 seconds.
 
 import { DurableObject } from 'cloudflare:workers';
 import { sameSecret } from './chat.js';
@@ -105,8 +108,7 @@ export class ServerLink extends DurableObject {
     super(ctx, env);
     this.pending = new Map(); // message id -> resolve, while a send waits for the mod's answer
     this.sent = new Map(); // player -> times of their recent messages
-    // The mod pings every 30 seconds; answered here without waking the object.
-    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    ctx.setWebSocketAutoResponse(); // no automatic reply: pings are answered in webSocketMessage
   }
 
   socket() {
@@ -125,6 +127,7 @@ export class ServerLink extends DurableObject {
       const [client, server] = Object.values(new WebSocketPair());
       this.ctx.acceptWebSocket(server);
       server.send(JSON.stringify({ type: 'hello', max: MAX_WEB_CHAT }));
+      console.log('server mod connected for web chat');
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -167,6 +170,10 @@ export class ServerLink extends DurableObject {
   // The mod answers each message: { type: 'ack', id, ok, error? }.
   async webSocketMessage(ws, message) {
     if (typeof message !== 'string') return;
+    if (message === 'ping') {
+      try { ws.send('pong'); } catch {}
+      return;
+    }
     let m;
     try {
       m = JSON.parse(message);
@@ -178,7 +185,8 @@ export class ServerLink extends DurableObject {
     }
   }
 
-  async webSocketClose(ws, code) {
+  async webSocketClose(ws, code, reason) {
+    console.log(`server mod's web chat connection closed (${code}${reason ? `: ${reason}` : ''})`);
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, 'closed'); } catch {}
   }
 

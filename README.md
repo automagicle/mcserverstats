@@ -285,6 +285,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   The chat mod adds at most one request every 3 seconds while people are talking (one row per message), and an open
   Chat log page checks for new messages every 10 seconds while it's visible. The Combat page loads the season's deaths
   once, then only what's new each minute. Web chat uses one Durable Object holding
-  the mod's WebSocket, which sleeps while idle (the mod's pings are answered without waking it).
+  the mod's WebSocket, which sleeps between messages (it wakes for the mod's ping every 30 seconds, about
+  2,900 short wake-ups a day, so a connection lost in a deploy is noticed and remade).
   The live online list uses a second one (`Presence`), woken by the mod's reports (about every 20 seconds while the
   server's up) and holding the pages' WebSockets, which also sleep between updates.
