@@ -135,10 +135,11 @@ export async function ingestChat(request, env) {
     );
     // each death also goes in the deaths table, with who did it (after its message, in the same batch)
     await env.DB.batch([...rows.map((r) => stmt.bind(...r)), ...deaths.map(([id, m]) => deathInsert(env.DB, id, m))]);
-    // joins, leaves and server starts/stops move the live online badges at once (src/presence.js)
+    // open pages fetch the new lines at once, and joins, leaves and server starts/stops move the live
+    // online badges (src/presence.js)
     const moves = rows.filter((r) => r[2] === 'join' || r[2] === 'leave' || r[2] === 'server')
       .map(([, ts, kind, uuid, name, text]) => ({ ts, kind, uuid, name, text }));
-    if (moves.length) await tellPresence(env, '/events', { events: moves });
+    await tellPresence(env, '/events', { events: moves });
   }
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }

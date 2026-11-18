@@ -107,7 +107,23 @@ and the Chat log's online bar) change within a second or two of someone joining 
   minute check's numbers, and keeps trying to reconnect (up to a minute apart). A shutdown shows as *Paused* at once.
 - Cost: no database reads per page. The object sleeps between updates and keeps what it knows in its own storage; it reads
   the hidden players and aliases at most every 5 minutes and a newcomer's session start when there's no join line for
-  them. A tab in the background lets go of its connection after a minute.
+  them. A tab in the background lets go of its connection after 15 minutes (whispers reach it until then).
+- The same connection also tells pages at once when new chat is logged (they fetch it then, with the 10-second check
+  as a fallback), and when the server mod's web chat connection comes up or goes down (the message box says so).
+
+## Whispers
+
+Players typing in the Chat log can whisper with `/w <player> <message>` (or `/msg`, `/tell`, as in game); the box turns to
+italics while typing one, and `/` then Tab suggests the command, then the names (in their team colors), the way the game
+does. Whispers to you and the ones you send show in your log as the game shows them ("You whisper to …", "… whispers to
+you: …"), and only to the two people in each (`src/whisper.js`, table `whispers`).
+
+- To a player in game: through the server mod (1.8.0 or newer), shown to them as `[Web] Name whispers to you: text`.
+- To someone not in game who has the dashboard open: straight to their page (this works even when the server is off).
+- In game, a `/w` to someone who's only on the dashboard reaches them there instead of "No player was found"; the mod
+  knows who's on the dashboard because the `Presence` object sends it the list whenever it changes. Whispers between two
+  players in game are untouched and never recorded.
+- A whisper that arrives while you're on another page shows as a note at the bottom of the screen.
 
 ## Missed checks (outages)
 

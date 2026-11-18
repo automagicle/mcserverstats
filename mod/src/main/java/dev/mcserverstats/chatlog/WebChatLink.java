@@ -5,17 +5,22 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
 import java.time.Duration;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.LongUnaryOperator;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -23,6 +28,10 @@ import com.google.gson.JsonParser;
 // the chat url) and hands each message it brings to the game. The Worker decides who may send
 // (players whose login email is on the roster); this side checks the message is well formed,
 // posts it in game chat on the server thread and answers whether that worked.
+//
+// Whispers go both ways (1.8.0): "/w Name text" typed on the dashboard comes down as a whisper for
+// Name, and a whisper typed in game to someone who's only on the website goes up (ChatLogMod decides
+// that, from the list of who's on the website the dashboard sends whenever it changes).
 //
 // Reconnects by itself with backoff, and pings every 30 seconds so a dead connection is noticed.
 final class WebChatLink {
@@ -32,6 +41,9 @@ final class WebChatLink {
 		// claim is asked once, on the server thread, right before showing the message: false means the
 		// wait ran out and the sender was already told no, so it must not be shown (and never answer).
 		CompletableFuture<String> say(String name, String text, BooleanSupplier claim);
+
+		// The same for a whisper to one player in game (`to`); from is null for an admin.
+		CompletableFuture<String> whisper(String from, String to, String text, BooleanSupplier claim);
 	}
 
 	private static final long PING_MS = 30_000;
@@ -41,7 +53,7 @@ final class WebChatLink {
 	private static final long CONNECT_STUCK_MS = 60_000; // a connect attempt that hasn't finished by now
 	private static final long MAX_BACKOFF_MS = 2 * 60_000;
 	private static final long MISSING_BACKOFF_MS = 10 * 60_000; // an older dashboard without the endpoint
-	private static final Pattern NAME = Pattern.compile("[A-Za-z0-9_]{1,32}");
+	private static final Pattern NAME = Pattern.compile("[A-Za-z0-9_.]{1,32}");
 	static final int MAX_TEXT = 256;
 
 	private final Supplier<Config> config;
@@ -60,6 +72,10 @@ final class WebChatLink {
 	private volatile Config connectedWith;
 	private volatile long connectedAt;
 	private volatile long connectStarted;
+	// roster players with the dashboard open, lowercased name -> name (from the dashboard)
+	private volatile Map<String, String> webPlayers = Map.of();
+	// whispers sent up to the dashboard, waiting for its answer: id -> what to do if it says no
+	private final Map<String, Consumer<String>> waiting = new ConcurrentHashMap<>();
 
 	// dashboardLostFor(since): how long the dashboard has been saying, since then, that it doesn't have
 	// this connection (Uploader.linkDownFor).
@@ -173,6 +189,39 @@ final class WebChatLink {
 		});
 	}
 
+	// The name of a roster player with the dashboard open, as the dashboard has it, or null. Only while
+	// connected (a whisper to them couldn't be passed on otherwise).
+	String webPlayer(String name) {
+		return socket == null || name == null ? null : webPlayers.get(name.toLowerCase());
+	}
+
+	// Passes a whisper typed in game up to the dashboard, for a player who's only on the website.
+	// onRefused runs (on a background thread) with the reason if the dashboard says no or doesn't
+	// answer. False if it couldn't be sent at all.
+	boolean whisperUp(String from, String to, String text, Consumer<String> onRefused) {
+		WebSocket ws = socket;
+		if (ws == null) return false;
+		String id = UUID.randomUUID().toString();
+		JsonObject m = new JsonObject();
+		m.addProperty("type", "whisper");
+		m.addProperty("id", id);
+		m.addProperty("from", from);
+		m.addProperty("to", to);
+		m.addProperty("text", text);
+		waiting.put(id, onRefused);
+		send(ws, m.toString());
+		ScheduledExecutorService e = exec;
+		if (e != null) {
+			try {
+				e.schedule(() -> {
+					Consumer<String> c = waiting.remove(id);
+					if (c != null) c.accept("the website didn't answer");
+				}, 8, TimeUnit.SECONDS);
+			} catch (RuntimeException ignored) { } // stopping
+		}
+		return true;
+	}
+
 	private void close(String why) {
 		WebSocket ws = socket;
 		socket = null;
@@ -208,8 +257,30 @@ final class WebChatLink {
 		} catch (Exception e) {
 			return;
 		}
-		if (!m.has("type") || !m.get("type").getAsString().equals("say") || !m.has("id")) return;
+		String type = m.has("type") ? m.get("type").getAsString() : "";
+		if (type.equals("web")) { // who's on the website now
+			Map<String, String> names = new java.util.HashMap<>();
+			if (m.has("names") && m.get("names").isJsonArray()) {
+				for (JsonElement n : m.getAsJsonArray("names")) {
+					if (n.isJsonPrimitive() && NAME.matcher(n.getAsString()).matches()) names.put(n.getAsString().toLowerCase(), n.getAsString());
+				}
+			}
+			webPlayers = Map.copyOf(names);
+			return;
+		}
+		if (type.equals("ack")) { // the dashboard's answer to a whisper sent up
+			Consumer<String> c = m.has("id") ? waiting.remove(m.get("id").getAsString()) : null;
+			if (c != null && !(m.has("ok") && m.get("ok").getAsBoolean())) {
+				c.accept(m.has("error") ? m.get("error").getAsString() : "the website refused it");
+			}
+			return;
+		}
+		if (!(type.equals("say") || type.equals("whisper")) || !m.has("id")) return;
 		String id = m.get("id").getAsString();
+		if (type.equals("whisper")) {
+			handleWhisper(ws, id, m);
+			return;
+		}
 		boolean admin = m.has("admin") && m.get("admin").getAsBoolean();
 		String name = admin ? null : m.has("name") ? m.get("name").getAsString() : "";
 		String text = m.has("text") ? clean(m.get("text").getAsString()) : "";
@@ -221,6 +292,29 @@ final class WebChatLink {
 		// wait wins and the message is dropped: never "busy" for a message that then shows anyway.
 		AtomicBoolean taken = new AtomicBoolean();
 		handler.say(name, text, () -> taken.compareAndSet(false, true))
+				.whenComplete((error, err) -> ack(ws, id, err != null ? "the server couldn't show it" : error));
+		ScheduledExecutorService e = exec;
+		if (e != null) {
+			try {
+				e.schedule(() -> {
+					if (taken.compareAndSet(false, true)) ack(ws, id, "the server is too busy to show it");
+				}, 4, TimeUnit.SECONDS);
+			} catch (RuntimeException ignored) { } // stopping
+		}
+	}
+
+	// A whisper typed on the dashboard, for one player in game: { id, name | admin, to, text }.
+	private void handleWhisper(WebSocket ws, String id, JsonObject m) {
+		boolean admin = m.has("admin") && m.get("admin").getAsBoolean();
+		String name = admin ? null : m.has("name") ? m.get("name").getAsString() : "";
+		String to = m.has("to") ? m.get("to").getAsString() : "";
+		String text = m.has("text") ? clean(m.get("text").getAsString()) : "";
+		if ((!admin && !NAME.matcher(name).matches()) || !NAME.matcher(to).matches() || text.isEmpty()) {
+			ack(ws, id, "bad message");
+			return;
+		}
+		AtomicBoolean taken = new AtomicBoolean();
+		handler.whisper(name, to, text, () -> taken.compareAndSet(false, true))
 				.whenComplete((error, err) -> ack(ws, id, err != null ? "the server couldn't show it" : error));
 		ScheduledExecutorService e = exec;
 		if (e != null) {

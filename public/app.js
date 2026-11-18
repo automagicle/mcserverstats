@@ -2942,6 +2942,7 @@ const chat = {
   graphReq: 0,
   onlineKey: '',
   pendingJump: null, // { id, ts } to open the chat at, from a player's page
+  whispers: [], // yours, in time order: { id, ts (ms), sender, target, text, via } (src/whisper.js)
 };
 const chatScroll = $('#chat-scroll');
 
@@ -3148,18 +3149,60 @@ const chatLine = (m) => el('div', { class: 'msg-line' },
   el('time', { class: 'msg-gutter', 'aria-hidden': 'true', text: clock(m.ts / 1000).replace(/\s?[AP]M$/, '') }),
   ...linkify(m.text));
 
-function renderChat(fresh = new Set()) {
+// Your whispers that fall within the stretch of the log that's loaded.
+function shownWhispers() {
+  if (!chat.loaded || !chat.whispers.length) return [];
+  const first = chat.messages[0], last = chat.messages.at(-1);
+  return chat.whispers.filter((w) => (!chat.moreBefore || !first || w.ts >= first.ts) && (!chat.moreAfter || !last || w.ts <= last.ts));
+}
+
+const isMe = (sender) => {
+  const me = compose.me;
+  return !!me && (sender === '@admin' ? !!me.admin : !!me.ign && sender.toLowerCase() === me.ign.toLowerCase());
+};
+
+// A name in a whisper: an admin's yellow tag, or the player in their team's color (opens their card).
+const whisperName = (n) => (n === '@admin' ? adminTag() : playerLink(teamName(el('a', { class: 'msg-name', text: shownName(n) }), n), null, n));
+
+// As the game shows them: "You whisper to Name: text" and "Name whispers to you: text".
+function whisperRow(w) {
+  const mine = isMe(w.sender);
+  const other = mine ? w.target : w.sender;
+  const body = el('div', { class: 'sys-text' },
+    ...(mine ? ['You whisper to ', whisperName(w.target)] : [whisperName(w.sender), ' whispers to you']), ': ', ...linkify(w.text));
+  return el('div', { class: 'msg-sys sys-whisper', title: `Only you and ${other === '@admin' ? 'the admin' : shownName(other)} can see this` },
+    el('span', { class: 'msg-lead' }, icon(WHISPER_ICON, 14)), body,
+    el('time', { class: 'msg-time', text: clock(w.ts / 1000) }));
+}
+const WHISPER_ICON = ['M4.5 7V5.5a3.5 3.5 0 0 1 7 0V7', 'M3.5 7h9v6.5h-9z'];
+
+function renderChat(fresh = new Set(), freshWhispers = new Set()) {
   const frag = document.createDocumentFragment();
   chat.lines = [];
   let prev = null, group = null, day = null;
-  for (const m of chat.messages) {
-    const d = hourInfo(m.ts / 1000).date;
-    if (d !== day) {
-      frag.append(el('div', { class: 'chat-day', role: 'separator' },
-        el('span', { text: relativeDay(d, { weekday: 'long', month: 'long', day: 'numeric' }) })));
-      day = d;
+  const dayBreak = (ts) => {
+    const d = hourInfo(ts / 1000).date;
+    if (d === day) return;
+    frag.append(el('div', { class: 'chat-day', role: 'separator' },
+      el('span', { text: relativeDay(d, { weekday: 'long', month: 'long', day: 'numeric' }) })));
+    day = d;
+    group = null;
+  };
+  const whispers = shownWhispers();
+  let wi = 0;
+  const putWhispers = (until) => {
+    while (wi < whispers.length && whispers[wi].ts <= until) {
+      const w = whispers[wi++];
+      dayBreak(w.ts);
+      const row = whisperRow(w);
+      if (freshWhispers.has(w.id)) row.classList.add('msg-new');
+      frag.append(row);
       group = null;
     }
+  };
+  for (const m of chat.messages) {
+    putWhispers(m.ts);
+    dayBreak(m.ts);
     // what was unread when the page opened starts under a "New" line
     if (chat.newFrom != null && prev && prev.id <= chat.newFrom && m.id > chat.newFrom) {
       frag.append(el('div', { class: 'chat-new', role: 'separator' }, el('span', { text: 'New' })));
@@ -3184,6 +3227,7 @@ function renderChat(fresh = new Set()) {
     chat.lines.push({ el: node, ts: m.ts, id: m.id });
     prev = m;
   }
+  putWhispers(Infinity);
   $('#chat-list').replaceChildren(frag);
   renderChatEdge();
 }
@@ -3191,7 +3235,7 @@ function renderChat(fresh = new Set()) {
 function renderChatEdge() {
   const top = $('#chat-top');
   if (!chat.loaded) top.replaceChildren(el('div', { class: 'chat-note loading', text: 'Loading chat…' }));
-  else if (!chat.messages.length) {
+  else if (!chat.messages.length && !shownWhispers().length) {
     top.replaceChildren(el('div', { class: 'chat-empty' },
       el('strong', { text: 'No chat yet' }),
       el('div', { text: 'Messages show up here once the mcstats-chat mod is running on the server.' })));
@@ -3427,6 +3471,7 @@ async function loadComposer() {
     compose.me = null;
   }
   renderComposer();
+  if (!compose.whispersLoaded) loadWhispers().catch(() => {});
 }
 
 function renderComposer() {
@@ -3434,12 +3479,13 @@ function renderComposer() {
   const form = $('#chat-compose');
   form.hidden = !me;
   if (!me) return;
-  const can = !!((me.ign || me.admin) && me.linked);
+  // without the server, whispers can still reach people who have the dashboard open
+  const can = !!(me.ign || me.admin);
   chatInput.disabled = !can;
   chatInput.placeholder = !me.ign && !me.admin
     ? (me.email ? `${me.email} isn't on the roster, so it can't send messages` : 'Sign in with your roster email to send messages')
-    : !me.linked ? "The server isn't connected, so messages can't be sent right now"
-    : `Message the server as ${me.admin ? 'Admin' : shownName(me.ign)}`;
+    : !me.linked ? "The server isn't connected · /w still reaches people on the website"
+    : `Message the server as ${me.admin ? 'Admin' : shownName(me.ign)} · /w to whisper`;
   $('#chat-compose-me').replaceChildren(me.admin ? adminTag() : me.ign ? headImg(me.ign, 24) : '');
   updateComposeCount();
 }
@@ -3507,6 +3553,12 @@ async function sendChat() {
   const me = compose.me;
   if (!text || compose.sending || !(me?.ign || me?.admin)) return;
   composeError('');
+  closeSuggest();
+  if (text.startsWith('/')) return sendWhisper(text);
+  if (!me.linked) {
+    composeError("The server isn't connected right now, so messages can't reach the game. You can still /w people on the website.");
+    return;
+  }
   compose.sending = true;
   const p = { name: me.admin ? null : me.ign, admin: !!me.admin, text, ts: Date.now(), sent: false };
   compose.pending.push(p);
@@ -3560,8 +3612,183 @@ $('#chat-compose').addEventListener('submit', (e) => {
 });
 chatInput.addEventListener('input', () => {
   updateComposeCount();
+  composeMode();
+  updateSuggest();
   if (!$('#chat-compose-err').hidden) composeError('');
 });
+
+/* ---------- whispers: /w, /msg and /tell ---------- */
+
+// "/w Name message" whispers to a player: in game if they're on, otherwise on their page if they
+// have the dashboard open (src/whisper.js). Whispers to you, and the ones you send, show in the log
+// as the game shows them, and only to the two of you. While typing one the box is in italics, and
+// names are suggested the way the game does it, in their team colors.
+const WHISPER_CMDS = ['w', 'msg', 'tell'];
+const WHISPER_RE = /^\/(w|msg|tell)(\s|$)/i;
+const suggest = { items: [], sel: 0, box: el('div', { class: 'chat-suggest', role: 'listbox', 'aria-label': 'Suggestions', hidden: '' }) };
+$('#chat-compose').append(suggest.box);
+chatInput.setAttribute('aria-autocomplete', 'list');
+
+function composeMode() {
+  chatInput.classList.toggle('whisper', WHISPER_RE.test(chatInput.value));
+}
+
+// Who a whisper can go to: everyone in game, and roster players with the dashboard open. { name, web }
+function whisperTargets() {
+  const out = new Map();
+  for (const p of onlineNow().online) out.set(p.name.toLowerCase(), { name: p.name, web: false });
+  for (const n of presence.data?.web || []) if (!out.has(n.toLowerCase())) out.set(n.toLowerCase(), { name: n, web: true });
+  const me = compose.me?.ign?.toLowerCase();
+  if (me) out.delete(me);
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+// What to suggest for the text so far (with the cursor at its end): the command, then the name.
+function suggestionsFor(v) {
+  const cmd = v.match(/^\/(\S*)$/);
+  if (cmd) {
+    const typed = cmd[1].toLowerCase();
+    return WHISPER_CMDS.filter((c) => c.startsWith(typed) && c !== typed).map((c) => ({ from: 0, text: `/${c} `, cmd: c }));
+  }
+  const who = v.match(/^\/(w|msg|tell)\s+(\S*)$/i);
+  if (!who) return [];
+  const typed = who[2].toLowerCase();
+  const from = v.length - who[2].length;
+  return whisperTargets()
+    .filter((t) => t.name.toLowerCase().startsWith(typed) && t.name.toLowerCase() !== typed)
+    .map((t) => ({ from, text: `${t.name} `, name: t.name, web: t.web }));
+}
+
+function updateSuggest() {
+  const v = chatInput.value;
+  const atEnd = chatInput.selectionStart === v.length && chatInput.selectionEnd === v.length;
+  const items = document.activeElement === chatInput && atEnd ? suggestionsFor(v).slice(0, 8) : [];
+  const same = items.length === suggest.items.length && items.every((it, i) => it.text === suggest.items[i].text);
+  if (!same) suggest.sel = 0;
+  suggest.items = items;
+  renderSuggest();
+}
+
+function renderSuggest() {
+  const box = suggest.box;
+  box.hidden = !suggest.items.length;
+  chatInput.setAttribute('aria-expanded', String(!box.hidden));
+  box.replaceChildren(...suggest.items.map((it, i) => {
+    const row = el('div', { class: `chat-suggest-item${i === suggest.sel ? ' sel' : ''}`, role: 'option', 'aria-selected': String(i === suggest.sel) },
+      ...(it.cmd
+        ? [el('span', { class: 'chat-suggest-cmd', text: `/${it.cmd}` }), el('span', { class: 'muted', text: 'whisper to a player' })]
+        : [headImg(it.name, 16, { width: 16, height: 16 }), teamName(el('span', { class: 'chat-suggest-name', text: it.name }), it.name),
+          ...(it.web ? [el('span', { class: 'chat-suggest-where', text: 'on the website' })] : [])]));
+    row.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); // keep the box focused
+      acceptSuggest(i);
+    });
+    return row;
+  }));
+}
+
+function acceptSuggest(i = suggest.sel) {
+  const it = suggest.items[i];
+  if (!it) return;
+  chatInput.value = chatInput.value.slice(0, it.from) + it.text;
+  chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+  composeMode();
+  updateComposeCount();
+  updateSuggest();
+}
+
+function closeSuggest() {
+  suggest.items = [];
+  renderSuggest();
+}
+
+chatInput.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;
+  // Tab completes, as in game, even before the list is showing
+  if (e.key === 'Tab' && !e.shiftKey && !suggest.items.length && suggestionsFor(chatInput.value).length) updateSuggest();
+  if (!suggest.items.length) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = suggest.items.length;
+    suggest.sel = (suggest.sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    renderSuggest();
+  } else if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+    e.preventDefault();
+    acceptSuggest();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSuggest();
+  }
+});
+chatInput.addEventListener('blur', closeSuggest);
+chatInput.addEventListener('focus', updateSuggest);
+chatInput.addEventListener('click', updateSuggest);
+
+async function sendWhisper(text) {
+  compose.sending = true;
+  chatInput.value = '';
+  composeMode();
+  updateComposeCount();
+  try {
+    const res = await fetch('/api/chat/send', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error('Your login expired; reload the page to sign in again.');
+    if (!res.ok || !body.whisper) throw new Error(body.error || `Couldn't send it (HTTP ${res.status}).`);
+    if (chat.moreAfter) await loadChatLatest().catch(() => {});
+    chat.pinned = null;
+    addWhispers([body.whisper], { fresh: true, follow: true });
+  } catch (err) {
+    if (!chatInput.value) chatInput.value = text; // give it back to try again
+    composeMode();
+    composeError(err.message);
+  } finally {
+    compose.sending = false;
+    renderComposer();
+    if (!chatInput.disabled) chatInput.focus();
+  }
+}
+
+// Yours, from the server: all of them at first (the latest 200), then anything newer than you have.
+async function loadWhispers() {
+  const me = compose.me;
+  if (DUMMY || archived() || SEASON !== CURRENT_SEASON || !(me?.ign || me?.admin)) return;
+  const since = compose.whispersLoaded ? chat.whispers.at(-1)?.id ?? 0 : 0;
+  const res = await api(`/api/chat/whispers?since_id=${since}`);
+  compose.whispersLoaded = true;
+  addWhispers(res.whispers, { fresh: since > 0 });
+}
+
+function addWhispers(list, { fresh = false, follow = false } = {}) {
+  const known = new Set(chat.whispers.map((w) => w.id));
+  const add = (list || []).filter((w) => w && !known.has(w.id));
+  if (!add.length) return;
+  chat.whispers = chat.whispers.concat(add).sort((a, b) => a.ts - b.ts || a.id - b.id).slice(-500);
+  if ($('#view-chat').hidden || !chat.loaded) return;
+  const stick = follow || (fromBottom() < 60 && chat.pinned == null);
+  const anchor = chatAnchor();
+  renderChat(new Set(), fresh ? new Set(add.map((w) => w.id)) : new Set());
+  if (stick) {
+    chat.quietUntil = performance.now() + 800;
+    chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  } else {
+    restoreAnchor(anchor);
+  }
+}
+
+// A whisper as it's sent (over the live connection): into the log, and a note on other pages.
+async function onWhisper(w) {
+  if (!w || chat.whispers.some((x) => x.id === w.id)) return;
+  if (!compose.me) await loadComposer(); // to tell yours from ones to you
+  addWhispers([w], { fresh: true });
+  if (!isMe(w.sender) && ($('#view-chat').hidden || document.hidden)) {
+    toast(`${w.sender === '@admin' ? 'Admin' : shownName(w.sender)} whispers to you: ${w.text}`, { ms: 6000 });
+  }
+}
 
 function updateChatJump() {
   const btn = $('#chat-jump');
@@ -5064,11 +5291,11 @@ async function adminPost(body) {
 }
 
 // A short note at the bottom of the window.
-function toast(text, { error = false } = {}) {
+function toast(text, { error = false, ms = 3000 } = {}) {
   const t = el('div', { class: `toast${error ? ' toast-error' : ''}`, role: 'status', text });
   document.body.append(t);
-  setTimeout(() => t.classList.add('toast-out'), 2600);
-  setTimeout(() => t.remove(), 3000);
+  setTimeout(() => t.classList.add('toast-out'), ms - 400);
+  setTimeout(() => t.remove(), ms);
 }
 
 const admin = { data: null, busy: false };
@@ -5656,16 +5883,27 @@ function connectPresence() {
   ws.addEventListener('open', () => {
     // keeps the connection open while the server is asleep and nothing else is sent
     ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, 30_000);
+    // anything sent while this page wasn't connected: whispers, and chat
+    if (presence.wasOpen) {
+      if (compose.whispersLoaded) loadWhispers().catch(() => {});
+      chatNudge();
+    }
+    presence.wasOpen = true;
   });
   ws.addEventListener('message', (e) => {
     if (e.data === 'pong') return;
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
+    if (m?.type === 'whisper') return onWhisper(m.whisper);
+    if (m?.type === 'chat') return chatNudge();
+    if (m?.type === 'link') return onLink(m.up);
     if (m?.type !== 'presence' || !Array.isArray(m.players)) return;
     presence.retry = 0;
     presence.data = m;
     presence.at = Date.now();
+    if (typeof m.link === 'boolean') onLink(m.link);
     syncPresence();
+    if (suggest.items.length) updateSuggest(); // who can be whispered to may have changed
   });
   ws.addEventListener('close', () => {
     clearInterval(ping);
@@ -5683,7 +5921,27 @@ function retryPresence() {
   presence.timer = setTimeout(connectPresence, wait);
 }
 
-// A tab in the background lets go of its connection after a minute, and picks it up again when shown.
+// New chat was logged: fetch it now rather than at the next check (a few in a row make one fetch).
+let nudgeTimer = 0;
+function chatNudge() {
+  clearTimeout(nudgeTimer);
+  nudgeTimer = setTimeout(() => {
+    if (!$('#view-chat').hidden) pollChat().catch(() => {});
+    else checkUnread().catch(() => {});
+  }, 250);
+}
+
+// The server mod's web chat connection came up or went down: the message box says so at once.
+function onLink(up) {
+  const me = compose.me;
+  if (!me || me.linked === up) return;
+  me.linked = up;
+  compose.checked = Date.now();
+  renderComposer();
+}
+
+// A tab in the background lets go of its connection after a quarter of an hour (whispers to you
+// reach you until then), and picks it up again when shown.
 document.addEventListener('visibilitychange', () => {
   clearTimeout(presence.idle);
   if (!document.hidden) {
@@ -5696,7 +5954,7 @@ document.addEventListener('visibilitychange', () => {
     presence.ws = null;
     clearTimeout(presence.timer);
     ws?.close(1000, 'tab hidden');
-  }, 60_000);
+  }, 15 * 60_000);
 });
 // the live list going stale shows up even when nothing arrives
 setInterval(() => { if (!document.hidden) syncPresence(); }, 5_000);

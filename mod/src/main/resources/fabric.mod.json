@@ -3,9 +3,10 @@
 	"id": "mcstats_chat",
 	"version": "${version}",
 	"name": "mcstats chat log",
-	"description": "Sends chat, joins, leaves, deaths (with who did it) and advancements, what players wear and carry, and their advancement progress, to an mcstats dashboard, and shows chat sent from the dashboard in game.",
+	"description": "Sends chat, joins, leaves, deaths (with who did it) and advancements, what players wear and carry, and their advancement progress, to an mcstats dashboard, shows chat sent from the dashboard in game, and passes whispers between the game and the dashboard.",
 	"license": "MIT",
 	"environment": "server",
+	"mixins": ["mcstats_chat.mixins.json"],
 	"entrypoints": {
 		"server": ["dev.mcserverstats.chatlog.ChatLogMod"]
 	},

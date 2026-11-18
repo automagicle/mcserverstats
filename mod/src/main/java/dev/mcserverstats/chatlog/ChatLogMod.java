@@ -15,6 +15,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.ChatType;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -48,6 +49,9 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	private WebChatLink link;
 	private volatile MinecraftServer server;
 	private static volatile MinecraftServer current; // the same, for the static helpers
+	private static volatile ChatLogMod instance; // for CommandsMixin
+	// "msg Name text", "tell Name text" or "w Name text", as the command arrives (no slash)
+	private static final Pattern WHISPER_COMMAND = Pattern.compile("(?i)/?(?:msg|tell|w)\\s+([A-Za-z0-9_.]{1,20})\\s+(\\S.*)", Pattern.DOTALL);
 	// set while this mod posts a web message itself, so the system-message logger doesn't log it again
 	private boolean postingWeb;
 
@@ -57,7 +61,18 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		String version = FabricLoader.getInstance().getModContainer("mcstats_chat")
 				.map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("dev");
 		uploader = new Uploader(dir.resolve("mcstats-chat.properties"), dir.resolve("mcstats-chat-pending.json"), version);
-		link = new WebChatLink(uploader::config, uploader::linkDownFor, "mcstats-chat/" + version, this::webMessage);
+		link = new WebChatLink(uploader::config, uploader::linkDownFor, "mcstats-chat/" + version, new WebChatLink.Handler() {
+			@Override
+			public CompletableFuture<String> say(String name, String text, java.util.function.BooleanSupplier claim) {
+				return webMessage(name, text, claim);
+			}
+
+			@Override
+			public CompletableFuture<String> whisper(String from, String to, String text, java.util.function.BooleanSupplier claim) {
+				return webWhisper(from, to, text, claim);
+			}
+		});
+		instance = this;
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			this.server = server;
@@ -152,6 +167,72 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 			}
 		});
 		return done;
+	}
+
+	// A whisper typed on the dashboard, shown only to `to` (if they're on) the way the game shows one,
+	// with a [Web] tag: "[Web] Name whispers to you: text", the name in their team's colors (an admin's,
+	// from null, as a yellow [Admin]). Never logged. Runs on the server thread; "" when it was shown.
+	private CompletableFuture<String> webWhisper(String from, String to, String text, java.util.function.BooleanSupplier claim) {
+		MinecraftServer s = server;
+		if (s == null) return CompletableFuture.completedFuture("the server is starting or stopping");
+		CompletableFuture<String> done = new CompletableFuture<>();
+		s.execute(() -> {
+			if (!claim.getAsBoolean()) return;
+			try {
+				ServerPlayer target = s.getPlayerList().getPlayerByName(to);
+				if (target == null) {
+					done.complete("No player was found");
+					return;
+				}
+				target.sendSystemMessage(webTag().append(Component.translatable("commands.message.display.incoming",
+						from == null ? Component.literal("[Admin]").withStyle(ChatFormatting.YELLOW) : teamName(s, from), Component.literal(text))
+						.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)));
+				done.complete("");
+			} catch (RuntimeException e) {
+				LOG.error("Couldn't show a web whisper", e);
+				done.complete("the server couldn't show it");
+			}
+		});
+		return done;
+	}
+
+	private static MutableComponent webTag() {
+		return Component.empty().append(Component.literal("[Web] ").withStyle(ChatFormatting.GRAY));
+	}
+
+	private static MutableComponent teamName(MinecraftServer s, String name) {
+		PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
+		return PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
+	}
+
+	// Called by CommandsMixin before any command runs: a whisper (/msg, /tell, /w) to a player who isn't
+	// in game but has the dashboard open goes to them there instead of failing with "No player was
+	// found". The sender sees it the way the game shows one sent, with a [Web] tag. True if it was
+	// handled (the command doesn't run); anything else, including whispers between players in game,
+	// runs as usual and isn't recorded.
+	public static boolean whisperToWeb(CommandSourceStack source, String command) {
+		ChatLogMod mod = instance;
+		MinecraftServer s = current;
+		if (mod == null || s == null || command == null) return false;
+		var m = WHISPER_COMMAND.matcher(command.strip());
+		if (!m.matches()) return false;
+		String to = m.group(1);
+		if (s.getPlayerList().getPlayerByName(to) != null) return false; // in game: the game's own whisper
+		String webName = mod.link.webPlayer(to);
+		if (webName == null) return false;
+		ServerPlayer player = source.getPlayer();
+		String from = player != null ? player.getScoreboardName() : null;
+		if (from == null) return false; // the console and command blocks whisper as usual
+		String text = WebChatLink.clean(m.group(2));
+		if (text.isEmpty()) return false;
+		boolean sent = mod.link.whisperUp(from, webName, text, why -> s.execute(() -> {
+			ServerPlayer p = s.getPlayerList().getPlayer(player.getUUID());
+			if (p != null) p.sendSystemMessage(webTag().append(Component.literal("Couldn't reach " + webName + " on the website: " + why).withStyle(ChatFormatting.RED)));
+		}));
+		if (!sent) return false;
+		source.sendSystemMessage(webTag().append(Component.translatable("commands.message.display.outgoing", teamName(s, webName), Component.literal(text))
+				.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)));
+		return true;
 	}
 
 	// Broadcast server messages, sorted by their translation key. The first argument of a

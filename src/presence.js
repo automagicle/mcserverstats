@@ -16,6 +16,14 @@
 // between updates, so an open page costs next to nothing; what's known is kept in this object's own
 // storage so a wake-up doesn't need the database. Hidden players are left out and other accounts are
 // shown as the player they belong to, as everywhere else.
+//
+// The same connection carries the rest of what a page should hear about at once:
+//   - whispers (src/whisper.js), to the pages of the two people in each;
+//   - who has the dashboard open (each page says who's signed in when it connects), which pages use to
+//     suggest names after /w, and which goes to the server mod (via ServerLink) so a whisper typed in
+//     game can reach someone who's only on the website;
+//   - whether the server mod's web chat connection is up, so the message box can say so right away;
+//   - a nudge whenever new chat is logged, so pages fetch it at once instead of at their next check.
 import { DurableObject } from 'cloudflare:workers';
 import { ONLINE_FRESH_SECONDS } from './online.js';
 import { json } from './util.js';
@@ -67,9 +75,19 @@ export class Presence extends DurableObject {
       const viewers = this.ctx.getWebSockets();
       if (viewers.length >= MAX_VIEWERS) viewers[0].close(4001, 'too many viewers');
       const [client, server] = Object.values(new WebSocketPair());
+      // who's signed in on that page (set by src/api.js): { ign } for a roster player, { admin: true }, or {}
+      let viewer = {};
+      try { viewer = JSON.parse(request.headers.get('X-Viewer') || '{}') || {}; } catch {}
+      server.serializeAttachment({ ign: typeof viewer.ign === 'string' ? viewer.ign : null, admin: viewer.admin === true });
       this.ctx.acceptWebSocket(server);
+      await this.syncWeb();
       server.send(JSON.stringify(await this.view()));
       return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // who's in game and who's on the website, for sending a whisper (src/link.js)
+    if (path === '/state') {
+      return json({ game: this.st.up ? this.st.players.map((p) => p.name) : [], web: this.webNames() });
     }
 
     if (request.method !== 'POST') return json({ error: 'not found' }, 404);
@@ -94,12 +112,30 @@ export class Presence extends DurableObject {
       return json({ ok: true });
     }
 
-    // join, leave and server lines from the chat log: { events: [{ ts, kind, uuid, name, text }] }
+    // newly logged chat, with its join, leave and server lines: { events: [{ ts, kind, uuid, name, text }] }
     if (path === '/events' && body && Array.isArray(body.events)) {
       if (await this.apply(body.events)) {
         await this.save();
         await this.broadcast(true);
       }
+      this.send(JSON.stringify({ type: 'chat' })); // pages fetch the new lines now
+      return json({ ok: true });
+    }
+
+    // a whisper, to the pages of the two people in it: { whisper: { id, ts, sender, target, text, via } }
+    if (path === '/whisper' && body?.whisper) {
+      const w = body.whisper;
+      const msg = JSON.stringify({ type: 'whisper', whisper: w });
+      const sender = String(w.sender).toLowerCase(), target = String(w.target).toLowerCase();
+      this.send(msg, (v) => (v.admin ? sender === '@admin' : !!v.ign && (v.ign.toLowerCase() === sender || v.ign.toLowerCase() === target)));
+      return json({ ok: true });
+    }
+
+    // the server mod's web chat connection came up or went down (src/link.js): { up }
+    if (path === '/link' && body) {
+      this.st.link = body.up === true;
+      await this.save();
+      this.send(JSON.stringify({ type: 'link', up: this.st.link }));
       return json({ ok: true });
     }
 
@@ -233,6 +269,8 @@ export class Presence extends DurableObject {
     return {
       type: 'presence',
       fresh,
+      link: this.st.link ?? null, // the server mod's web chat connection
+      web: this.webNames().filter((n) => !hidden.has(n.toLowerCase())), // on the website (for /w suggestions)
       up: this.st.up,
       stopping: this.st.stopping,
       report_at: Math.floor(this.st.reportAt / 1000),
@@ -242,21 +280,60 @@ export class Presence extends DurableObject {
   }
 
   async broadcast(changed) {
-    const viewers = this.ctx.getWebSockets();
-    if (!viewers.length) return;
-    const msg = JSON.stringify({ ...(await this.view()), changed });
-    for (const ws of viewers) {
+    if (!this.ctx.getWebSockets().length) return;
+    this.send(JSON.stringify({ ...(await this.view()), changed }));
+  }
+
+  // To every open page, or those whose viewer (who's signed in there) passes `to`.
+  send(msg, to = null) {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (to && !to(ws.deserializeAttachment() || {})) continue;
       try { ws.send(msg); } catch {}
     }
+  }
+
+  // The roster players with the dashboard open, one each (leaving out a page that's closing).
+  webNames(closing = null) {
+    const names = new Map();
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === closing) continue;
+      const ign = ws.deserializeAttachment()?.ign;
+      if (ign) names.set(ign.toLowerCase(), ign);
+    }
+    return [...names.values()].sort((a, b) => a.localeCompare(b));
+  }
+
+  // When who's on the website changes: tell the server mod, and the pages (for /w suggestions).
+  async syncWeb(closing = null) {
+    const names = this.webNames(closing);
+    const key = names.join(',');
+    this.webKey ??= (await this.ctx.storage.get('webKey')) ?? '';
+    if (key === this.webKey) return;
+    this.webKey = key;
+    await this.ctx.storage.put('webKey', key);
+    if (this.env.LINK) {
+      try {
+        await this.env.LINK.get(this.env.LINK.idFromName('server')).fetch('https://link/web', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }),
+        });
+      } catch (err) {
+        console.error('presence web list:', err.message);
+      }
+    }
+    await this.broadcast(false);
   }
 
   async webSocketMessage() {} // pages only listen
 
   async webSocketClose(ws, code) {
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, 'closed'); } catch {}
+    await this.ready;
+    await this.syncWeb(ws);
   }
 
   async webSocketError(ws) {
     try { ws.close(1011, 'error'); } catch {}
+    await this.ready;
+    await this.syncWeb(ws);
   }
 }

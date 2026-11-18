@@ -7,7 +7,8 @@ import { gearFor, ingestGear } from './gear.js';
 import { advancementsFor, ingestAdvancements } from './advancements.js';
 import { ingestOnline } from './online.js';
 import { serveItem, serveSkin, serveTexture } from './mcassets.js';
-import { connectLink, sendWebChat, webChatMe } from './link.js';
+import { connectLink, playerFor, sendWebChat, webChatMe } from './link.js';
+import { ADMIN_SENDER, readWhispers } from './whisper.js';
 import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
 import { hiddenSessions, hourlyWithoutHidden, notHidden, withoutHidden } from './hidden.js';
 import { json, UUID_RE } from './util.js';
@@ -71,7 +72,13 @@ export async function handleApi(request, env, url) {
   }
   if (url.pathname === '/api/me') return me(env, who);
   // Who's online, pushed over a WebSocket as players join and leave (src/presence.js).
-  if (url.pathname === '/api/live') return presence(env).fetch(new Request('https://presence/watch', request));
+  // The page says who's signed in, so whispers reach them and the server knows they're on the website.
+  if (url.pathname === '/api/live') {
+    const player = await playerFor(env, who.email).catch(() => null);
+    const watch = new Request('https://presence/watch', request);
+    watch.headers.set('X-Viewer', JSON.stringify(player?.admin ? { admin: true } : player?.ign ? { ign: player.ign } : {}));
+    return presence(env).fetch(watch);
+  }
   // The admin page: only the emails in the ADMIN_EMAIL secret.
   if (url.pathname === '/api/admin') {
     if (!isAdmin(env, who)) return json({ error: 'forbidden' }, 403);
@@ -83,6 +90,13 @@ export async function handleApi(request, env, url) {
   }
   if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
   if (url.pathname === '/api/chat/me') return webChatMe(env, who);
+  // Your own whispers (src/whisper.js).
+  if (url.pathname === '/api/chat/whispers') {
+    const season = seasonFor(env, url);
+    if (!season) return json({ error: 'bad season' }, 400);
+    const player = await playerFor(env, who.email);
+    return readWhispers(env, url, player?.admin ? ADMIN_SENDER : player?.ign ?? null, season);
+  }
 
   // Game textures and skins, for the 3D player model.
   if (url.pathname.startsWith('/api/mc/item/')) return serveItem(env, url.pathname.slice(13));

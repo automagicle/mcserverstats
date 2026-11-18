@@ -37,6 +37,13 @@ minute per player, to `/api/ingest/gear` next to the chat url (same token, no ex
 keeps one WebSocket open to `/api/ingest/link` next to the chat url (same token and service token, no extra setup) and
 shows each message to everyone as `[Web] <name> message`, the name in its team's colors. It's logged like other chat,
 with a "web" tag on the dashboard. Admins (emails listed as admins on the dashboard's roster) show as `[Web] [Admin] message`, the tag in yellow. If the server isn't connected, the dashboard says so and nothing is queued.
+**Whispers** (1.8.0 or newer): `/w Name text` (or `/msg`, `/tell`) typed on the dashboard comes down the same WebSocket and
+is shown only to Name, the way the game shows a whisper, as `[Web] Sender whispers to you: text`. And a whisper typed in
+game to someone who isn't on the server but has the dashboard open goes up to their page instead of failing with "No
+player was found" (the dashboard sends the mod who's on it whenever that changes); the sender sees `[Web] You whisper to
+Name: text`. This uses the mod's first mixin, on the game's command handler: it only steps in for a whisper to someone who's
+on the dashboard and not in game, and if it ever can't apply, that's all that stops working. Whispers between players in
+game are never recorded or sent anywhere.
 From 1.6.1 the mod's answers can no longer get lost behind a ping, and a message the server was too busy to show within
 4 seconds is dropped rather than shown after the sender was told it failed. If no answer comes in time, the dashboard keeps
 the message as "sending…" and watches the log for it before saying it failed.
@@ -93,7 +100,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.7.1.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.8.0.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -146,7 +153,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.7.1.jar
+./gradlew build      # → build/libs/mcstats-chat-1.8.0.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`
