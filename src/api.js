@@ -13,6 +13,7 @@ import { hiddenSessions, hourlyWithoutHidden, notHidden, withoutHidden } from '.
 import { json, UUID_RE } from './util.js';
 import { adminAction, adminState, isAdmin, me } from './admin.js';
 import { cached } from './cache.js';
+import { presence } from './presence.js';
 
 const DAY = 86400;
 
@@ -69,6 +70,8 @@ export async function handleApi(request, env, url) {
     return sendWebChat(request, env, url, who);
   }
   if (url.pathname === '/api/me') return me(env, who);
+  // Who's online, pushed over a WebSocket as players join and leave (src/presence.js).
+  if (url.pathname === '/api/live') return presence(env).fetch(new Request('https://presence/watch', request));
   // The admin page: only the emails in the ADMIN_EMAIL secret.
   if (url.pathname === '/api/admin') {
     if (!isAdmin(env, who)) return json({ error: 'forbidden' }, 403);

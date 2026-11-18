@@ -6,6 +6,7 @@
 import { json } from './util.js';
 import { fillGaps } from './gapfill.js';
 import { clearCache } from './cache.js';
+import { tellPresence } from './presence.js';
 
 const IGN_RE = /^[A-Za-z0-9_]{1,32}$/;
 const TEAM_RE = /^[a-z][a-z0-9-]{0,19}$/;
@@ -166,5 +167,6 @@ export async function adminAction(request, env, url, season) {
   if (body.action.startsWith('roster.') && !season.n) return bad('pick a season');
   const out = (await run(env.DB, body, season, env)) || json({ ok: true });
   if (out.ok) await clearCache(env.DB); // season totals may have changed
+  if (out.ok && /^(hidden|alias)\./.test(body.action)) await tellPresence(env, '/invalidate'); // the live badges
   return out;
 }

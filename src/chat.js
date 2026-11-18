@@ -2,6 +2,7 @@ import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
 import { deathInsert } from './combat.js';
 import { OPEN_ENDED } from './seasons.js';
 import { json, UUID_RE } from './util.js';
+import { tellPresence } from './presence.js';
 
 const KINDS = new Set(['chat', 'emote', 'say', 'join', 'leave', 'death', 'advancement', 'server', 'system']);
 const ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -134,6 +135,10 @@ export async function ingestChat(request, env) {
     );
     // each death also goes in the deaths table, with who did it (after its message, in the same batch)
     await env.DB.batch([...rows.map((r) => stmt.bind(...r)), ...deaths.map(([id, m]) => deathInsert(env.DB, id, m))]);
+    // joins, leaves and server starts/stops move the live online badges at once (src/presence.js)
+    const moves = rows.filter((r) => r[2] === 'join' || r[2] === 'leave' || r[2] === 'server')
+      .map(([, ts, kind, uuid, name, text]) => ({ ts, kind, uuid, name, text }));
+    if (moves.length) await tellPresence(env, '/events', { events: moves });
   }
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }

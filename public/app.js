@@ -1681,6 +1681,8 @@ function showError(msg) {
 // The server stops while nobody's on; the mod's last word before that is "Server stopped".
 function pausedSince() {
   const st = state.status;
+  const now = onlineNow();
+  if (now.live) return now.stopping ? now.reportAt : null; // the live list knows at once
   const ev = st?.server_event;
   if (ev?.text !== 'Server stopped' || (st.last?.up && st.last.online > 0)) return null;
   return Math.floor(ev.ts / 1000);
@@ -1690,7 +1692,7 @@ function renderLive() {
   const st = state.status;
   const live = $('#live');
   const text = $('#live-text');
-  const last = st.last;
+  const { last } = onlineNow();
   const paused = pausedSince();
   live.title = paused ? `Server stopped ${ago(paused)}` : '';
   if (archived()) {
@@ -1817,10 +1819,12 @@ function syncChips(list, players, bg = '--page') {
 }
 
 function renderOnlineChips() {
-  syncChips($('#online-list'), archived() ? [] : state.status.online);
+  const now = onlineNow();
+  syncChips($('#online-list'), archived() ? [] : now.online);
   const warn = $('#sample-warning');
   const last = state.status.last;
-  if (!archived() && last && last.up && last.online > last.listed) {
+  // (with the live list working, the mod is installed and its list is complete)
+  if (!archived() && !now.live && last && last.up && last.online > last.listed) {
     warn.replaceChildren(
       `The server reports ${last.online} players but only lists ${last.listed} by name, so some playtime isn't being counted. `,
       'Installing mcstats-chat 1.7.0 or newer on the server gives the full list (the mod reports everyone in the tab list).'
@@ -1836,7 +1840,7 @@ function renderOnlineChips() {
 function renderTiles() {
   const st = state.status;
   if (archived()) return renderArchiveTiles();
-  const last = st.last;
+  const { last, live: isLive } = onlineNow();
   const fresh = last && nowSec() - last.ts <= 300;
   const animate = live();
   setCounter($('#t-online'), fresh ? (last.up ? String(last.online) : 'Offline') : '–', fresh && last.up ? last.online : null, animate);
@@ -1849,6 +1853,7 @@ function renderTiles() {
     if (hourInfo(ts).date === today) peak = Math.max(peak, pk);
     if (ts >= weekAgo) weekMinutes += sum;
   }
+  if (isLive && last.up) peak = Math.max(peak, last.online); // someone just joined: today's peak can't be less
   setCounter($('#t-peak'), String(peak), peak, animate);
   setCounter($('#t-week'), fmtHours(weekMinutes / 60), weekMinutes, animate);
   setCounter($('#t-players'), st.players_total.toLocaleString(), st.players_total, animate);
@@ -2181,7 +2186,7 @@ async function loadLeaderboard() {
     return;
   }
   const top = r.players[0].secs || 1;
-  const onlineNow = new Set(archived() ? [] : state.status.online.map((p) => p.uuid));
+  const onNow = new Set(archived() ? [] : onlineNow().online.map((p) => p.uuid));
   const prev = state.lbPrev?.range === windowKey(w) ? state.lbPrev.secs : null;
   state.lbPrev = { range: windowKey(w), secs: new Map(r.players.map((p) => [p.uuid, p.secs])) };
   const changed = [];
@@ -2195,7 +2200,7 @@ async function loadLeaderboard() {
         el('div', { class: `bar${rosterOf(p.name) ? ` team-${rosterOf(p.name).team}` : ''}`, style: `width:${Math.max(1, (p.secs / top) * 100)}%` })
       ),
       el('td', { class: 'num', text: dur(p.secs) }),
-      el('td', { class: 'num muted hide-sm', text: onlineNow.has(p.uuid) ? 'online' : ago(p.last_seen) })
+      el('td', { class: 'num muted hide-sm', text: onNow.has(p.uuid) ? 'online' : ago(p.last_seen) })
     );
     tr.addEventListener('click', (e) => { if (e.target !== link) location.hash = `#/player/${p.uuid}`; });
     tr.addEventListener('pointerenter', () => prefetchPlayer(p.uuid));
@@ -3641,13 +3646,12 @@ $('#chat-online-pill').addEventListener('click', () => setOnlineBarOpen(true));
 setOnlineBarOpen(recall('chatOnline') !== 'closed');
 
 function renderChatOnline() {
-  const st = state.status;
-  const last = st.last;
+  const { last, online } = onlineNow();
   const fresh = last && nowSec() - last.ts <= 300;
-  syncChips($('#chat-chips'), fresh ? st.online : [], '--surface');
+  syncChips($('#chat-chips'), fresh ? online : [], '--surface');
   const empty = $('#chat-online-empty');
   const paused = pausedSince();
-  empty.hidden = fresh && st.online.length > 0;
+  empty.hidden = fresh && online.length > 0;
   empty.textContent = paused ? `Server paused since ${clock(paused)}`
     : !fresh ? 'No recent data' : !last.up ? 'Server offline' : 'Nobody online right now';
   const n = fresh && last.up ? last.online : 0;
@@ -5397,9 +5401,10 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // Live updates: re-render everything shortly after each once-a-minute server check,
 // while the tab is visible. Fetches are incremental, so this stays cheap.
 let refreshing = false;
+let presenceUpdate = false; // a join or leave pushed by the server (see "live online list" below)
 // Effects only play for automatic updates, not first loads or range changes.
 function live() {
-  return refreshing && !reducedMotion();
+  return (refreshing || presenceUpdate) && !reducedMotion();
 }
 async function refresh() {
   if (document.hidden || refreshing || archived()) return; // a finished season doesn't change
@@ -5435,5 +5440,114 @@ document.addEventListener('visibilitychange', () => {
   else checkUnread().catch(() => {});
 });
 scheduleRefresh();
+
+/* ---------- live online list ---------- */
+
+// Who's online is pushed over a WebSocket the moment someone joins or leaves (src/presence.js): the
+// server mod sends the join/leave lines and its tab list within a second or two. The badges, the
+// online count and the live pill show it; the charts still come from the once-a-minute check. The
+// list comes at least every 20 seconds while the server is up; without one for PRESENCE_STALE_MS (the
+// server asleep, the mod not running, or the connection down) the page goes back to the minute check.
+const PRESENCE_STALE_MS = 75_000;
+const presence = { data: null, at: 0, ws: null, retry: 0, timer: null, idle: null, shown: '' };
+
+function livePresence() {
+  const p = presence.data;
+  return p && p.fresh && Date.now() - presence.at <= PRESENCE_STALE_MS ? p : null;
+}
+
+// What to show as online now: the live list when it's current, otherwise the last minute check's.
+// last is shaped like status.last ({ ts, up, online, listed, max }).
+function onlineNow() {
+  const st = state.status;
+  const p = SEASON === CURRENT_SEASON && !archived() ? livePresence() : null;
+  if (!p || !st) return { last: st?.last ?? null, online: st?.online ?? [], live: false };
+  const n = p.players.length;
+  return {
+    last: { ...(st.last || {}), ts: Math.max(p.sent_at, st.last?.ts ?? 0), up: p.up ? 1 : 0, online: n, listed: n },
+    online: p.players,
+    live: true,
+    stopping: p.stopping,
+    reportAt: p.report_at,
+  };
+}
+
+// Redraws what shows who's online, if what it would show changed.
+function syncPresence() {
+  if (!state.status || archived()) return;
+  const now = onlineNow();
+  const key = JSON.stringify([now.live, now.last?.up, now.stopping, now.online.map((p) => [p.uuid, p.name, p.start_ts])]);
+  if (key === presence.shown) return;
+  presence.shown = key;
+  presenceUpdate = true;
+  try {
+    renderLive();
+    if (!$('#view-home').hidden) { renderTiles(); renderOnlineChips(); }
+    if (!$('#view-chat').hidden) renderChatOnline();
+  } finally {
+    presenceUpdate = false;
+  }
+}
+
+function connectPresence() {
+  clearTimeout(presence.timer);
+  if (DUMMY || archived() || SEASON !== CURRENT_SEASON || presence.ws || document.hidden || !('WebSocket' in window)) return;
+  let ws;
+  try {
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`);
+  } catch {
+    retryPresence();
+    return;
+  }
+  presence.ws = ws;
+  let ping = null;
+  ws.addEventListener('open', () => {
+    // keeps the connection open while the server is asleep and nothing else is sent
+    ping = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, 30_000);
+  });
+  ws.addEventListener('message', (e) => {
+    if (e.data === 'pong') return;
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m?.type !== 'presence' || !Array.isArray(m.players)) return;
+    presence.retry = 0;
+    presence.data = m;
+    presence.at = Date.now();
+    syncPresence();
+  });
+  ws.addEventListener('close', () => {
+    clearInterval(ping);
+    if (presence.ws !== ws) return;
+    presence.ws = null;
+    retryPresence();
+  });
+}
+
+// Reconnects after a dropped connection: soon at first, then less often (up to a minute apart).
+function retryPresence() {
+  clearTimeout(presence.timer);
+  if (document.hidden) return;
+  const wait = Math.min(60_000, 1000 * 2 ** presence.retry++) * (0.75 + Math.random() * 0.5);
+  presence.timer = setTimeout(connectPresence, wait);
+}
+
+// A tab in the background lets go of its connection after a minute, and picks it up again when shown.
+document.addEventListener('visibilitychange', () => {
+  clearTimeout(presence.idle);
+  if (!document.hidden) {
+    presence.retry = 0;
+    connectPresence();
+    return;
+  }
+  presence.idle = setTimeout(() => {
+    const ws = presence.ws;
+    presence.ws = null;
+    clearTimeout(presence.timer);
+    ws?.close(1000, 'tab hidden');
+  }, 60_000);
+});
+// the live list going stale shows up even when nothing arrives
+setInterval(() => { if (!document.hidden) syncPresence(); }, 5_000);
+connectPresence();
 
 route().finally(() => checkUnread().catch(() => {}));

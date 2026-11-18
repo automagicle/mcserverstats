@@ -4,6 +4,7 @@
 
 import { sameSecret } from './chat.js';
 import { json, UUID_RE } from './util.js';
+import { tellPresence } from './presence.js';
 
 const MAX_PLAYERS = 500;
 const NAME_RE = /^[A-Za-z0-9_.]{1,20}$/; // Java names, and Bedrock ones through Floodgate's "." prefix
@@ -44,6 +45,7 @@ export async function ingestOnline(request, env) {
     `INSERT INTO server_online (id, ts, players, stopping) VALUES (1, ?1, ?2, ?3)
      ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, players = excluded.players, stopping = excluded.stopping`
   ).bind(Math.floor(Date.now() / 1000), JSON.stringify(stopping ? [] : players), stopping ? 1 : 0).run();
+  await tellPresence(env, '/report', { players, stopping }); // the live badges (src/presence.js)
   return json({ ok: true, players: stopping ? 0 : players.length });
 }
 

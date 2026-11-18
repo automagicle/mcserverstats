@@ -90,6 +90,25 @@ For local development, add `ADMIN_EMAIL=` with your `DEV_EMAIL` to `.dev.vars`. 
 replaced the next time `npm run roster:remote` runs, so copy lasting ones into the roster file (it also holds the real
 names and chat emails, which the page doesn't show).
 
+## Live online list
+
+The charts and totals come from the once-a-minute check (mcstatus.io plus the server mod's list, below). What's online
+*right now* is live instead: the online badges, the **Online now** count and the pill at the top (on the Activity page,
+and the Chat log's online bar) change within a second or two of someone joining or leaving (`src/presence.js`).
+
+- The server mod sends each join, leave and server start/stop line with the chat log, and its full tab list whenever it
+  changes (and every 20 seconds regardless). The Worker hands both to a Durable Object, `Presence`, which pushes the
+  result to every open page over a WebSocket (`GET /api/live`, signed in like the rest of `/api/`).
+- A join line puts the badge up at once, with the time the player actually joined; a leave line takes it down. The tab
+  list is the final word: whatever a line got wrong (one lost or sent late) the next list puts right.
+- Hidden players are left out and other accounts are shown as the player they belong to, as everywhere else; the admin
+  page's changes reach open pages at once.
+- With no list for 75 seconds (the server asleep, the mod not running, or the connection down) a page goes back to the
+  minute check's numbers, and keeps trying to reconnect (up to a minute apart). A shutdown shows as *Paused* at once.
+- Cost: no database reads per page. The object sleeps between updates and keeps what it knows in its own storage; it reads
+  the hidden players and aliases at most every 5 minutes and a newcomer's session start when there's no join line for
+  them. A tab in the background lets go of its connection after a minute.
+
 ## Missed checks (outages)
 
 If a minute's check can't be recorded (the database refusing queries, or the status API and the server mod both
@@ -267,3 +286,5 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   Chat log page checks for new messages every 10 seconds while it's visible. The Combat page loads the season's deaths
   once, then only what's new each minute. Web chat uses one Durable Object holding
   the mod's WebSocket, which sleeps while idle (the mod's pings are answered without waking it).
+  The live online list uses a second one (`Presence`), woken by the mod's reports (about every 20 seconds while the
+  server's up) and holding the pages' WebSockets, which also sleep between updates.

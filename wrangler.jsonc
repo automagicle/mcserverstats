@@ -29,11 +29,18 @@
     }
   ],
 
-  // Holds the server mod's WebSocket, which carries chat sent from the dashboard into the game (src/link.js).
+  // LINK holds the server mod's WebSocket, which carries chat sent from the dashboard into the game
+  // (src/link.js). PRESENCE pushes who's online to open pages as players join and leave (src/presence.js).
   "durable_objects": {
-    "bindings": [{ "name": "LINK", "class_name": "ServerLink" }]
+    "bindings": [
+      { "name": "LINK", "class_name": "ServerLink" },
+      { "name": "PRESENCE", "class_name": "Presence" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ServerLink"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ServerLink"] },
+    { "tag": "v2", "new_sqlite_classes": ["Presence"] }
+  ],
 
   // MC_SERVER is a secret (wrangler secret put MC_SERVER), never put it here.
   // So is CHAT_INGEST_TOKEN, which the chat mod sends (see mod/README.md).

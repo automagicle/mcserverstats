@@ -4,6 +4,7 @@ import { handleApi } from './api.js';
 import { CURRENT_SEASON } from './seasons.js';
 
 export { ServerLink } from './link.js';
+export { Presence } from './presence.js';
 
 // Cloudflare refuses every D1 query for the rest of the UTC day once the free plan's daily rows
 // read (or written) limit is used up.
