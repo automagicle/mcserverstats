@@ -284,6 +284,11 @@ main {
 .chart svg { display: block; touch-action: pan-y; }
 .legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); margin: -4px 0 8px; }
 .legend:empty { display: none; }
+.legend-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin: -4px 0 8px; }
+.legend-row .legend { margin: 0; flex-wrap: wrap; gap: 4px 16px; }
+.legend-row .legend:empty { display: block; }
+.legend-row .seg { margin-left: auto; }
+.legend .key.key-band { height: 8px; border-radius: 2px; opacity: 0.85; }
 .legend .key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; vertical-align: middle; margin-right: 6px; }
 
 .axis-text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -293,6 +298,11 @@ main {
 .area-1 { fill: var(--series-1); opacity: 0.14; }
 .line-2 { fill: none; stroke: var(--series-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .line-3 { fill: none; stroke: var(--series-3); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line-muted { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: 0.7; }
+.line-red { fill: none; stroke: var(--team-red); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line-blue { fill: none; stroke: var(--team-blue); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.area-red { fill: var(--team-red); opacity: 0.16; }
+.area-blue { fill: var(--team-blue); opacity: 0.16; }
 .crosshair { stroke: var(--axis); stroke-width: 1; }
 .marker { stroke: var(--surface); stroke-width: 2; }
 .empty-chart { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 14px; }
@@ -1088,7 +1098,21 @@ a.msg-name:hover { text-decoration: underline; }
 .pc-bar { fill: var(--series-1); }
 .pc-bar.zero { fill: var(--grid); }
 .pc-bar.now { fill: var(--series-2); }
-.pc-graph .axis-text { font-size: 10px; }
+.pc-hours { position: relative; padding-bottom: 15px; }
+.pc-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 13px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pc-axis span { position: absolute; top: 0; white-space: nowrap; }
+.pc-axis span[style="left:100%"] { transform: translateX(-100%); }
+
+/* a player's page: usual hours under the calendar, and recent sessions no taller than that card */
+.p-usual { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.p-usual .pc-section .muted { font-weight: 400; }
+.recent-card { display: flex; flex-direction: column; height: 0; min-height: 100%; }
+.recent-card #p-recent { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-right: -6px; padding-right: 6px; }
+.recent-card #p-recent thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+@media (max-width: 800px) {
+  .recent-card { height: auto; min-height: 0; }
+  .recent-card #p-recent { flex: none; max-height: 420px; }
+}
 .pc-open {
   display: block;
   width: 100%;

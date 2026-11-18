@@ -953,6 +953,25 @@ function drawLineChart(root, opts, f) {
     noDataBlock(svg, plot, `${root.id}-hatch`, m.l, Math.min(m.l + pw, x(opts.dataStart)), m.t, ph);
   }
 
+  // the shading between a stacked line and the one under it (the same points), broken at gaps as the lines are
+  const bandPath = (pts, upper, lower) => {
+    let d = '';
+    let seg = [];
+    const flush = () => {
+      if (seg.length > 1) {
+        d += seg.map((i, j) => `${j ? 'L' : 'M'}${x(pts[i].t)},${y(upper[i])}`).join('');
+        d += seg.slice().reverse().map((i) => `L${x(pts[i].t)},${y(lower[i])}`).join('') + 'Z';
+      }
+      seg = [];
+    };
+    pts.forEach((p, i) => {
+      if (i && p.t - pts[i - 1].t > step * 2.5) flush();
+      seg.push(i);
+    });
+    flush();
+    return d;
+  };
+
   series.forEach((s, k) => {
     const vals = f.vals[k];
     let line = '', area = '', segStart = null, prev = null;
@@ -975,6 +994,7 @@ function drawLineChart(root, opts, f) {
     });
     closeArea();
     if (s.area) plot.append(sv('path', { d: area, class: `area-${s.cls}` }));
+    if (s.band != null) plot.append(sv('path', { d: bandPath(s.pts, vals, f.vals[s.band]), class: `area-${s.cls}` }));
     plot.append(sv('path', { d: line, class: `line-${s.cls}` }));
   });
 
@@ -1008,8 +1028,9 @@ function drawLineChart(root, opts, f) {
       markers[k].setAttribute('cy', y(f.vals[k][i]));
       markers[k].setAttribute('visibility', 'visible');
     });
-    const rows = series.map((s) => ({
-      value: s.pts[i].down ? 'Server offline' : opts.fmtValue(s.pts[i].v),
+    // a stacked line's own amount (s.raw), not its height on the stack
+    const rows = series.filter((s) => !s.pts[i].down || s === series[0]).map((s) => ({
+      value: s.pts[i].down ? 'Server offline' : opts.fmtValue(s.raw ? s.raw[i] : s.pts[i].v),
       label: s.pts[i].down ? null : s.name,
       color: series.length > 1 ? s.color : null,
     }));
@@ -2040,6 +2061,66 @@ function rollingAverage(pts, window) {
   return out;
 }
 
+// Players online, or the average line, as everyone together or split into Red and Blue stacked.
+let tlTeams = recall('tlTeams') === 'teams' ? 'teams' : 'all';
+function syncTlTeamToggle() {
+  const t = $('#tl-team');
+  t.hidden = !roster.size;
+  for (const b of t.children) b.setAttribute('aria-pressed', String(b.dataset.v === tlTeams));
+}
+$('#tl-team').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.v === tlTeams) return;
+  tlTeams = b.dataset.v;
+  remember('tlTeams', tlTeams);
+  syncTlTeamToggle();
+  loadTimeline().catch((err) => showError(err.message));
+});
+rosterLoad.then(() => {
+  syncTlTeamToggle();
+  if (roster.size && tlTeams === 'teams' && !$('#view-home').hidden) loadTimeline().catch(() => {});
+});
+
+// How many of each team were on at each point (minute data), or on average through the hour starting
+// at each point (hourly data), from everyone's sessions ([name, start, end]).
+function teamCounts(pts, sessions, minuteData) {
+  const out = { red: pts.map(() => 0), blue: pts.map(() => 0) };
+  if (!pts.length) return out;
+  const firstAt = (t) => {
+    let lo = 0, hi = pts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid].t < t) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  };
+  const now = nowSec();
+  for (const [name, a, b] of sessions) {
+    const team = out[rosterOf(name)?.team];
+    if (!team) continue;
+    if (minuteData) {
+      for (let i = firstAt(a); i < pts.length && pts[i].t < b; i++) team[i] += 1;
+    } else {
+      for (let i = Math.max(0, firstAt(a - 3600 + 1)); i < pts.length && pts[i].t < b; i++) {
+        const t = pts[i].t, end = Math.min(t + 3600, now);
+        const over = Math.min(b, end) - Math.max(a, t);
+        if (over > 0 && end > t) team[i] += over / (end - t);
+      }
+    }
+  }
+  return out;
+}
+
+// Red at the bottom, Blue stacked on it, each shaded down to the line below.
+function teamSeries(pts, counts, word) {
+  const red = pts.map((p, i) => ({ t: p.t, v: counts.red[i] }));
+  const blue = pts.map((p, i) => ({ t: p.t, v: counts.red[i] + counts.blue[i] }));
+  return [
+    { name: `Red ${word}`, cls: 'red', color: 'var(--team-red)', area: true, pts: red },
+    { name: `Blue ${word}`, cls: 'blue', color: 'var(--team-blue)', band: 1, pts: blue, raw: counts.blue },
+  ];
+}
+
 async function loadTimeline(slide = 0) {
   const w = tlCtl.get();
   const r = resolveWindow(w);
@@ -2068,34 +2149,53 @@ async function loadTimeline(slide = 0) {
     return [...new Set(sessions.filter(([, a, b]) => a < end && b > t).map(([name]) => name))];
   };
 
+  const teams = tlTeams === 'teams' && roster.size > 0;
+  const cm = 'var(--muted)';
+  const band = (color, text) => el('span', {}, el('span', { class: 'key key-band', style: `background:${color}` }), text);
   if (minuteData) {
     const pts = rows.map(([t, up, v]) => ({ t, v, down: !up }));
-    const series = [{ name: 'online', cls: '1', color: c1, area: true, pts }];
     // Trend line (1-hour average) for ranges longer than 6h.
     const trend = to - from > 6 * 3600 + 60;
-    if (trend) series.push({ name: 'avg (1 hour)', cls: '2', color: c2, pts: rollingAverage(pts, 3600) });
+    const series = [teams
+      ? { name: 'online', cls: 'muted', color: cm, pts }
+      : { name: 'online', cls: '1', color: c1, area: true, pts }];
+    if (teams) {
+      const counts = teamCounts(pts, sessions, true);
+      if (trend) {
+        const avg = (vs) => rollingAverage(pts.map((p, i) => ({ t: p.t, v: vs[i] })), 3600).map((p) => p.v);
+        counts.red = avg(counts.red);
+        counts.blue = avg(counts.blue);
+      }
+      series.push(...teamSeries(pts, counts, trend ? 'avg (1 hour)' : 'online'));
+    } else if (trend) series.push({ name: 'avg (1 hour)', cls: '2', color: c2, pts: rollingAverage(pts, 3600) });
     opts = {
       from, to, step: POLL, series, whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? `${v} ${v === 1 ? 'player' : 'players'}` : v.toFixed(1)),
       fmtTime: (t) => fmt(t, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
     };
-    legend.replaceChildren(...(trend && pts.length ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
+    const what = trend ? 'average online (1 hour)' : 'online';
+    legend.replaceChildren(...(!pts.length ? []
+      : teams ? [key(cm, 'Players online'), band('var(--team-red)', `Red ${what}`), band('var(--team-blue)', `Blue ${what}`)]
+        : trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
     const rows = await getHourlyRange(from, to);
     if (tlCtl.get() !== w) return;
+    const avgPts = rows.map(([t, n, , s]) => ({ t, v: n ? s / n : 0 }));
+    const peak = { name: 'peak', cls: '3', color: c3, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) };
     opts = {
       from, to, step: 3600,
-      series: [
-        { name: 'average', cls: '1', color: c1, area: true, pts: rows.map(([t, n, , s]) => ({ t, v: n ? s / n : 0 })) },
-        { name: 'peak', cls: '3', color: c3, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) },
-      ],
+      series: teams
+        ? [{ name: 'average', cls: 'muted', color: cm, pts: avgPts }, ...teamSeries(avgPts, teamCounts(avgPts, sessions, false), 'average'), peak]
+        : [{ name: 'average', cls: '1', color: c1, area: true, pts: avgPts }, peak],
       whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
       fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(t).hour)}`,
     };
-    legend.replaceChildren(key(c1, 'Average online'), key(c3, 'Peak online'));
+    legend.replaceChildren(...(teams
+      ? [key(cm, 'Average online'), band('var(--team-red)', 'Red average'), band('var(--team-blue)', 'Blue average'), key(c3, 'Peak online')]
+      : [key(c1, 'Average online'), key(c3, 'Peak online')]));
   }
-  opts.key = windowKey(w);
+  opts.key = `${windowKey(w)}|${teams ? 'teams' : 'all'}`;
   opts.dataStart = chartStart();
   opts.yMin = state.status?.peak_ever; // same scale on every range: up to the most ever online
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
@@ -2367,6 +2467,8 @@ function showPlayerLoading(uuid) {
   renderWeekGrid($('#p-weekgrid'), empty, () => [{ value: 'Loading…' }]);
   weekPrev.delete($('#p-weekgrid'));
   $('#p-recent').replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
+  $('#p-usual').replaceChildren();
+  $('#p-usual-sub').textContent = '';
   $('#p-combat').replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
   $('#pcb-sub').textContent = '';
   $('#p-egg-card').hidden = true;
@@ -2460,7 +2562,11 @@ async function showPlayer(uuid, { refresh = false } = {}) {
     { label },
   ], { animate });
 
-  const recent = sessions.slice(-15).reverse();
+  const usual = usualActivity(sessions);
+  $('#p-usual').replaceChildren(usual.graph);
+  $('#p-usual-sub').textContent = usual.sub;
+
+  const recent = sessions.slice(-100).reverse();
   const root = $('#p-recent');
   if (!recent.length) {
     root.replaceChildren(el('div', { class: 'empty', text: 'No sessions yet.' }));
@@ -3732,39 +3838,85 @@ function playedBetween(sessions, from, to) {
   return total;
 }
 
-// Minutes online in each hour of the day, averaged over the last two weeks, as little bars.
-function usualActivity(sessions) {
-  // a finished season: averaged over all of it
-  const days = archived() && state.dataStart ? Math.max(1, Math.round((nowSec() - state.dataStart) / 86400)) : 14;
-  const from = nowSec() - days * 86400;
-  const mins = Array(24).fill(0);
-  for (const [s, e] of sessions) {
-    if (e > from) eachHourChunk(Math.max(s, from), e, (h, secs) => { mins[hourInfo(h).hour] += secs / 60 / days; });
-  }
-  const W = 264, H = 58, top = 4, ph = 38, slot = W / 24;
-  const max = Math.max(10, ...mins);
-  const nowHour = hourInfo(nowSec()).hour;
-  const svg = sv('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'pc-graph', role: 'img', 'aria-label': 'Usual activity by hour' });
-  mins.forEach((v, h) => {
-    const bh = Math.max(v > 0.5 ? 2 : 1, (v / max) * ph);
-    const bar = sv('rect', { x: h * slot + 1, y: top + ph - bh, width: slot - 2, height: bh, rx: 1.5, class: `pc-bar${h === nowHour ? ' now' : ''}${v <= 0.5 ? ' zero' : ''}` });
-    bar.dataset.h = h;
+// Little bars, one per hour: bars = [{ v (minutes), now?, tip: tooltip rows }], labels = [[fraction across, text]],
+// scaled to fullAt minutes (or the biggest bar).
+// The bars stretch to any width; the hour labels sit under them as text, so they never stretch.
+function hourBars(bars, labels, aria, fullAt = null) {
+  const W = 240, H = 40, slot = W / bars.length;
+  const max = fullAt ?? Math.max(10, ...bars.map((b) => b.v));
+  const svg = sv('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'pc-graph', role: 'img', 'aria-label': aria });
+  bars.forEach((b, i) => {
+    const bh = Math.max(b.v > 0.5 ? 2 : 1, (b.v / max) * H);
+    const bar = sv('rect', { x: i * slot + 1, y: H - bh, width: slot - 2, height: bh, rx: 1.5, class: `pc-bar${b.now ? ' now' : ''}${b.v <= 0.5 ? ' zero' : ''}` });
+    bar.dataset.i = i;
     svg.append(bar);
-    if (h % 6 === 0) {
-      const t = sv('text', { x: h * slot + 1, y: H - 2, class: 'axis-text' });
-      t.textContent = hourName(h, true);
-      svg.append(t);
-    }
   });
   svg.addEventListener('pointermove', (e) => {
-    const h = e.target.dataset?.h;
-    if (h == null) return hideTip();
-    const v = mins[h];
-    showTip(e.clientX, e.clientY, [{ value: v < 1 ? 'Rarely on' : `${Math.round(v)} min`, label: v < 1 ? null : 'avg' },
-      { label: `${hourName(Number(h))}–${hourName((Number(h) + 1) % 24)}, ${archived() ? 'whole season' : 'last 2 weeks'}` }]);
+    const i = e.target.dataset?.i;
+    if (i == null) return hideTip();
+    showTip(e.clientX, e.clientY, bars[i].tip);
   });
   svg.addEventListener('pointerleave', hideTip);
-  return svg;
+  const axis = el('div', { class: 'pc-axis' }, ...labels.map(([f, text]) => el('span', { style: `left:${f * 100}%`, text })));
+  return el('div', { class: 'pc-hours' }, svg, axis);
+}
+
+// Minutes online in each of the last 24 hours, oldest first, ending with the hour now.
+function last24Hours(sessions) {
+  const now = nowSec();
+  const hourNow = Math.floor(now / 3600) * 3600;
+  const first = hourNow - 23 * 3600;
+  const mins = Array(24).fill(0);
+  for (const [s, e] of sessions) {
+    if (e <= first) continue;
+    eachHourChunk(Math.max(s, first), Math.min(e, now), (h, secs) => {
+      const i = Math.round((h - first) / 3600);
+      if (i >= 0 && i < 24) mins[i] += secs / 60;
+    });
+  }
+  const bars = mins.map((v, i) => {
+    const t = first + i * 3600;
+    const h = hourInfo(t).hour;
+    return {
+      v, now: i === 23,
+      tip: [{ value: v < 0.5 ? 'Not on' : `${Math.round(v)} min` },
+        { label: `${i === 23 ? 'This hour' : fmt(t, { weekday: 'short' })}, ${hourName(h)}–${hourName((h + 1) % 24)}` }],
+    };
+  });
+  const labels = [];
+  for (let i = 0; i < 24; i++) {
+    const h = hourInfo(first + i * 3600).hour;
+    if (h % 6 === 0 && i < 20) labels.push([i / 24, hourName(h, true)]);
+  }
+  labels.push([1, 'now']);
+  return hourBars(bars, labels, 'Time online in each of the last 24 hours', 60); // a full bar is the whole hour
+}
+
+// Average minutes online in each hour of the day since the season began. Each hour of the day is
+// divided by how many times it has come round since then, so a new season isn't averaged over days
+// that hadn't happened yet.
+function usualActivity(sessions) {
+  const now = archived() && state.status?.last?.ts ? state.status.last.ts : nowSec();
+  const start = chartStart() ?? sessions[0]?.[0] ?? now;
+  const mins = Array(24).fill(0);
+  const seen = Array(24).fill(0); // hours of each hour of the day since the start
+  if (start < now) eachHourChunk(start, now, (h, secs) => { seen[hourInfo(h).hour] += secs / 3600; });
+  for (const [s, e] of sessions) {
+    const a = Math.max(s, start), b = Math.min(e, now);
+    if (b > a) eachHourChunk(a, b, (h, secs) => { mins[hourInfo(h).hour] += secs / 60; });
+  }
+  const avg = mins.map((m, h) => (seen[h] > 0 ? m / Math.max(1, seen[h]) : 0));
+  const nowHour = hourInfo(nowSec()).hour;
+  const days = Math.max(1, Math.round((now - start) / 86400));
+  const bars = avg.map((v, h) => ({
+    v, now: !archived() && h === nowHour,
+    tip: [{ value: v < 1 ? 'Rarely on' : `${Math.round(v)} min`, label: v < 1 ? null : 'avg' },
+      { label: `${hourName(h)}–${hourName((h + 1) % 24)}, ${archived() ? 'whole season' : `since the season began`}` }],
+  }));
+  return {
+    graph: hourBars(bars, [0, 6, 12, 18].map((h) => [h / 24, hourName(h, true)]), 'Usual activity by hour'),
+    sub: `avg minutes, over ${days} ${days === 1 ? 'day' : 'days'}`,
+  };
 }
 
 function pcStat(value, label) {
@@ -3802,8 +3954,8 @@ function renderCard({ name, uuid, chatInfo, player, error }) {
           pcStat(chatInfo.today.toLocaleString(), chatInfo.today === 1 ? 'message today' : 'messages today'),
           pcStat(dur(playedBetween(sessions, startOfTodayTs(), now)), 'played today'),
           pcStat(dur(playedBetween(sessions, now - 7 * 86400, now)), 'last 7 days')),
-      el('div', { class: 'pc-section', text: 'Usually on' }),
-      usualActivity(sessions),
+      el('div', { class: 'pc-section', text: 'Past 24 hours' }),
+      last24Hours(sessions),
       el('a', { class: 'pc-open', href: `#/player/${uuid}` }, 'View profile', el('span', { 'aria-hidden': 'true', text: ' →' })),
     );
   }

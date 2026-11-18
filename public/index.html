@@ -96,7 +96,13 @@
           </div>
           <div class="range-ctl" id="tl-ctl"></div>
         </div>
-        <div id="tl-legend" class="legend"></div>
+        <div class="legend-row">
+          <div id="tl-legend" class="legend"></div>
+          <div class="seg heat-team" id="tl-team" role="group" aria-label="Average online" hidden>
+            <button type="button" data-v="all" title="Everyone together">All</button>
+            <button type="button" data-v="teams" title="Red and Blue, stacked">By team</button>
+          </div>
+        </div>
         <div id="timeline" class="chart"></div>
       </section>
 
@@ -203,8 +209,12 @@
         <section class="card">
           <div class="card-head"><h2>When they play</h2><span class="card-sub">total time by hour</span></div>
           <div id="p-weekgrid"></div>
+          <div class="p-usual">
+            <div class="pc-section">Usually on <span class="muted" id="p-usual-sub"></span></div>
+            <div id="p-usual"></div>
+          </div>
         </section>
-        <section class="card">
+        <section class="card recent-card">
           <div class="card-head"><h2>Recent sessions</h2></div>
           <div id="p-recent"></div>
         </section>
