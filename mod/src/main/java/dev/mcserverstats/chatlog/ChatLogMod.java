@@ -205,6 +205,17 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		return PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
 	}
 
+	// Roster players with the dashboard open who aren't in game: who /msg can suggest, besides the game's own.
+	static java.util.List<String> webOnlyPlayers() {
+		ChatLogMod mod = instance;
+		MinecraftServer s = current;
+		if (mod == null || s == null) return java.util.List.of();
+		java.util.List<String> out = new java.util.ArrayList<>();
+		for (String name : mod.link.webPlayers()) if (s.getPlayerList().getPlayerByName(name) == null) out.add(name);
+		out.sort(String.CASE_INSENSITIVE_ORDER);
+		return out;
+	}
+
 	// Called by CommandsMixin before any command runs: a whisper (/msg, /tell, /w) to a player who isn't
 	// in game but has the dashboard open goes to them there instead of failing with "No player was
 	// found". The sender sees it the way the game shows one sent, with a [Web] tag. True if it was

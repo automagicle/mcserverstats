@@ -121,7 +121,8 @@ you: …"), and only to the two people in each (`src/whisper.js`, table `whisper
 - To a player in game: through the server mod (1.8.0 or newer), shown to them as `[Web] Name whispers to you: text`.
 - To someone not in game who has the dashboard open: straight to their page (this works even when the server is off).
 - In game, a `/w` to someone who's only on the dashboard reaches them there instead of "No player was found"; the mod
-  knows who's on the dashboard because the `Presence` object sends it the list whenever it changes. Whispers between two
+  knows who's on the dashboard because the `Presence` object sends it the list whenever it changes, and suggests those
+  names (marked `<web>`) when you press Tab after `/w` in game. Whispers between two
   players in game are untouched and never recorded.
 - A whisper that arrives while you're on another page shows as a note at the bottom of the screen.
 

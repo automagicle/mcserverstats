@@ -195,6 +195,11 @@ final class WebChatLink {
 		return socket == null || name == null ? null : webPlayers.get(name.toLowerCase());
 	}
 
+	// Everyone on the website, while connected.
+	java.util.Collection<String> webPlayers() {
+		return socket == null ? java.util.List.of() : webPlayers.values();
+	}
+
 	// Passes a whisper typed in game up to the dashboard, for a player who's only on the website.
 	// onRefused runs (on a background thread) with the reason if the dashboard says no or doesn't
 	// answer. False if it couldn't be sent at all.

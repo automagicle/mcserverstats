@@ -41,7 +41,8 @@ with a "web" tag on the dashboard. Admins (emails listed as admins on the dashbo
 is shown only to Name, the way the game shows a whisper, as `[Web] Sender whispers to you: text`. And a whisper typed in
 game to someone who isn't on the server but has the dashboard open goes up to their page instead of failing with "No
 player was found" (the dashboard sends the mod who's on it whenever that changes); the sender sees `[Web] You whisper to
-Name: text`. This uses the mod's first mixin, on the game's command handler: it only steps in for a whisper to someone who's
+Name: text`. In game, Tab after `/w`, `/msg` or `/tell` suggests those players too, marked `<web>`, along with everyone in
+game (the server answers that argument's suggestions instead of the game's own tab list). This uses the mod's first mixin, on the game's command handler: it only steps in for a whisper to someone who's
 on the dashboard and not in game, and if it ever can't apply, that's all that stops working. Whispers between players in
 game are never recorded or sent anywhere.
 From 1.6.1 the mod's answers can no longer get lost behind a ping, and a message the server was too busy to show within
