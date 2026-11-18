@@ -1594,3 +1594,52 @@ a.pcb-who:hover { text-decoration: underline; }
 .adv-tip-desc { color: #55ff55; }
 .adv-challenge .adv-tip-desc { color: #d67bd6; }
 .adv-tip-when { color: #b9b9b9; margin-top: 4px; font-size: 12px; }
+
+/* ---------- a player's combat lists: all of them, scrolling past their space ---------- */
+.pcb-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.pcb-list .pcb-scroll { max-height: 112px; padding-right: 4px; }
+.pcb-log { max-height: 260px; padding-right: 4px; }
+
+/* ---------- admin ---------- */
+.adm-title { margin: 16px 0 4px; }
+#admin.adm-busy { opacity: 0.6; pointer-events: none; transition: opacity 0.15s; }
+.adm-card .card-head { align-items: baseline; justify-content: flex-start; }
+.adm-table-wrap { overflow-x: auto; }
+.adm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.adm-table th { text-align: left; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 0 8px 6px 0; }
+.adm-table td { padding: 4px 8px 4px 0; border-top: 1px solid var(--grid); vertical-align: middle; }
+.adm-table .adm-ign { font-weight: 600; white-space: nowrap; }
+.adm-team-red .adm-ign { color: var(--team-red, #d03b3b); }
+.adm-team-blue .adm-ign { color: var(--team-blue, #3b6fd0); }
+.adm-act { text-align: right; width: 1%; white-space: nowrap; }
+.adm-input { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--grid); background: var(--surface); color: var(--ink); min-width: 0; }
+.adm-input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+.adm-table .adm-input { width: 100%; max-width: 220px; }
+.btn-quiet { background: transparent; color: var(--muted); padding: 4px 10px; }
+.btn-quiet:hover { background: var(--surface-2); color: var(--ink); }
+.adm-list { list-style: none; margin: 0 0 10px; padding: 0; font-size: 13px; }
+.adm-list li { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-top: 1px solid var(--grid); }
+.adm-list li:first-child { border-top: 0; }
+.adm-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.adm-when { white-space: nowrap; font-size: 12px; }
+.adm-scroll { max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+.adm-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.adm-form .adm-input { flex: 1 1 120px; }
+.adm-empty { font-size: 13px; margin-bottom: 10px; }
+.adm-note { font-size: 12px; margin: 10px 0 0; }
+
+/* the admin right-click menu */
+.ctx-menu { position: fixed; z-index: 60; min-width: 190px; padding: 4px; background: var(--surface); border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--ring), 0 8px 24px rgb(0 0 0 / 0.18); display: flex; flex-direction: column; }
+.ctx-menu[hidden] { display: none; }
+.ctx-menu button { font: inherit; font-size: 13px; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer; }
+.ctx-menu button:hover, .ctx-menu button:focus-visible { background: var(--surface-2); outline: none; }
+.ctx-menu button.danger { color: var(--critical); }
+.ctx-target { background: color-mix(in oklab, var(--series-1) 12%, transparent); border-radius: 6px; }
+
+.toast { position: fixed; z-index: 70; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100vw - 32px);
+  padding: 9px 14px; border-radius: 9px; background: var(--ink); color: var(--surface); font-size: 13px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.2); transition: opacity 0.3s; }
+.toast-error { background: var(--critical); color: #fff; }
+.toast-out { opacity: 0; }
+.adm-gap-note { font-size: 13px; }

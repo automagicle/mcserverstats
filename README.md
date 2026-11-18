@@ -71,12 +71,50 @@ with a yellow **Admin** tag instead of a name (in game: `[Web] [Admin] message`)
 see the page full before there's real data. It's generated in the browser (`public/dummy.js`) and never stored; the chat
 log is left empty.
 
+## Admin page
+
+`#/admin` (linked in the footer for admins only) edits the season's teams and eggs, hidden players and merged
+accounts, and lists the deaths left out of Combat and the deleted chat messages so either can be undone. Admins can
+also right-click a chat line or a death: **Delete message** takes it out of the chat log (and Combat), and
+**Don't count in combat** leaves a death out of Combat while the chat log keeps it. Shift + right-click opens the
+browser's own menu. Deleted lines are kept in `deleted_chat` and come back with Restore; a copy the mod resends
+stays out.
+
+Admins are the sign-in emails in the `ADMIN_EMAIL` secret (comma-separated), so they stay out of this repository:
+
+```bash
+npx wrangler secret put ADMIN_EMAIL
+```
+
+For local development, add `ADMIN_EMAIL=` with your `DEV_EMAIL` to `.dev.vars`. Roster changes made on the page are
+replaced the next time `npm run roster:remote` runs, so copy lasting ones into the roster file (it also holds the real
+names and chat emails, which the page doesn't show).
+
+## Missed checks (outages)
+
+If a minute's check can't be recorded (the database refusing queries, or the status API and the server mod both
+unreachable), that minute is lost: nothing else keeps it. The server mod keeps the chat it couldn't send and sends it
+later, though, so once an hour (at :07) the Worker fills such gaps in from the chat log's joins, leaves and server
+starts/stops (`src/gapfill.js`): a check for each missing minute with whoever was on, sessions carried across the gap,
+and the hourly figures recomputed. It waits until the chat log has caught up past the gap and the gap ended at least
+15 minutes before, and looks back 2 days. The admin page's **Fill gaps now** runs it at once.
+
+## Database reads
+
+Cloudflare's free D1 plan allows 5 million rows read a day; past that every query is refused until midnight UTC (the
+page then says so). Each open dashboard tab refreshes once a minute, so those queries must read only what changed:
+sessions by the `end_ts` index, combat updates by row number, the latest server start/stop by `chat_kind`, and the
+season's player total and peak kept for 5 minutes in the `cache` table. A refresh reads under ~100 rows, however long
+the season gets.
+
 ## Hiding a player
 
 A name in the `hidden_players` table is left out of the Activity and Combat pages as if it had never been on the
 server: its playtime, its place in player counts, peaks and lists, its player page, its deaths. It covers everything
 already recorded, and nothing more is recorded for it while it's listed. The chat log still shows its messages.
 Nothing is deleted, so taking the name off brings back what was recorded before it was added.
+
+The admin page does this, or:
 
 ```bash
 npx wrangler d1 execute mcstats --remote --command "INSERT OR IGNORE INTO hidden_players (name, note) VALUES ('Name', 'why')"
@@ -90,7 +128,7 @@ The server runs in offline mode, so a player who changes their name gets a new a
 page (both accounts' sessions, chat, gear and advancements), Combat and team colors. Like hidden players it applies to
 everything already recorded and nothing is rewritten; delete the row and the accounts show apart again. Chat log
 messages still show the name they were sent under (with the main account's team color). Put the main name in the
-roster file.
+roster file. The admin page does this, or:
 
 ```bash
 npx wrangler d1 execute mcstats --remote --command "INSERT OR REPLACE INTO player_aliases (alias, name) VALUES ('OldName', 'MainName')"

@@ -11,6 +11,8 @@ import { connectLink, sendWebChat, webChatMe } from './link.js';
 import { canonName, canonUuid, marks, playerGroup } from './aliases.js';
 import { hiddenSessions, hourlyWithoutHidden, notHidden, withoutHidden } from './hidden.js';
 import { json, UUID_RE } from './util.js';
+import { adminAction, adminState, isAdmin, me } from './admin.js';
+import { cached } from './cache.js';
 
 const DAY = 86400;
 
@@ -66,6 +68,16 @@ export async function handleApi(request, env, url) {
     if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
     return sendWebChat(request, env, url, who);
   }
+  if (url.pathname === '/api/me') return me(env, who);
+  // The admin page: only the emails in the ADMIN_EMAIL secret.
+  if (url.pathname === '/api/admin') {
+    if (!isAdmin(env, who)) return json({ error: 'forbidden' }, 403);
+    const season = seasonFor(env, url);
+    if (!season) return json({ error: 'bad season' }, 400);
+    if (request.method === 'POST') return adminAction(request, env, url, season);
+    if (request.method === 'GET') return adminState(env, season);
+    return json({ error: 'method not allowed' }, 405);
+  }
   if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
   if (url.pathname === '/api/chat/me') return webChatMe(env, who);
 
@@ -98,19 +110,28 @@ export async function handleApi(request, env, url) {
       last.listed = withoutHidden(hidden, last.ts, last.listed);
       last.online = withoutHidden(hidden, last.ts, last.online);
     }
-    // From the start of tracking, "seen this season" is everyone first seen before it ended (cheap);
-    // later seasons count who has a session in them.
-    const totals = lo === 0
-      ? await db.prepare(`SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM players p WHERE first_seen < ? AND ${notHidden('p.name')}`).bind(hi).first()
-      : await db.prepare(
-        `SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM sessions s JOIN players p ON p.uuid = s.uuid
-         WHERE s.end_ts >= ? AND s.start_ts < ? AND ${notHidden('p.name')}`
-      ).bind(lo, hi).first();
+    // "Seen this season" and the peak read every session and hour of the season, so they're kept for
+    // a few minutes (src/cache.js); the current hour's peak is always read fresh. From the start of
+    // tracking, "seen" is everyone first seen before it ended; later seasons count who has a session in them.
+    const hourNow = Math.floor(Date.now() / 3600_000) * 3600;
+    const slow = await cached(db, `status:${season.n ?? 'all'}:${hourNow}`, 300, async () => {
+      const totals = lo === 0
+        ? await db.prepare(`SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM players p WHERE first_seen < ? AND ${notHidden('p.name')}`).bind(hi).first()
+        : await db.prepare(
+          `SELECT COUNT(DISTINCT lower(${canonName('p.name')})) AS players FROM sessions s JOIN players p ON p.uuid = s.uuid
+           WHERE s.end_ts >= ? AND s.start_ts < ? AND ${notHidden('p.name')}`
+        ).bind(lo, hi).first();
+      const done = await hourlyWithoutHidden(db, await db.prepare(
+        'SELECT hour_ts, samples, up_samples, online_sum, peak FROM hourly WHERE hour_ts > ? AND hour_ts < ? ORDER BY hour_ts'
+      ).bind(lo - 3600, Math.min(hi, hourNow)).raw());
+      return { players: totals?.players ?? 0, peak: done.reduce((n, r) => Math.max(n, r[4]), 0) };
+    });
+    const totals = { players: slow.players };
     const first = await db.prepare('SELECT MIN(ts) AS ts FROM snapshots WHERE ts >= ? AND ts < ?').bind(lo, hi).first();
-    const peakRows = await hourlyWithoutHidden(db, await db.prepare(
-      'SELECT hour_ts, samples, up_samples, online_sum, peak FROM hourly WHERE hour_ts > ? AND hour_ts < ? ORDER BY hour_ts'
-    ).bind(lo - 3600, hi).raw());
-    const peak = { n: peakRows.reduce((n, r) => Math.max(n, r[4]), 0) };
+    const nowRows = hi > hourNow ? await hourlyWithoutHidden(db, await db.prepare(
+      'SELECT hour_ts, samples, up_samples, online_sum, peak FROM hourly WHERE hour_ts >= ? AND hour_ts < ?'
+    ).bind(Math.max(hourNow, lo - 3600), hi).raw()) : [];
+    const peak = { n: nowRows.reduce((n, r) => Math.max(n, r[4]), slow.peak) };
     // The mod logs "Server stopped" when the server shuts down (it sleeps while nobody's on).
     const serverEvent = await db.prepare(
       "SELECT ts_ms AS ts, text FROM chat WHERE kind = 'server' AND ts_ms >= ? AND ts_ms < ? ORDER BY ts_ms DESC LIMIT 1"

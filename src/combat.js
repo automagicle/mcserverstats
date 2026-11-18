@@ -63,7 +63,7 @@ const BY_WORDING = [
 // Deaths to the world border ("left the confines of this world") with no player behind them aren't counted
 // or listed on the Combat page: they come from resets and border changes, not play. Their rows and their
 // chat messages stay.
-const COUNTED = `(cause IS NOT 'border' OR killer IS NOT NULL)`;
+const COUNTED = `(uncounted = 0 AND (cause IS NOT 'border' OR killer IS NOT NULL))`; // admins can leave a death out (src/admin.js)
 // Hidden players (src/hidden.js): their deaths aren't shown, and a kill of theirs has no killer.
 // Other accounts (src/aliases.js) are shown as the player they belong to.
 const KILLER = (d) => `CASE WHEN ${d}killer IS NOT NULL AND ${notHidden(`${d}killer`)} THEN ${canonName(`${d}killer`)} END`;
@@ -153,9 +153,12 @@ export async function combatData(env, url, season) {
   const db = env.DB;
   await describePending(db);
   const after = Math.max(0, Math.floor(Number(url.searchParams.get('after'))) || 0);
+  // A live update (after=ID) reads only newer deaths by row number; the + keeps SQLite from reading the
+  // whole season through the time index instead. A first load reads the season through that index.
+  const T = after ? '+ts_ms' : 'ts_ms';
   const rows = await db.prepare(
     `SELECT id, ts_ms, ${canonName('victim')}, ${canonUuid('victim', 'victim_uuid')}, ${KILLER('')}, ${KILLER_UUID('')}, cause, mob FROM deaths
-     WHERE ts_ms >= ? AND ts_ms < ? AND id > ? AND ${COUNTED} AND ${notHidden('victim')} ORDER BY ts_ms, id LIMIT 50000`
+     WHERE ${T} >= ? AND ${T} < ? AND id > ? AND ${COUNTED} AND ${notHidden('victim')} ORDER BY ${T}, id LIMIT 50000`
   ).bind(season.lo * 1000, season.hi * 1000, after).raw();
   const uuids = {};
   let maxId = after;

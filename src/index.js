@@ -1,4 +1,5 @@
 import { poll } from './poll.js';
+import { fillGaps } from './gapfill.js';
 import { handleApi } from './api.js';
 import { CURRENT_SEASON } from './seasons.js';
 
@@ -38,6 +39,11 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(poll(env, Math.floor(controller.scheduledTime / 1000)));
+    const now = Math.floor(controller.scheduledTime / 1000);
+    ctx.waitUntil((async () => {
+      await poll(env, now);
+      // once an hour, fill in minutes an outage kept from being recorded (src/gapfill.js)
+      if (Math.floor(now / 60) % 60 === 7) await fillGaps(env, now);
+    })());
   },
 };

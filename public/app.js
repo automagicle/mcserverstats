@@ -1725,7 +1725,8 @@ function renderLive() {
       + (DUMMY ? ' · sample data' : '') + ' · ',
     SEASON === CURRENT_SEASON
       ? el('a', { href: '/s1/', text: 'Season 1 archive' })
-      : el('a', { href: '/', text: 'Current season' }));
+      : el('a', { href: '/', text: 'Current season' }),
+    ...(site.admin ? [' · ', el('a', { href: '#/admin', text: 'Admin' })] : []));
   renderSeasonNote();
 }
 
@@ -2285,13 +2286,13 @@ async function loadSnapshots(from) {
 
 // Shows one of the views ('home', 'player', 'chat', 'combat') and marks its tab.
 function showView(name) {
-  for (const v of ['home', 'player', 'chat', 'combat']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['home', 'player', 'chat', 'combat', 'admin']) $(`#view-${v}`).hidden = v !== name;
   if (name !== 'player') clearPlayerModel();
   document.body.classList.toggle('chat-mode', name === 'chat');
   $('#search-btn').hidden = name !== 'chat';
   if (name !== 'chat') closeSearch();
   if (state.status) renderSeasonNote();
-  const tab = name === 'chat' || name === 'combat' ? name : 'activity';
+  const tab = name === 'chat' || name === 'combat' ? name : name === 'admin' ? null : 'activity';
   for (const t of ['activity', 'chat', 'combat']) {
     if (t === tab) $(`#tab-${t}`).setAttribute('aria-current', 'page');
     else $(`#tab-${t}`).removeAttribute('aria-current');
@@ -3067,6 +3068,8 @@ function renderChat(fresh = new Set()) {
       frag.append(node);
     }
     if (fresh.has(m.id)) node.classList.add('msg-new');
+    node.dataset.chatId = m.id;
+    if (m.kind === 'death') node.dataset.death = '1';
     chat.lines.push({ el: node, ts: m.ts, id: m.id });
     prev = m;
   }
@@ -4536,7 +4539,7 @@ function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
     chat.pendingJump = { id: m.id, ts: m.ts };
     location.hash = '#/chat';
   });
-  return el('div', { class: `dl-row${m.killer ? ' pvp' : ''}${team ? ` by-${team}` : ''}` },
+  return el('div', { class: `dl-row${m.killer ? ' pvp' : ''}${team ? ` by-${team}` : ''}`, 'data-chat-id': m.id, 'data-death': '1' },
     el('span', { class: 'dl-icon', title: m.killer ? 'Killed by a player' : naturalCause(m) }, icon(m.killer ? SWORD_ICON : SYS_ICONS.death, 14)),
     text, time);
 }
@@ -4716,7 +4719,7 @@ async function renderPlayerCombat(name) {
   if (!combat.loaded) root.replaceChildren(el('div', { class: 'empty', text: 'Loading…' }));
   const [, log] = await Promise.all([
     loadCombat(),
-    api(`/api/combat/log?player=${encodeURIComponent(name)}&limit=8`).catch(() => null),
+    api(`/api/combat/log?player=${encodeURIComponent(name)}&limit=30`).catch(() => null),
   ]);
   if (mine !== state.playerCombatReq || state.playerData?.name !== name) return;
   const is = (n) => n && n.toLowerCase() === name.toLowerCase();
@@ -4759,7 +4762,7 @@ async function renderPlayerCombat(name) {
   };
   const thing = ([what, n]) => el('li', {}, el('span', { class: 'pcb-who', text: what }), el('span', { class: 'pcb-n', text: `×${n}` }));
   const list = (title, items, render, none) => el('div', { class: 'pcb-list' }, el('h3', { text: title }),
-    items.length ? el('ul', {}, ...items.slice(0, 4).map(render)) : el('div', { class: 'muted pcb-none', text: none }));
+    items.length ? el('ul', { class: 'pcb-scroll', tabindex: '0' }, ...items.map(render)) : el('div', { class: 'muted pcb-none', text: none }));
   const lists = el('div', { class: 'pcb-lists' },
     list('Killed most', tally(kills, (d) => d.victim), person, 'No kills yet'),
     list('Killed by most', tally(deaths.filter((d) => d.killer), (d) => d.killer), person, 'Never killed by a player'),
@@ -4767,12 +4770,28 @@ async function renderPlayerCombat(name) {
 
   const recent = el('div', { class: 'pcb-recent' }, el('h3', { text: 'Latest kills and deaths' }));
   if (log?.results.length) {
-    for (const m of log.results) {
-      const row = deathRow(m, { when: ago(m.ts / 1000) });
-      row.classList.add(is(m.killer) ? 'is-kill' : 'is-death');
-      row.querySelector('.dl-icon').title = is(m.killer) ? 'Their kill' : 'Their death';
-      recent.append(row);
-    }
+    // all of them, scrolling; older ones load as the end comes into view
+    const box = el('div', { class: 'pcb-scroll pcb-log', tabindex: '0' });
+    const add = (results) => {
+      for (const m of results) {
+        const row = deathRow(m, { when: ago(m.ts / 1000) });
+        row.classList.add(is(m.killer) ? 'is-kill' : 'is-death');
+        row.querySelector('.dl-icon').title = is(m.killer) ? 'Their kill' : 'Their death';
+        box.append(row);
+      }
+    };
+    add(log.results);
+    let last = log.results.at(-1), more = log.more, loading = false;
+    box.addEventListener('scroll', async () => {
+      if (!more || loading || box.scrollTop + box.clientHeight < box.scrollHeight - 80) return;
+      loading = true;
+      try {
+        const next = await api(`/api/combat/log?player=${encodeURIComponent(name)}&limit=50&before=${last.ts}:${last.id}`);
+        if (next.results.length) { add(next.results); last = next.results.at(-1); }
+        more = next.more;
+      } catch { /* try again on the next scroll */ } finally { loading = false; }
+    }, { passive: true });
+    recent.append(box);
   } else recent.append(el('div', { class: 'muted pcb-none', text: log ? 'None yet' : 'Couldn’t load the latest ones.' }));
   root.replaceChildren(stats, lists, recent);
 }
@@ -4865,6 +4884,253 @@ function rerenderNames() {
 
 syncNameToggle();
 
+/* ---------- admin: the admin page, and right-click on chat and deaths ---------- */
+
+// Whether the signed-in email is an admin (the ADMIN_EMAIL secret). /api/me needs no database.
+const site = { admin: false };
+if (!DUMMY) {
+  api('/api/me').then((r) => {
+    site.admin = !!r.admin;
+    if (site.admin && state.status) renderLive();
+  }).catch(() => {});
+}
+
+async function adminPost(body) {
+  const res = await fetch(`/api/admin?season=${SEASON}`, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (res.status === 503 && out.error === 'db_limit') throw new DbLimitError(dbLimitMessage(out.resets_at));
+  if (!res.ok) throw new Error(out.error || `failed (${res.status})`);
+  return out;
+}
+
+// A short note at the bottom of the window.
+function toast(text, { error = false } = {}) {
+  const t = el('div', { class: `toast${error ? ' toast-error' : ''}`, role: 'status', text });
+  document.body.append(t);
+  setTimeout(() => t.classList.add('toast-out'), 2600);
+  setTimeout(() => t.remove(), 3000);
+}
+
+const admin = { data: null, busy: false };
+
+async function showAdmin() {
+  showView('admin');
+  document.title = `Admin · ${SITE}`;
+  const root = $('#admin');
+  if (!site.admin) {
+    // the check may still be on its way
+    const r = DUMMY ? null : await api('/api/me').catch(() => null);
+    site.admin = !!r?.admin;
+  }
+  if (!site.admin) {
+    root.replaceChildren(el('div', { class: 'card empty', text: 'This page is only for admins.' }));
+    return;
+  }
+  if (!admin.data) root.replaceChildren(el('div', { class: 'card empty', text: 'Loading…' }));
+  [admin.data] = await Promise.all([api('/api/admin'), loadStatus()]);
+  renderAdmin();
+}
+
+// Runs one change, then reloads the lists (and the roster the rest of the page uses).
+async function adminDo(body, done) {
+  if (admin.busy) return;
+  admin.busy = true;
+  $('#admin').classList.add('adm-busy');
+  try {
+    await adminPost(body);
+    if (done) toast(done);
+    admin.data = await api('/api/admin');
+    if (body.action.startsWith('roster.') || body.action.startsWith('alias.')) await reloadRoster();
+  } catch (err) {
+    if (err instanceof DbLimitError) showError(err.message);
+    toast(err.message, { error: true });
+  } finally {
+    admin.busy = false;
+    $('#admin').classList.remove('adm-busy');
+    renderAdmin();
+  }
+}
+
+async function reloadRoster() {
+  const r = await api('/api/roster');
+  roster.clear();
+  rosterAliases.clear();
+  for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
+  for (const p of r.players || []) roster.set(p.ign.toLowerCase(), p);
+}
+
+function renderAdmin() {
+  const d = admin.data;
+  if (!d) return;
+  const teams = [...new Set(['red', 'blue', ...d.roster.map((r) => r.team)])];
+  const eggIds = Object.keys(EGGS).sort((a, b) => EGGS[a][0].localeCompare(EGGS[b][0]));
+  const players = el('datalist', { id: 'adm-players' }, ...d.players.map((n) => el('option', { value: n })));
+  const select = (options, value, label) => {
+    const s = el('select', { class: 'adm-input', 'aria-label': label });
+    for (const [v, text] of options) s.append(el('option', { value: v, text }));
+    s.value = value ?? '';
+    return s;
+  };
+  const teamSelect = (v) => select(teams.map((t) => [t, t[0].toUpperCase() + t.slice(1)]), v, 'Team');
+  const eggSelect = (v) => select([['', 'No egg'], ...eggIds.map((id) => [id, EGGS[id][0]])], v, 'Egg');
+  const button = (text, onClick, cls = '') => {
+    const b = el('button', { type: 'button', class: `btn ${cls}`, text });
+    b.addEventListener('click', onClick);
+    return b;
+  };
+  const nameInput = (placeholder) => el('input', { class: 'adm-input', type: 'text', placeholder, list: 'adm-players', maxlength: '32', autocomplete: 'off', spellcheck: 'false' });
+  const card = (title, sub, ...kids) => el('section', { class: 'card adm-card' },
+    el('div', { class: 'card-head' }, el('h2', { text: title }), sub ? el('span', { class: 'card-sub', text: sub }) : null), ...kids);
+  const empty = (text) => el('div', { class: 'muted adm-empty', text });
+  const when = (ms) => fmt(ms / 1000, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  // teams and eggs
+  const rows = d.roster.map((r) => {
+    const team = teamSelect(r.team), egg = eggSelect(r.egg);
+    const save = () => adminDo({ action: 'roster.set', ign: r.ign, team: team.value, egg: egg.value || null }, `Saved ${r.ign}`);
+    team.addEventListener('change', save);
+    egg.addEventListener('change', save);
+    return el('tr', { class: `adm-team-${r.team}` },
+      el('td', { class: 'adm-ign', text: r.ign }), el('td', {}, team), el('td', {}, egg),
+      el('td', { class: 'adm-act' }, button('Remove', () => {
+        if (confirm(`Take ${r.ign} off the Season ${d.season} roster?`)) adminDo({ action: 'roster.remove', ign: r.ign }, `Removed ${r.ign}`);
+      }, 'btn-quiet')));
+  });
+  const newIgn = nameInput('IGN'), newTeam = teamSelect('red'), newEgg = eggSelect('');
+  const addRow = el('tr', { class: 'adm-add' }, el('td', {}, newIgn), el('td', {}, newTeam), el('td', {}, newEgg),
+    el('td', { class: 'adm-act' }, button('Add', () => {
+      const ign = newIgn.value.trim();
+      if (ign) adminDo({ action: 'roster.set', ign, team: newTeam.value, egg: newEgg.value || null }, `Added ${ign}`);
+    }, 'btn-primary')));
+  const rosterCard = card('Teams and eggs', `Season ${d.season} · changes save right away`,
+    el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table' },
+      el('thead', {}, el('tr', {}, ...['Player', 'Team', 'Egg', ''].map((h) => el('th', { text: h })))),
+      el('tbody', {}, ...rows, addRow))),
+    el('p', { class: 'muted adm-note', text: `Running npm run roster:remote again replaces these with roster-s${d.season}.json, so copy lasting changes there too.` }));
+
+  // hidden players
+  const hidName = nameInput('Player'), hidNote = el('input', { class: 'adm-input', type: 'text', placeholder: 'Note (optional)', maxlength: '200' });
+  const hiddenCard = card('Hidden players', 'left out of Activity and Combat; chat still shows them',
+    d.hidden.length ? el('ul', { class: 'adm-list' }, ...d.hidden.map((h) => el('li', {},
+      el('span', { class: 'adm-main', text: h.name }), h.note ? el('span', { class: 'muted', text: h.note }) : null,
+      button('Show again', () => adminDo({ action: 'hidden.remove', name: h.name }, `${h.name} is shown again`), 'btn-quiet'))))
+      : empty('Nobody is hidden.'),
+    el('div', { class: 'adm-form' }, hidName, hidNote, button('Hide', () => {
+      const name = hidName.value.trim();
+      if (name) adminDo({ action: 'hidden.add', name, note: hidNote.value }, `${name} is hidden`);
+    }, 'btn-primary')));
+
+  // merged accounts
+  const alAlias = nameInput('Other account'), alName = nameInput('Main account');
+  const aliasCard = card('Merged accounts', 'another account counted as part of a player',
+    d.aliases.length ? el('ul', { class: 'adm-list' }, ...d.aliases.map((a) => el('li', {},
+      el('span', { class: 'adm-main', text: a.alias }), el('span', { class: 'muted', text: `→ ${a.name}` }),
+      button('Unmerge', () => adminDo({ action: 'alias.remove', alias: a.alias }, `${a.alias} is separate again`), 'btn-quiet'))))
+      : empty('No merged accounts.'),
+    el('div', { class: 'adm-form' }, alAlias, el('span', { class: 'muted', text: '→' }), alName, button('Merge', () => {
+      const alias = alAlias.value.trim(), name = alName.value.trim();
+      if (alias && name) adminDo({ action: 'alias.set', alias, name }, `${alias} now counts as ${name}`);
+    }, 'btn-primary')));
+
+  // deaths left out of Combat, and deleted messages
+  const uncountedCard = card('Left out of Combat', 'right-click a death to leave it out',
+    d.uncounted.length ? el('ul', { class: 'adm-list adm-scroll' }, ...d.uncounted.map((u) => el('li', {},
+      el('span', { class: 'adm-main', text: u.text }), el('span', { class: 'muted adm-when', text: when(u.ts) }),
+      button('Count again', () => adminDo({ action: 'death.count', id: u.id }, 'Counted again'), 'btn-quiet'))))
+      : empty('Every death counts.'));
+  const deletedCard = card('Deleted messages', 'right-click a message to delete it',
+    d.deleted.length ? el('ul', { class: 'adm-list adm-scroll' }, ...d.deleted.map((m) => el('li', {},
+      el('span', { class: 'adm-main', text: m.kind === 'chat' || m.kind === 'say' ? `<${m.name}> ${m.text}` : m.text }),
+      el('span', { class: 'muted adm-when', text: when(m.ts) }),
+      button('Restore', () => adminDo({ action: 'chat.restore', event_id: m.event_id }, 'Restored'), 'btn-quiet'))))
+      : empty('Nothing deleted.'));
+
+  const gapNote = el('span', { class: 'muted adm-gap-note', text: admin.gapNote || '' });
+  const gapsCard = card('Missed checks', 'filled in every hour at :07 from joins and leaves, once the chat log catches up',
+    el('div', { class: 'adm-form' }, button('Fill gaps now', async () => {
+      gapNote.textContent = 'Working…';
+      try {
+        const { gaps } = await adminPost({ action: 'gaps.fill' });
+        const done = gaps.filter((g) => g.filled), waiting = gaps.filter((g) => !g.filled);
+        admin.gapNote = !gaps.length ? 'No gaps in the last 2 days.'
+          : [done.length ? `Filled ${done.length} gap${done.length === 1 ? '' : 's'} (${done.reduce((n, g) => n + g.minutes, 0)} minutes).` : '',
+            ...waiting.map((g) => `${when(g.from * 1000)} to ${when(g.to * 1000)}: waiting (${g.why}).`)].filter(Boolean).join(' ');
+      } catch (err) {
+        admin.gapNote = err.message;
+      }
+      gapNote.textContent = admin.gapNote;
+    }), gapNote));
+
+  $('#admin').replaceChildren(players, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard);
+}
+
+// Right-click a chat line or a death, as an admin: delete it, or leave a death out of Combat.
+const adminMenu = el('div', { class: 'ctx-menu', role: 'menu', hidden: '' });
+document.body.append(adminMenu);
+function closeAdminMenu() {
+  adminMenu.hidden = true;
+  document.querySelector('.ctx-target')?.classList.remove('ctx-target');
+}
+document.addEventListener('contextmenu', (e) => {
+  if (!site.admin) return;
+  const row = e.target.closest('[data-chat-id]');
+  // Shift + right-click still opens the browser's own menu.
+  if (!row || e.shiftKey) {
+    closeAdminMenu();
+    return;
+  }
+  e.preventDefault();
+  closeAdminMenu();
+  const id = Number(row.dataset.chatId);
+  const item = (text, run, danger = false) => {
+    const b = el('button', { type: 'button', role: 'menuitem', class: danger ? 'danger' : '', text });
+    b.addEventListener('click', () => { closeAdminMenu(); run(); });
+    return b;
+  };
+  adminMenu.replaceChildren(
+    ...(row.dataset.death ? [item("Don't count in combat", () => adminRemove(id, 'death.uncount'))] : []),
+    item('Delete message', () => adminRemove(id, 'chat.delete'), true));
+  row.classList.add('ctx-target');
+  adminMenu.hidden = false;
+  const { width, height } = adminMenu.getBoundingClientRect();
+  adminMenu.style.left = `${Math.min(e.clientX, innerWidth - width - 8)}px`;
+  adminMenu.style.top = `${Math.min(e.clientY, innerHeight - height - 8)}px`;
+  adminMenu.querySelector('button').focus({ preventScroll: true });
+});
+document.addEventListener('pointerdown', (e) => { if (!adminMenu.hidden && !adminMenu.contains(e.target)) closeAdminMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !adminMenu.hidden) closeAdminMenu(); });
+// scrolling what's under it closes it (not other scrolling, such as the chat log settling elsewhere)
+window.addEventListener('scroll', (e) => {
+  const t = document.querySelector('.ctx-target');
+  if (!adminMenu.hidden && (!t || e.target === document || e.target.contains?.(t))) closeAdminMenu();
+}, { passive: true, capture: true });
+
+// Takes it out here at once (the server has already changed by the time this runs).
+async function adminRemove(id, action) {
+  try {
+    await adminPost({ action, id });
+  } catch (err) {
+    if (err instanceof DbLimitError) showError(err.message);
+    toast(err.message, { error: true });
+    return;
+  }
+  toast(action === 'chat.delete' ? 'Deleted · restore it from the admin page' : 'Left out of Combat · undo it from the admin page');
+  combat.rows = combat.rows.filter((d) => d.id !== id);
+  deathLog.items = deathLog.items.filter((m) => m.id !== id);
+  if (action === 'chat.delete') {
+    chat.messages = chat.messages.filter((m) => m.id !== id);
+    if (!$('#view-chat').hidden) renderChat();
+  }
+  for (const n of document.querySelectorAll(`.pcb-recent [data-chat-id="${id}"]`)) n.remove();
+  if (!$('#view-combat').hidden) { renderDeathLog(); renderCombat(); }
+  else if (state.playerData && !$('#view-player').hidden) renderPlayerCombat(state.playerData.name).catch(() => {});
+  admin.data = null;
+}
+
 /* ---------- routing & refresh ---------- */
 
 async function route() {
@@ -4875,6 +5141,7 @@ async function route() {
     if (m) await showPlayer(m[1]);
     else if (location.hash === '#/chat') await showChat();
     else if (location.hash === '#/combat') await showCombat();
+    else if (location.hash === '#/admin') await showAdmin();
     else await showHome();
     renderUnread();
   } catch (err) {
@@ -5142,6 +5409,7 @@ async function refresh() {
     if (m) await showPlayer(m[1], { refresh: true });
     else if (location.hash === '#/chat') await showChat({ refresh: true });
     else if (location.hash === '#/combat') await showCombat({ refresh: true });
+    else if (location.hash === '#/admin') { /* the admin page reloads only on a change */ }
     else await showHome();
     renderUnread();
     showError('');

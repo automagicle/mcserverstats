@@ -129,7 +129,8 @@ export async function ingestChat(request, env) {
     // Server messages name a player without a UUID sometimes; fill it in from the players we know.
     const stmt = env.DB.prepare(
       `INSERT OR IGNORE INTO chat (event_id, ts_ms, kind, uuid, name, text, display, rich, via)
-       VALUES (?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7, ?8, ?9)`
+       SELECT ?1, ?2, ?3, COALESCE(?4, (SELECT uuid FROM players WHERE name = ?5 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1)), ?5, ?6, ?7, ?8, ?9
+       WHERE NOT EXISTS (SELECT 1 FROM deleted_chat WHERE event_id = ?1)` // an admin deleted it; a resend stays out
     );
     // each death also goes in the deaths table, with who did it (after its message, in the same batch)
     await env.DB.batch([...rows.map((r) => stmt.bind(...r)), ...deaths.map(([id, m]) => deathInsert(env.DB, id, m))]);
