@@ -838,8 +838,9 @@ const redraws = new Map();
 function lineTarget(opts) {
   let vmax = opts.yMin || 0;
   for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
-  const ystep = niceStep(Math.max(1, Math.max(vmax, 4) / (opts.ticks || 4)));
-  const ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
+  let ystep = niceStep(Math.max(1, Math.max(vmax, 4) / (opts.ticks || 4)));
+  let ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
+  if (opts.yScale) ({ ymax, ystep } = opts.yScale(vmax));
   return { from: opts.from, to: opts.to, ymax, ystep, vals: opts.series.map((s) => s.pts.map((p) => p.v)) };
 }
 
@@ -895,7 +896,7 @@ function drawLineChart(root, opts, f) {
 
   const W = Math.max(280, root.clientWidth);
   const H = root.clientHeight || 240;
-  const m = { l: 30, r: 10, t: 10, b: 24 };
+  const m = { l: opts.fmtTick ? 40 : 30, r: 10, t: 10, b: 24 };
   root.plotBox = { l: m.l, r: m.r }; // for pinch zoom
   const pw = W - m.l - m.r, ph = H - m.t - m.b;
 
@@ -916,7 +917,7 @@ function drawLineChart(root, opts, f) {
     tick.dataset.v = v;
     if (v > 0) tick.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
     const t = sv('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis-text' });
-    t.textContent = Number.isInteger(v) ? v : v.toFixed(1);
+    t.textContent = opts.fmtTick ? opts.fmtTick(v) : Number.isInteger(v) ? v : v.toFixed(1);
     tick.append(t);
     yaxis.append(tick);
   }
@@ -993,14 +994,14 @@ function drawLineChart(root, opts, f) {
       prev = p;
     });
     closeArea();
-    if (s.area) plot.append(sv('path', { d: area, class: `area-${s.cls}` }));
-    if (s.band != null) plot.append(sv('path', { d: bandPath(s.pts, vals, f.vals[s.band]), class: `area-${s.cls}` }));
+    if (s.area) plot.append(sv('path', { d: area, class: `area-${s.areaCls || s.cls}` }));
+    if (s.band != null) plot.append(sv('path', { d: bandPath(s.pts, vals, f.vals[s.band]), class: `area-${s.areaCls || s.cls}` }));
     plot.append(sv('path', { d: line, class: `line-${s.cls}` }));
   });
 
   // crosshair + tooltip
   const cross = sv('line', { y1: m.t, y2: m.t + ph, class: 'crosshair', visibility: 'hidden' });
-  const markers = series.map((s) => sv('circle', { r: 4, style: `fill:${s.color}`, class: 'marker', visibility: 'hidden' }));
+  const markers = series.map((s) => sv('circle', { r: s.noMarker ? 0 : 4, style: `fill:${s.color}`, class: 'marker', visibility: 'hidden' }));
   body.append(cross, ...markers);
   const hit = sv('rect', { x: m.l, y: 0, width: pw, height: H, fill: 'transparent' });
   body.append(hit);
@@ -2062,7 +2063,8 @@ function rollingAverage(pts, window) {
 }
 
 // Players online, or the average line, as everyone together or split into Red and Blue stacked.
-let tlTeams = recall('tlTeams') === 'teams' ? 'teams' : 'all';
+const TL_MODES = ['all', 'teams', 'share'];
+let tlTeams = TL_MODES.includes(recall('tlTeams')) ? recall('tlTeams') : 'all';
 function syncTlTeamToggle() {
   const t = $('#tl-team');
   t.hidden = !roster.size;
@@ -2078,7 +2080,7 @@ $('#tl-team').addEventListener('click', (e) => {
 });
 rosterLoad.then(() => {
   syncTlTeamToggle();
-  if (roster.size && tlTeams === 'teams' && !$('#view-home').hidden) loadTimeline().catch(() => {});
+  if (roster.size && tlTeams !== 'all' && !$('#view-home').hidden) loadTimeline().catch(() => {});
 });
 
 // How many of each team were on at each point (minute data), or on average through the hour starting
@@ -2121,6 +2123,22 @@ function teamSeries(pts, counts, word) {
   ];
 }
 
+// Red's share of the two teams at each point, as a percentage (no point where neither is on): one line,
+// shaded red below and blue above, up to 100%.
+function shareSeries(pts, counts) {
+  const keep = [];
+  pts.forEach((p, i) => {
+    const whole = counts.red[i] + counts.blue[i];
+    if (whole > 0.01) keep.push({ t: p.t, v: (counts.red[i] / whole) * 100 });
+  });
+  // Blue first, so the line between the two is drawn over both shadings
+  return [
+    { name: 'Blue', cls: 'none', color: 'var(--team-blue)', band: 1, areaCls: 'blue', noMarker: true,
+      pts: keep.map((p) => ({ t: p.t, v: 100 })), raw: keep.map((p) => 100 - p.v) },
+    { name: 'Red', cls: 'share', color: 'var(--team-red)', area: true, areaCls: 'red', pts: keep },
+  ];
+}
+
 async function loadTimeline(slide = 0) {
   const w = tlCtl.get();
   const r = resolveWindow(w);
@@ -2150,6 +2168,7 @@ async function loadTimeline(slide = 0) {
   };
 
   const teams = tlTeams === 'teams' && roster.size > 0;
+  const share = tlTeams === 'share' && roster.size > 0;
   const cm = 'var(--muted)';
   const band = (color, text) => el('span', {}, el('span', { class: 'key key-band', style: `background:${color}` }), text);
   if (minuteData) {
@@ -2159,14 +2178,15 @@ async function loadTimeline(slide = 0) {
     const series = [teams
       ? { name: 'online', cls: 'muted', color: cm, pts }
       : { name: 'online', cls: '1', color: c1, area: true, pts }];
-    if (teams) {
+    if (teams || share) {
       const counts = teamCounts(pts, sessions, true);
       if (trend) {
         const avg = (vs) => rollingAverage(pts.map((p, i) => ({ t: p.t, v: vs[i] })), 3600).map((p) => p.v);
         counts.red = avg(counts.red);
         counts.blue = avg(counts.blue);
       }
-      series.push(...teamSeries(pts, counts, trend ? 'avg (1 hour)' : 'online'));
+      if (share) series.splice(0, 1, ...shareSeries(pts, counts));
+      else series.push(...teamSeries(pts, counts, trend ? 'avg (1 hour)' : 'online'));
     } else if (trend) series.push({ name: 'avg (1 hour)', cls: '2', color: c2, pts: rollingAverage(pts, 3600) });
     opts = {
       from, to, step: POLL, series, whoAt,
@@ -2175,6 +2195,7 @@ async function loadTimeline(slide = 0) {
     };
     const what = trend ? 'average online (1 hour)' : 'online';
     legend.replaceChildren(...(!pts.length ? []
+      : share ? [band('var(--team-red)', `Red share${trend ? ' (1-hour average)' : ''}`), band('var(--team-blue)', 'Blue share')]
       : teams ? [key(cm, 'Players online'), band('var(--team-red)', `Red ${what}`), band('var(--team-blue)', `Blue ${what}`)]
         : trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
@@ -2184,20 +2205,33 @@ async function loadTimeline(slide = 0) {
     const peak = { name: 'peak', cls: '3', color: c3, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) };
     opts = {
       from, to, step: 3600,
-      series: teams
+      series: share ? shareSeries(avgPts, teamCounts(avgPts, sessions, false))
+        : teams
         ? [{ name: 'average', cls: 'muted', color: cm, pts: avgPts }, ...teamSeries(avgPts, teamCounts(avgPts, sessions, false), 'average'), peak]
         : [{ name: 'average', cls: '1', color: c1, area: true, pts: avgPts }, peak],
       whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
       fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(t).hour)}`,
     };
-    legend.replaceChildren(...(teams
+    legend.replaceChildren(...(share
+      ? [band('var(--team-red)', 'Red share'), band('var(--team-blue)', 'Blue share')]
+      : teams
       ? [key(cm, 'Average online'), band('var(--team-red)', 'Red average'), band('var(--team-blue)', 'Blue average'), key(c3, 'Peak online')]
       : [key(c1, 'Average online'), key(c3, 'Peak online')]));
   }
-  opts.key = `${windowKey(w)}|${teams ? 'teams' : 'all'}`;
+  opts.key = `${windowKey(w)}|${share ? 'share' : teams ? 'teams' : 'all'}`;
   opts.dataStart = chartStart();
-  opts.yMin = state.status?.peak_ever; // same scale on every range: up to the most ever online
+  if (share) {
+    opts.yScale = () => ({ ymax: 100, ystep: 25 });
+    opts.fmtTick = (v) => `${v}%`;
+    opts.fmtValue = (v) => `${Math.round(v)}%`;
+  } else {
+    // up to the most online in the range, in steps of 5 (5, 10, 15, …)
+    opts.yScale = (vmax) => {
+      const ymax = Math.max(5, Math.ceil(vmax / 5) * 5);
+      return { ymax, ystep: ymax <= 20 ? 5 : niceStep(ymax / 4) };
+    };
+  }
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
 }
 
@@ -4068,8 +4102,8 @@ function playedBetween(sessions, from, to) {
 // Little bars, one per hour: bars = [{ v (minutes), now?, tip: tooltip rows }], labels = [[fraction across, text]],
 // scaled to fullAt minutes (or the biggest bar).
 // The bars stretch to any width; the hour labels sit under them as text, so they never stretch.
-function hourBars(bars, labels, aria, fullAt = null) {
-  const W = 240, H = 40, slot = W / bars.length;
+function hourBars(bars, labels, aria, fullAt = null, H = 40) {
+  const W = 240, slot = W / bars.length;
   const max = fullAt ?? Math.max(10, ...bars.map((b) => b.v));
   const svg = sv('svg', { width: '100%', height: H, viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'pc-graph', role: 'img', 'aria-label': aria });
   bars.forEach((b, i) => {
@@ -4141,7 +4175,7 @@ function usualActivity(sessions) {
       { label: `${hourName(h)}–${hourName((h + 1) % 24)}, ${archived() ? 'whole season' : `since the season began`}` }],
   }));
   return {
-    graph: hourBars(bars, [0, 6, 12, 18].map((h) => [h / 24, hourName(h, true)]), 'Usual activity by hour'),
+    graph: hourBars(bars, [0, 6, 12, 18].map((h) => [h / 24, hourName(h, true)]), 'Usual activity by hour', null, 58),
     sub: `avg minutes, over ${days} ${days === 1 ? 'day' : 'days'}`,
   };
 }
@@ -5583,7 +5617,7 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
     const box = root.getBoundingClientRect();
     const { l, r: right } = root.plotBox || { l: 0, r: 0 };
     const f = (clientX - box.left - l) / Math.max(1, box.width - l - right);
-    g = { from: r.from, to: Math.min(r.to, nowSec()), f: Math.min(1, Math.max(0, f)), scale: 1 };
+    g = { from: r.from, to: Math.min(r.to, nowSec()), f: Math.min(1, Math.max(0, f)), scale: 1, shift: 0 };
     drawn = null;
     hideTip();
   };
@@ -5591,9 +5625,11 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
   const wanted = () => {
     const span = Math.min(max, Math.max(min, (g.to - g.from) * g.scale));
     const at = g.from + g.f * (g.to - g.from);
-    let from = at - g.f * span, to = from + span;
+    let from = at - g.f * span + g.shift, to = from + span;
     const now = nowSec();
     if (to > now) { from -= to - now; to = now; }
+    const first = state.dataStart;
+    if (first && from < first && to < now) { to += first - from; from = first; if (to > now) to = now; }
     return { from, to };
   };
   // Every frame the chart already on screen is stretched to the wanted span, which costs almost
@@ -5649,9 +5685,22 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
       if (again) { again = false; apply(); }
     });
   };
+  // Scrolling sideways moves the range along, the way zooming stretches it.
+  const panBy = (px) => {
+    const { l, r: right } = root.plotBox || { l: 0, r: 0 };
+    const pw = Math.max(1, root.clientWidth - l - right);
+    const span = Math.min(max, Math.max(min, (g.to - g.from) * g.scale));
+    const base = g.from + g.f * (g.to - g.from) - g.f * span; // where the range starts unmoved
+    g.shift += (px / pw) * span;
+    g.shift = wanted().from - base; // pushing past now or the start doesn't build up
+    kick();
+  };
   const zoomTo = (scale) => {
     const span = g.to - g.from;
     g.scale = Math.min(max / span, Math.max(min / span, scale));
+    kick();
+  };
+  const kick = () => {
     if (!drawn) {
       drawn = shownSpan();
       root.style.overflow = 'hidden';
@@ -5674,10 +5723,12 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
   };
 
   root.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey) return;
+    const sideways = !e.ctrlKey && (Math.abs(e.deltaX) > Math.abs(e.deltaY) || (e.shiftKey && e.deltaY));
+    if (!e.ctrlKey && !sideways) return;
     e.preventDefault();
     begin(e.clientX);
-    zoomTo(g.scale * Math.exp(Math.max(-50, Math.min(50, e.deltaY)) * 0.01));
+    if (sideways) panBy(Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY);
+    else zoomTo(g.scale * Math.exp(Math.max(-50, Math.min(50, e.deltaY)) * 0.01));
     clearTimeout(idle);
     idle = setTimeout(end, 300);
   }, { passive: false });

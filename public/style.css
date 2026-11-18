@@ -299,10 +299,12 @@ main {
 .line-2 { fill: none; stroke: var(--series-2); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .line-3 { fill: none; stroke: var(--series-3); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .line-muted { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; opacity: 0.7; }
-.line-red { fill: none; stroke: var(--team-red); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.line-blue { fill: none; stroke: var(--team-blue); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.area-red { fill: var(--team-red); opacity: 0.16; }
-.area-blue { fill: var(--team-blue); opacity: 0.16; }
+.line-red { fill: none; stroke: var(--team-red); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
+.line-blue { fill: none; stroke: var(--team-blue); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
+.line-share { fill: none; stroke: var(--ink); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; opacity: 0.85; }
+.line-none { fill: none; stroke: none; }
+.area-red { fill: var(--team-red); opacity: 0.3; }
+.area-blue { fill: var(--team-blue); opacity: 0.3; }
 .crosshair { stroke: var(--axis); stroke-width: 1; }
 .marker { stroke: var(--surface); stroke-width: 2; }
 .empty-chart { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 14px; }
