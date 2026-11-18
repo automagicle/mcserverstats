@@ -93,7 +93,7 @@ retried batch is never stored twice.
 5. **Deploy the dashboard.** Merging to `main` deploys it and creates the `chat` table.
 
 6. **Install the mod on mcsh.io.**
-   - Upload `mcstats-chat-1.7.0.jar` into the server's `mods` folder.
+   - Upload `mcstats-chat-1.7.1.jar` into the server's `mods` folder.
    - Start the server once. That creates `config/mcstats-chat.properties`.
    - Fill in that file (the template has comments):
 
@@ -122,6 +122,7 @@ Search the server console (latest.log) for `mcstats-chat`:
 | `Not sending chat: url is blank` (or `token`) | The file was found but that value is empty. Check spelling of the keys (`url=`, `token=`). |
 | `Sending chat to …` then `Chat log connected` | Working. |
 | `Web chat connected` | Messages typed on the dashboard will show in game. |
+| `The dashboard lost the web chat connection; reconnecting` | 1.7.1 or newer: the dashboard said for 40 seconds that it no longer has the connection (usually just after a deploy); it reconnects by itself. |
 | `Web chat isn't connected: …` | Same reasons as below; the dashboard shows the message box as offline meanwhile. |
 | `Couldn't send chat: …` | The rest of the line says which part is wrong. Note that Cloudflare Access answers 401 for a service token it doesn't recognise and 403 for one it knows but no Service Auth policy allows. |
 
@@ -145,7 +146,7 @@ Needs JDK 25.
 
 ```bash
 cd mod
-./gradlew build      # → build/libs/mcstats-chat-1.7.0.jar
+./gradlew build      # → build/libs/mcstats-chat-1.7.1.jar
 ```
 
 For another Minecraft version, update `minecraft_version` and `fabric_api_version` in `gradle.properties`

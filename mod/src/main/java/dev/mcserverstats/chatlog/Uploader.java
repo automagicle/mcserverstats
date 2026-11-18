@@ -60,6 +60,11 @@ final class Uploader {
 	private long configModified = -1;
 	private ScheduledExecutorService exec;
 	private volatile long lastFlush;
+	// What the dashboard last said about the web chat connection (in its answer to the online list): when it
+	// first said it doesn't have it, in the current run of such answers (0 once it says it does), and when
+	// it last said so. WebChatLink reconnects when this goes on too long.
+	private volatile long linkDownSince;
+	private volatile long linkDownLast;
 	private long nextAttempt;
 	private long backoff;
 	private String lastWarning;
@@ -288,6 +293,7 @@ final class Uploader {
 		Reply r = post(config.url().replaceFirst("/chat/?$", "/online"), report, timeout);
 		if (r == null) return;
 		boolean done = r.status() >= 200 && r.status() < 300;
+		if (done) noteLink(r.body());
 		if (done || r.status() == 400 || r.status() == 404 || r.status() == 413) {
 			if (!done && r.status() != 404) ChatLogMod.LOG.error("Dashboard rejected the online list (HTTP {}): {}", r.status(), trim(r.body()));
 			synchronized (this) {
@@ -296,6 +302,29 @@ final class Uploader {
 			return;
 		}
 		fail(why(r.status(), r.fromAccess()));
+	}
+
+	// The online list's answer has "link": true or false from a dashboard that knows (older ones leave it out).
+	private void noteLink(String body) {
+		try {
+			JsonElement link = JsonParser.parseString(body).getAsJsonObject().get("link");
+			if (link == null || !link.isJsonPrimitive()) return;
+			long now = System.currentTimeMillis();
+			if (link.getAsBoolean()) {
+				linkDownSince = 0;
+			} else {
+				if (linkDownSince == 0) linkDownSince = now;
+				linkDownLast = now;
+			}
+		} catch (RuntimeException ignored) { } // not JSON: nothing to go on
+	}
+
+	// How long, up to the dashboard's latest answer, it has said it doesn't have the web chat connection
+	// without a break since `since` (0 if it hasn't, or said it has).
+	long linkDownFor(long since) {
+		long start = linkDownSince;
+		if (start == 0) return 0;
+		return Math.max(0, linkDownLast - Math.max(start, since));
 	}
 
 	// Sends every waiting gear report in one request, to /api/ingest/gear next to the chat url.

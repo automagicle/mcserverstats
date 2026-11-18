@@ -57,7 +57,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		String version = FabricLoader.getInstance().getModContainer("mcstats_chat")
 				.map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("dev");
 		uploader = new Uploader(dir.resolve("mcstats-chat.properties"), dir.resolve("mcstats-chat-pending.json"), version);
-		link = new WebChatLink(uploader::config, "mcstats-chat/" + version, this::webMessage);
+		link = new WebChatLink(uploader::config, uploader::linkDownFor, "mcstats-chat/" + version, this::webMessage);
 
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			this.server = server;

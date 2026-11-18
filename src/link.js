@@ -30,6 +30,19 @@ const BURST_MS = 30_000;
 
 const link = (env) => env.LINK.get(env.LINK.idFromName('server'));
 
+// Whether this side holds the mod's web chat connection, or null if that couldn't be found out. The
+// mod is told with each online list (src/online.js): after a deploy its connection can look open to it
+// while this side no longer has it, and that's how it finds out to reconnect.
+export async function linkUp(env) {
+  if (!env.LINK) return null;
+  try {
+    return !!(await (await link(env).fetch('https://link/status')).json()).linked;
+  } catch (err) {
+    console.error('link status:', err.message);
+    return null;
+  }
+}
+
 // One line of plain text: no control characters or § formatting codes.
 export const cleanWebText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/§.?/gs, '').trim().slice(0, MAX_WEB_CHAT);
 
@@ -61,14 +74,7 @@ async function playerFor(env, email) {
 // GET /api/chat/me: who you'd be sending as, and whether the server is connected.
 export async function webChatMe(env, who) {
   const player = await playerFor(env, who.email);
-  let linked = false;
-  if (player) {
-    try {
-      linked = (await (await link(env).fetch('https://link/status')).json()).linked;
-    } catch (err) {
-      console.error('link status:', err.message);
-    }
-  }
+  const linked = player ? (await linkUp(env)) === true : false;
   return json({ email: who.email, ign: player?.ign ?? null, team: player?.team ?? null, admin: !!player?.admin, linked, max: MAX_WEB_CHAT });
 }
 

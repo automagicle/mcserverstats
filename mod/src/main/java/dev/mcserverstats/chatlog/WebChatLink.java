@@ -12,6 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongUnaryOperator;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -35,12 +36,16 @@ final class WebChatLink {
 
 	private static final long PING_MS = 30_000;
 	private static final long DEAD_MS = 75_000;
+	// the dashboard saying this long (in its answers to the online list) that it doesn't have the connection
+	private static final long DASHBOARD_LOST_MS = 40_000;
+	private static final long CONNECT_STUCK_MS = 60_000; // a connect attempt that hasn't finished by now
 	private static final long MAX_BACKOFF_MS = 2 * 60_000;
 	private static final long MISSING_BACKOFF_MS = 10 * 60_000; // an older dashboard without the endpoint
 	private static final Pattern NAME = Pattern.compile("[A-Za-z0-9_]{1,32}");
 	static final int MAX_TEXT = 256;
 
 	private final Supplier<Config> config;
+	private final LongUnaryOperator dashboardLostFor;
 	private final String userAgent;
 	private final Handler handler;
 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -53,9 +58,14 @@ final class WebChatLink {
 	private volatile long backoff;
 	private volatile String lastWarning;
 	private volatile Config connectedWith;
+	private volatile long connectedAt;
+	private volatile long connectStarted;
 
-	WebChatLink(Supplier<Config> config, String userAgent, Handler handler) {
+	// dashboardLostFor(since): how long the dashboard has been saying, since then, that it doesn't have
+	// this connection (Uploader.linkDownFor).
+	WebChatLink(Supplier<Config> config, LongUnaryOperator dashboardLostFor, String userAgent, Handler handler) {
 		this.config = config;
+		this.dashboardLostFor = dashboardLostFor;
 		this.userAgent = userAgent;
 		this.handler = handler;
 	}
@@ -92,10 +102,18 @@ final class WebChatLink {
 				if (now - lastHeard > DEAD_MS) {
 					ChatLogMod.LOG.warn("Web chat connection went quiet; reconnecting");
 					close("no answer");
+				} else if (dashboardLostFor.applyAsLong(connectedAt) >= DASHBOARD_LOST_MS) {
+					// open as far as this side can tell, but the dashboard no longer has it (say, after a deploy)
+					ChatLogMod.LOG.warn("The dashboard lost the web chat connection; reconnecting");
+					close("the dashboard lost it");
 				} else if (now - lastHeard > PING_MS) {
 					send(ws, "ping");
 				}
 				return;
+			}
+			if (connecting && now - connectStarted > CONNECT_STUCK_MS) {
+				connecting = false; // its answer, if it ever comes, is dropped (see connect)
+				fail("connecting took too long", 0);
 			}
 			if (!wanted || connecting || now < nextAttempt) return;
 			connect(c);
@@ -113,6 +131,8 @@ final class WebChatLink {
 			return;
 		}
 		connecting = true;
+		long attempt = System.currentTimeMillis();
+		connectStarted = attempt;
 		WebSocket.Builder b = http.newWebSocketBuilder()
 				.connectTimeout(Duration.ofSeconds(15))
 				.header("Authorization", "Bearer " + c.token())
@@ -122,6 +142,10 @@ final class WebChatLink {
 			b.header("CF-Access-Client-Secret", c.accessClientSecret());
 		}
 		b.buildAsync(uri, new Listener()).whenComplete((ws, err) -> {
+			if (connectStarted != attempt || !connecting) { // given up on as stuck; a newer attempt may be under way
+				if (ws != null) ws.abort();
+				return;
+			}
 			connecting = false;
 			if (err != null) {
 				Throwable cause = err.getCause() != null ? err.getCause() : err;
@@ -142,6 +166,7 @@ final class WebChatLink {
 			socket = ws;
 			connectedWith = c;
 			lastHeard = System.currentTimeMillis();
+			connectedAt = lastHeard;
 			backoff = 0;
 			ChatLogMod.LOG.info("Web chat connected; messages sent from the dashboard will show in game");
 			lastWarning = null;
