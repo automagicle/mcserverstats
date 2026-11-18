@@ -1695,3 +1695,8 @@ a.pcb-who:hover { text-decoration: underline; }
 .toast-error { background: var(--critical); color: #fff; }
 .toast-out { opacity: 0; }
 .adm-gap-note { font-size: 13px; }
+
+/* admin: the web chat connection */
+.adm-link-now { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 14px; }
+.adm-link-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--critical); }
+.adm-link-dot.up { background: var(--good); }

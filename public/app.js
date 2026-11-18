@@ -3617,7 +3617,7 @@ async function sendChat() {
     }
     if (body.unsure) {
       // the server didn't answer in time, which isn't a no: it stays "sending…" while the log is watched for it
-      watchPending(p, 20_000, () => {
+      watchPending(p, 8_000, () => {
         if (!chatInput.value) chatInput.value = text;
         updateComposeCount();
         composeError("The server didn't confirm that message and it hasn't shown up in the log, so it probably didn't arrive.");
@@ -5482,7 +5482,35 @@ function renderAdmin() {
       gapNote.textContent = admin.gapNote;
     }), gapNote));
 
-  $('#admin').replaceChildren(players, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard);
+  // the server mod's web chat connection: how it is now, and what it's done lately
+  const l = d.link;
+  const secs = (n) => (n == null ? '–' : n < 90 ? `${n}s` : n < 5400 ? `${Math.round(n / 60)} min` : `${(n / 3600).toFixed(1)} h`);
+  const linkNote = el('span', { class: 'muted adm-gap-note', text: admin.linkNote || '' });
+  const linkCard = card('Web chat connection', 'the server mod’s link for messages sent from here',
+    !l ? empty('Couldn’t be checked.') : el('div', {},
+      el('div', { class: 'adm-link-now' },
+        el('span', { class: `adm-link-dot${l.linked ? ' up' : ''}` }),
+        el('strong', { text: l.linked ? 'Connected' : 'Not connected' }),
+        el('span', { class: 'muted', text: l.linked
+          ? `mod ${l.version || '(version unknown)'}${l.connected_ago != null ? ` · connected ${secs(l.connected_ago)} ago` : ''} · last heard ${secs(l.heard_ago)} ago`
+          : 'messages can’t reach the game until the mod reconnects' })),
+      el('div', { class: 'adm-form' }, button('Test connection', async () => {
+        linkNote.textContent = 'Testing…';
+        try {
+          const { probe, link } = await adminPost({ action: 'link.test' });
+          admin.linkNote = probe.ok ? `The mod answered in ${probe.ms} ms. Nothing was shown in game.`
+            : `No answer from the mod (${probe.why}).`;
+          d.link = link;
+        } catch (err) {
+          admin.linkNote = err.message;
+        }
+        renderAdmin();
+      }), linkNote),
+      l.log?.length ? el('ul', { class: 'adm-list adm-scroll' }, ...l.log.slice().reverse().map((e) => el('li', {},
+        el('span', { class: 'adm-main', text: e.what }), el('span', { class: 'muted adm-when', text: `${secs(e.ago)} ago` }))))
+        : empty('Nothing has happened to it lately.')));
+
+  $('#admin').replaceChildren(players, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard, linkCard);
 }
 
 // Right-click a chat line or a death, as an admin: delete it, or leave a death out of Combat.

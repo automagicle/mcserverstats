@@ -7,6 +7,7 @@ import { json } from './util.js';
 import { fillGaps } from './gapfill.js';
 import { clearCache } from './cache.js';
 import { tellPresence } from './presence.js';
+import { linkProbe, linkStatus } from './link.js';
 
 const IGN_RE = /^[A-Za-z0-9_]{1,32}$/;
 const TEAM_RE = /^[a-z][a-z0-9-]{0,19}$/;
@@ -42,6 +43,7 @@ export async function adminState(env, season) {
     players: players.results.map((r) => r.name),
     uncounted: uncounted.results,
     deleted: deleted.results,
+    link: await linkStatus(env), // the server mod's web chat connection (src/link.js)
   });
 }
 
@@ -141,6 +143,10 @@ const ACTIONS = {
   // fill in minutes an outage kept from being recorded now, instead of at the next :07 (src/gapfill.js)
   async 'gaps.fill'(db, b, season, env) {
     return json({ ok: true, gaps: await fillGaps(env, Math.floor(Date.now() / 1000)) });
+  },
+  // a round trip to the server mod that shows nothing in game (src/link.js)
+  async 'link.test'(db, b, season, env) {
+    return json({ ok: true, probe: await linkProbe(env), link: await linkStatus(env) });
   },
   async 'death.count'(db, b) {
     const id = chatId(b.id);

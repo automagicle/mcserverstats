@@ -5,7 +5,7 @@
 import { sameSecret } from './chat.js';
 import { json, UUID_RE } from './util.js';
 import { tellPresence } from './presence.js';
-import { linkUp } from './link.js';
+import { linkStatus } from './link.js';
 
 const MAX_PLAYERS = 500;
 const NAME_RE = /^[A-Za-z0-9_.]{1,20}$/; // Java names, and Bedrock ones through Floodgate's "." prefix
@@ -48,7 +48,10 @@ export async function ingestOnline(request, env) {
   ).bind(Math.floor(Date.now() / 1000), JSON.stringify(stopping ? [] : players), stopping ? 1 : 0).run();
   await tellPresence(env, '/report', { players, stopping }); // the live badges (src/presence.js)
   // link: whether the dashboard holds the mod's web chat connection (mod 1.7.1 reconnects when it doesn't)
-  const link = stopping ? null : await linkUp(env);
+  const status = stopping ? null : await linkStatus(env);
+  // what the connection has been through lately, where the logs show it (this object's own don't always)
+  if (status && (!status.linked || status.log?.some((e) => e.ago <= 25))) console.log('web chat link:', JSON.stringify(status));
+  const link = status ? !!status.linked : null;
   return json({ ok: true, players: stopping ? 0 : players.length, ...(link == null ? {} : { link }) });
 }
 

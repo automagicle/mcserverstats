@@ -35,7 +35,29 @@ const GAP_MS = 1_500;
 const BURST = 8;
 const BURST_MS = 30_000;
 
+// The mod pings every 30 seconds; a connection not heard from for this long is dead, whatever it looks like.
+const QUIET_MS = 100_000;
 const link = (env) => env.LINK.get(env.LINK.idFromName('server'));
+
+// What the web chat connection is doing, for the logs and the admin page: { linked, sockets, version,
+// connected_ago, heard_ago, started_ago (this object), log: recent connects and closes }.
+export async function linkProbe(env) {
+  try {
+    return await (await link(env).fetch('https://link/probe')).json();
+  } catch (err) {
+    return { ok: false, why: err.message };
+  }
+}
+
+export async function linkStatus(env) {
+  if (!env.LINK) return null;
+  try {
+    return await (await link(env).fetch('https://link/status')).json();
+  } catch (err) {
+    console.error('link status:', err.message);
+    return null;
+  }
+}
 
 // Whether this side holds the mod's web chat connection, or null if that couldn't be found out. The
 // mod is told with each online list (src/online.js): after a deploy its connection can look open to it
@@ -125,11 +147,13 @@ export async function sendWebChat(request, env, url, who) {
     return json({ ok: true, whisper, where: r.where, unsure: !!r.unsure });
   }
 
+  const began = Date.now();
   const res = await link(env).fetch('https://link/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(player.admin ? { admin: true, key: who.email, text } : { name: player.ign, key: player.ign, text }),
   });
+  console.log(`web chat send: HTTP ${res.status} after ${Date.now() - began}ms`);
   return new Response(res.body, { status: res.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
 
@@ -137,8 +161,11 @@ export class ServerLink extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.pending = new Map(); // message id -> resolve, while a send waits for the mod's answer
+    this.late = new Map(); // message id -> when it was sent, for the ones that got no answer in time
     this.sent = new Map(); // player -> times of their recent messages
     this.web = null; // roster players with the dashboard open (src/presence.js), for whispers typed in game
+    this.started = Date.now();
+    this.log = null; // recent connects and closes, kept in storage: [{ at, what }]
     ctx.setWebSocketAutoResponse(); // no automatic reply: pings are answered in webSocketMessage
   }
 
@@ -171,14 +198,53 @@ export class ServerLink extends DurableObject {
       this.pending.delete(id);
       return null; // not connected after all
     }
+    const sent = Date.now();
     const r = await answer;
     this.pending.delete(id);
+    if (r.unsure) {
+      const a = ws.deserializeAttachment() || {};
+      this.late.set(id, sent);
+      if (this.late.size > 50) this.late.delete(this.late.keys().next().value);
+      this.note(`no answer to a ${message.type} within ${ACK_MS / 1000}s (connection ${ws.readyState === WebSocket.OPEN ? 'open' : 'not open'}, `
+        + `last heard ${Math.round((Date.now() - (a.heard || 0)) / 1000)}s ago, ${this.ctx.getWebSockets().length} socket(s))`);
+    }
     return r;
   }
 
+  // The mod's connection, if there's a live one. One that hasn't been heard from for QUIET_MS (no
+  // ping, no answer) is dead even if it still looks open from here, so it's closed and doesn't count:
+  // a message sent down it would just wait for an answer that never comes.
   socket() {
-    const all = this.ctx.getWebSockets();
-    return all.length ? all[all.length - 1] : null;
+    const now = Date.now();
+    let live = null;
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws.readyState !== WebSocket.OPEN) continue; // closing: a newer connection replaced it
+      const a = ws.deserializeAttachment() || {};
+      if (now - (a.heard || 0) > QUIET_MS) {
+        this.note(`dropped a connection not heard from for ${Math.round((now - (a.heard || 0)) / 1000)}s`);
+        try { ws.close(4001, 'went quiet'); } catch {}
+        this.ctx.waitUntil(this.gone(ws));
+        continue;
+      }
+      if (!live || (a.at || 0) >= (live.deserializeAttachment()?.at || 0)) live = ws;
+    }
+    return live;
+  }
+
+  // Heard from the mod on this connection just now.
+  heard(ws) {
+    const a = ws.deserializeAttachment() || {};
+    ws.serializeAttachment({ ...a, heard: Date.now() });
+  }
+
+  note(what) {
+    console.log(`web chat link: ${what}`);
+    this.ctx.waitUntil((async () => {
+      this.log ??= (await this.ctx.storage.get('log')) ?? [];
+      this.log.push({ at: Date.now(), what });
+      if (this.log.length > 30) this.log.splice(0, this.log.length - 30);
+      await this.ctx.storage.put('log', this.log);
+    })());
   }
 
   async fetch(request) {
@@ -192,11 +258,15 @@ export class ServerLink extends DurableObject {
       const [client, server] = Object.values(new WebSocketPair());
       // the mod's version, from its User-Agent ("mcstats-chat/1.8.0"): whispers need 1.8.0
       const version = (request.headers.get('User-Agent') || '').match(/mcstats-chat\/(\d+)\.(\d+)/);
-      server.serializeAttachment({ whispers: !!version && (Number(version[1]) > 1 || (Number(version[1]) === 1 && Number(version[2]) >= 8)) });
+      const ua = (request.headers.get('User-Agent') || '').match(/mcstats-chat\/([\w.+-]{1,20})/);
+      server.serializeAttachment({
+        whispers: !!version && (Number(version[1]) > 1 || (Number(version[1]) === 1 && Number(version[2]) >= 8)),
+        version: ua ? ua[1] : null, at: Date.now(), heard: Date.now(),
+      });
+      this.note(`mod ${ua ? ua[1] : '(unknown version)'} connected`);
       this.ctx.acceptWebSocket(server);
       server.send(JSON.stringify({ type: 'hello', max: MAX_WEB_CHAT }));
       server.send(JSON.stringify({ type: 'web', names: await this.webList() }));
-      console.log('server mod connected for web chat');
       this.ctx.waitUntil(tellPresence(this.env, '/link', { up: true }));
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -242,7 +312,30 @@ export class ServerLink extends DurableObject {
       return json({ error: `No player was found called ${target}, in game or on the website.`, reason: 'refused' }, 404);
     }
 
-    if (path === '/status') return json({ linked: !!this.socket() });
+    if (path === '/status') {
+      const ws = this.socket();
+      const a = ws?.deserializeAttachment() || {};
+      const now = Date.now();
+      const ago = (t) => (t ? Math.round((now - t) / 1000) : null);
+      this.log ??= (await this.ctx.storage.get('log')) ?? [];
+      return json({
+        linked: !!ws, sockets: this.ctx.getWebSockets().length, version: a.version ?? null,
+        connected_ago: ago(a.at), heard_ago: ago(a.heard), started_ago: ago(this.started),
+        log: this.log.slice(-12).map((e) => ({ ago: ago(e.at), what: e.what })),
+      });
+    }
+
+    // A round trip to the mod that shows nothing in game: a message without a sender, which the mod
+    // refuses with "bad message". { ok (it answered), ms, answer } or { ok: false, why }.
+    if (path === '/probe') {
+      const ws = this.socket();
+      if (!ws) return json({ ok: false, why: 'not connected' });
+      const began = Date.now();
+      const r = await this.ask(ws, { type: 'say', name: '', text: 'connection test' });
+      if (!r) return json({ ok: false, why: 'not connected' });
+      if (r.unsure) return json({ ok: false, why: `no answer within ${ACK_MS / 1000}s`, ms: Date.now() - began });
+      return json({ ok: true, ms: Date.now() - began, answer: r.error || 'ok' });
+    }
 
     if (path === '/send' && request.method === 'POST') {
       const { name = null, admin = false, key, text } = await request.json();
@@ -251,8 +344,15 @@ export class ServerLink extends DurableObject {
 
       const slow = this.limited(key);
       if (slow) return slow;
+      const began = Date.now();
       const r = await this.ask(ws, admin ? { type: 'say', admin: true, text } : { type: 'say', name, text });
       if (!r) return json({ error: "The server isn't connected right now.", reason: 'offline' }, 503);
+      const took = Date.now() - began;
+      if (!r.ok && !r.unsure) this.note(`the mod refused a message after ${(took / 1000).toFixed(1)}s: "${String(r.error).slice(0, 60)}"`);
+      else if (r.ok && took > 1500) this.note(`a message took ${(took / 1000).toFixed(1)}s to be shown`);
+      if (/too busy/.test(r.error || '')) {
+        return json({ error: 'The Minecraft server was too busy to show that message (it may be lagging). Nothing was sent; try again in a moment.', reason: 'refused' }, 502);
+      }
       // No answer in time (or an older mod saying it's busy, which can still show the message a moment later)
       // isn't a no: the page keeps the message as sending and watches the log for it.
       if (r.unsure || r.error === 'the server is busy') return json({ ok: false, unsure: true, name, admin, text }, 202);
@@ -265,6 +365,7 @@ export class ServerLink extends DurableObject {
   // The mod answers each message: { type: 'ack', id, ok, error? }.
   async webSocketMessage(ws, message) {
     if (typeof message !== 'string') return;
+    this.heard(ws);
     if (message === 'ping') {
       try { ws.send('pong'); } catch {}
       return;
@@ -276,6 +377,12 @@ export class ServerLink extends DurableObject {
       return;
     }
     if (m?.type === 'ack' && typeof m.id === 'string') {
+      if (this.late.has(m.id)) {
+        this.note(`the answer came late, ${((Date.now() - this.late.get(m.id)) / 1000).toFixed(1)}s after sending (ok: ${m.ok === true}${m.error ? `, "${String(m.error).slice(0, 60)}"` : ''})`);
+        this.late.delete(m.id);
+      } else if (!this.pending.has(m.id)) {
+        this.note(`an answer came for a message no longer waited on (ok: ${m.ok === true})`);
+      }
       this.pending.get(m.id)?.({ ok: m.ok === true, error: typeof m.error === 'string' ? m.error.slice(0, 200) : null });
     }
     // typed in game to a player who's only on the website (mod 1.8.0): { id, from, to, text }
@@ -302,12 +409,13 @@ export class ServerLink extends DurableObject {
   }
 
   async webSocketClose(ws, code, reason) {
-    console.log(`server mod's web chat connection closed (${code}${reason ? `: ${reason}` : ''})`);
+    this.note(`connection closed (${code}${reason ? `: ${reason}` : ''})`);
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, 'closed'); } catch {}
     await this.gone(ws);
   }
 
-  async webSocketError(ws) {
+  async webSocketError(ws, error) {
+    this.note(`connection error (${String(error?.message || error).slice(0, 80)})`);
     try { ws.close(1011, 'error'); } catch {}
     await this.gone(ws);
   }
