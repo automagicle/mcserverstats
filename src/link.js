@@ -100,6 +100,21 @@ export async function playerFor(env, email) {
   return row.team ? { ign: row.ign, team: row.team } : null;
 }
 
+// A player's name the way the game spells it (the roster's capitals can differ). The game looks up a
+// name's team exactly, so a message sent as "Mar9904" for the player "mar9904" lost its team color.
+async function gameName(env, ign) {
+  try {
+    // with more than one spelling on record, the one most recently on the server
+    const row = await env.DB.prepare(
+      `SELECT p.name FROM players p WHERE p.name = ? COLLATE NOCASE
+       ORDER BY (SELECT MAX(s.end_ts) FROM sessions s WHERE s.uuid = p.uuid) DESC LIMIT 1`
+    ).bind(ign).first();
+    return row?.name || ign;
+  } catch {
+    return ign;
+  }
+}
+
 // GET /api/chat/me: who you'd be sending as, and whether the server is connected.
 export async function webChatMe(env, who) {
   const player = await playerFor(env, who.email);
@@ -130,6 +145,8 @@ export async function sendWebChat(request, env, url, who) {
   text = cleanWebText(text);
   if (!text) return json({ error: 'empty message' }, 400);
 
+  const sendAs = player.admin ? null : await gameName(env, player.ign);
+
   // "/w Name message" (or /msg, /tell): a whisper (src/whisper.js)
   const command = parseCommand(text);
   if (command?.error) return json({ error: command.error, reason: 'command' }, 400);
@@ -139,7 +156,7 @@ export async function sendWebChat(request, env, url, who) {
     const res = await link(env).fetch('https://link/whisper', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: player.admin ? null : player.ign, admin: !!player.admin, key: player.admin ? who.email : player.ign, target: command.target, text: command.text }),
+      body: JSON.stringify({ name: sendAs, admin: !!player.admin, key: player.admin ? who.email : player.ign, target: command.target, text: command.text }),
     });
     const r = await res.json().catch(() => ({ error: 'Something went wrong.' }));
     if (!res.ok) return json(r, res.status);
@@ -151,7 +168,7 @@ export async function sendWebChat(request, env, url, who) {
   const res = await link(env).fetch('https://link/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(player.admin ? { admin: true, key: who.email, text } : { name: player.ign, key: player.ign, text }),
+    body: JSON.stringify(player.admin ? { admin: true, key: who.email, text } : { name: sendAs, key: player.ign, text }),
   });
   console.log(`web chat send: HTTP ${res.status} after ${Date.now() - began}ms`);
   return new Response(res.body, { status: res.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });

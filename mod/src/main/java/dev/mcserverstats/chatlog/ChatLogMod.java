@@ -120,8 +120,11 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		});
 
 		ServerMessageEvents.GAME_MESSAGE.register((server, message, overlay) -> {
-			if (!overlay && !postingWeb && uploader.systemMessages()) systemMessage(server, message);
+			if (overlay) return;
+			broadcastThisTick.add(message.getString()); // so playerMessage doesn't log it a second time
+			if (!postingWeb && uploader.systemMessages()) systemMessage(server, message);
 		});
+		ServerTickEvents.END_SERVER_TICK.register(this::logSentToEveryone);
 	}
 
 	// A message sent from the dashboard by a roster player: shown to everyone as "[Web] <name> text",
@@ -143,8 +146,7 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 					who = Component.literal("[Admin]").withStyle(ChatFormatting.YELLOW);
 					line.append(who).append(" ").append(Component.literal(text));
 				} else {
-					PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
-					who = PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
+					who = PlayerTeam.formatNameForTeam(teamOf(s, name), Component.literal(name).withStyle(st -> st.withInsertion(name)));
 					line.append(Component.translatable("chat.type.text", who, Component.literal(text)));
 				}
 				postingWeb = true;
@@ -184,9 +186,10 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 					done.complete("No player was found");
 					return;
 				}
-				target.sendSystemMessage(webTag().append(Component.translatable("commands.message.display.incoming",
+				Component line = webTag().append(Component.translatable("commands.message.display.incoming",
 						from == null ? Component.literal("[Admin]").withStyle(ChatFormatting.YELLOW) : teamName(s, from), Component.literal(text))
-						.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)));
+						.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC));
+				unlogged(() -> target.sendSystemMessage(line));
 				done.complete("");
 			} catch (RuntimeException e) {
 				LOG.error("Couldn't show a web whisper", e);
@@ -196,13 +199,23 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		return done;
 	}
 
+	// Sends something of this mod's own (a whisper, say) without the chat log picking it up.
+	private void unlogged(Runnable send) {
+		boolean was = postingWeb;
+		postingWeb = true;
+		try {
+			send.run();
+		} finally {
+			postingWeb = was;
+		}
+	}
+
 	private static MutableComponent webTag() {
 		return Component.empty().append(Component.literal("[Web] ").withStyle(ChatFormatting.GRAY));
 	}
 
 	private static MutableComponent teamName(MinecraftServer s, String name) {
-		PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
-		return PlayerTeam.formatNameForTeam(team, Component.literal(name).withStyle(st -> st.withInsertion(name)));
+		return PlayerTeam.formatNameForTeam(teamOf(s, name), Component.literal(name).withStyle(st -> st.withInsertion(name)));
 	}
 
 	// Roster players with the dashboard open who aren't in game: who /msg can suggest, besides the game's own.
@@ -238,12 +251,86 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 		if (text.isEmpty()) return false;
 		boolean sent = mod.link.whisperUp(from, webName, text, why -> s.execute(() -> {
 			ServerPlayer p = s.getPlayerList().getPlayer(player.getUUID());
-			if (p != null) p.sendSystemMessage(webTag().append(Component.literal("Couldn't reach " + webName + " on the website: " + why).withStyle(ChatFormatting.RED)));
+			if (p != null) mod.unlogged(() -> p.sendSystemMessage(webTag().append(Component.literal("Couldn't reach " + webName + " on the website: " + why).withStyle(ChatFormatting.RED))));
 		}));
 		if (!sent) return false;
-		source.sendSystemMessage(webTag().append(Component.translatable("commands.message.display.outgoing", teamName(s, webName), Component.literal(text))
-				.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC)));
+		mod.unlogged(() -> source.sendSystemMessage(webTag().append(Component.translatable("commands.message.display.outgoing", teamName(s, webName), Component.literal(text))
+				.withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC))));
 		return true;
+	}
+
+	// System messages sent to players one at a time this tick: text -> who got it. Some mods announce
+	// things to everyone that way (a combat logger's location, say) rather than as a broadcast.
+	private static final class Sent {
+		final Component message;
+		final java.util.Set<UUID> to = new java.util.HashSet<>();
+		boolean onlyOneOnline; // sent while one player was on: public unless it answers something they did
+		boolean answer;
+
+		Sent(Component message) {
+			this.message = message;
+		}
+	}
+
+	private final java.util.Map<String, Sent> sentThisTick = new java.util.LinkedHashMap<>();
+	private final java.util.Set<String> broadcastThisTick = new java.util.HashSet<>();
+
+	// Called by ServerPlayerMixin for every system message a player is sent (on the server thread).
+	public static void playerMessage(ServerPlayer player, Component message, boolean overlay) {
+		ChatLogMod mod = instance;
+		MinecraftServer s = current;
+		if (mod == null || s == null || overlay || mod.postingWeb || !s.isSameThread() || !mod.uploader.systemMessages()) return;
+		if (mod.sentThisTick.size() >= 200) return;
+		String text = message.getString();
+		if (text.isBlank() || text.length() > 1000) return;
+		Sent sent = mod.sentThisTick.get(text);
+		if (sent == null) {
+			sent = new Sent(message);
+			mod.sentThisTick.put(text, sent);
+			// With one player on, "sent to everyone" and "sent to them" look the same. It counts as an
+			// answer to them (not logged) when it comes out of a command, or out of handling something
+			// they did other than a player leaving.
+			if (s.getPlayerList().getPlayerCount() <= 1) {
+				sent.onlyOneOnline = true;
+				sent.answer = StackWalker.getInstance().walk(frames -> frames.limit(80).anyMatch(f -> {
+					String c = f.getClassName();
+					return c.startsWith("com.mojang.brigadier.")
+							|| (c.endsWith("ServerGamePacketListenerImpl") && !f.getMethodName().toLowerCase().contains("disconnect"));
+				}));
+			}
+		}
+		sent.to.add(player.getUUID());
+	}
+
+	// At the end of each tick: whatever was sent to every player on (and wasn't a broadcast, which is
+	// logged already) goes in the chat log as a server message.
+	private void logSentToEveryone(MinecraftServer server) {
+		if (sentThisTick.isEmpty()) {
+			broadcastThisTick.clear();
+			return;
+		}
+		try {
+			java.util.List<ServerPlayer> online = server.getPlayerList().getPlayers();
+			for (java.util.Map.Entry<String, Sent> e : sentThisTick.entrySet()) {
+				Sent sent = e.getValue();
+				if (broadcastThisTick.contains(e.getKey())) continue;
+				boolean everyone = sent.to.size() >= 2 && online.stream().allMatch(p -> sent.to.contains(p.getUUID()));
+				if (everyone || (sent.onlyOneOnline && !sent.answer)) systemMessage(server, sent.message);
+			}
+		} finally {
+			sentThisTick.clear();
+			broadcastThisTick.clear();
+		}
+	}
+
+	// A player's team by name, whatever capitals the name was given in (teams hold names exactly).
+	private static PlayerTeam teamOf(MinecraftServer s, String name) {
+		PlayerTeam team = s.getScoreboard().getPlayersTeam(name);
+		if (team != null) return team;
+		for (PlayerTeam t : s.getScoreboard().getPlayerTeams()) {
+			for (String member : t.getPlayers()) if (member.equalsIgnoreCase(name)) return t;
+		}
+		return null;
 	}
 
 	// Broadcast server messages, sorted by their translation key. The first argument of a

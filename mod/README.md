@@ -37,6 +37,14 @@ minute per player, to `/api/ingest/gear` next to the chat url (same token, no ex
 keeps one WebSocket open to `/api/ingest/link` next to the chat url (same token and service token, no extra setup) and
 shows each message to everyone as `[Web] <name> message`, the name in its team's colors. It's logged like other chat,
 with a "web" tag on the dashboard. Admins (emails listed as admins on the dashboard's roster) show as `[Web] [Admin] message`, the tag in yellow. If the server isn't connected, the dashboard says so and nothing is queued.
+**Messages sent to everyone one by one** (1.8.0 or newer): some mods announce things by sending each player the message
+themselves (where a combat logger logged out, say) rather than as a broadcast, so the log never saw them. A system
+message that reaches every player on in the same tick is now logged as a server message, like a broadcast. With one
+player on, it's logged unless it answers something they did (a command, or anything else of theirs but a player
+leaving). Action-bar messages and this mod's own whisper lines are never logged. Uses a second mixin, on the player's
+system-message method; it only watches.
+**Web chat names** (1.8.0 or newer): a name sent from the dashboard gets its team's colors whatever capitals it's
+written in (the dashboard also sends the game's own spelling, which fixes this for older versions).
 **Whispers** (1.8.0 or newer): `/w Name text` (or `/msg`, `/tell`) typed on the dashboard comes down the same WebSocket and
 is shown only to Name, the way the game shows a whisper, as `[Web] Sender whispers to you: text`. And a whisper typed in
 game to someone who isn't on the server but has the dashboard open goes up to their page instead of failing with "No
