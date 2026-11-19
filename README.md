@@ -86,7 +86,12 @@ everywhere. Three checkboxes per team say how much of the dashboard it's part of
 there make the tug-of-war bar; one, or three or more, get a block each), the Combat **kills chart** (its kills as their
 own color, otherwise with the other deaths), and the **Activity charts** (Players online by team and share, Daily
 activity's stacks, Busiest times). A team left out of a chart still has its players, in their color, everywhere else.
-A team can be removed once nobody's on it. The web chat connection card shows the server mod's link and tests it.
+A team can be removed once nobody's on it.
+
+Moving a player to another team (Teams and eggs) either **counts from now on**, the default, or for everything
+they've done. From now on, what they did before stays with the team they were on then: their playtime in the by-team
+charts and their kills and deaths in Combat (table `team_history`; names show the team they're on now). Earlier teams
+are listed under the roster, where each can be forgotten. The web chat connection card shows the server mod's link and tests it.
 
 Admins are the sign-in emails in the `ADMIN_EMAIL` secret (comma-separated), so they stay out of this repository:
 

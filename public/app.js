@@ -259,6 +259,7 @@ function writeTeamStyles() {
 const rosterLoad = api('/api/roster').then((r) => {
   for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
   setTeams(r.teams, r.players);
+  setTeamHistory(r.history);
   return r.players;
 }, () => []).then((players) => {
   for (const p of players) roster.set(p.ign.toLowerCase(), p);
@@ -266,6 +267,44 @@ const rosterLoad = api('/api/roster').then((r) => {
   syncHeatToggle();
   return players;
 });
+
+// A player's earlier teams, when a team change was made to count only from then on (the admin page):
+// lowercased IGN -> [{ until (unix seconds), team }], oldest first. Before `until` they were on `team`.
+const teamHistory = new Map();
+function setTeamHistory(list) {
+  teamHistory.clear();
+  for (const h of list || []) {
+    const key = h.ign.toLowerCase();
+    if (!teamHistory.has(key)) teamHistory.set(key, []);
+    teamHistory.get(key).push({ until: h.until, team: h.team });
+  }
+  for (const entries of teamHistory.values()) entries.sort((a, b) => a.until - b.until);
+}
+const historyOf = (ign) => (ign ? teamHistory.get(ign.toLowerCase()) ?? teamHistory.get(rosterAliases.get(ign.toLowerCase())) : null);
+// The team a player was on at a time (unix seconds): what the by-team charts and Combat count by.
+// Names show the team they're on now.
+function teamAt(ign, ts) {
+  const h = historyOf(ign);
+  if (h) for (const e of h) if (ts < e.until) return e.team;
+  return rosterOf(ign)?.team ?? null;
+}
+// A stretch of a player's time, cut where they changed teams: [[team, from, to], …].
+function teamSpans(ign, from, to) {
+  const now = rosterOf(ign)?.team ?? null;
+  const h = historyOf(ign);
+  if (!h) return [[now, from, to]];
+  const out = [];
+  let t = from;
+  for (const e of h) {
+    if (t >= to) break;
+    if (t < e.until) {
+      out.push([e.team, t, Math.min(to, e.until)]);
+      t = Math.min(to, e.until);
+    }
+  }
+  if (t < to) out.push([now, t, to]);
+  return out;
+}
 
 const rosterOf = (ign) => (ign ? roster.get(ign.toLowerCase()) ?? roster.get(rosterAliases.get(ign.toLowerCase())) : null);
 const realName = (ign) => rosterOf(ign)?.name ?? null;
@@ -2002,12 +2041,14 @@ async function teamHoursPerBucket(buckets) {
   const out = Object.fromEntries(activityTeams().map((t) => [t.id, buckets.map(() => 0)]));
   const stop = Math.min(to, nowSec());
   for (const [, name, a0, b0] of r.rows) {
-    const team = out[rosterOf(name)?.team];
-    if (!team) continue;
-    const a = Math.max(from, a0), b = Math.min(stop, b0 + r.poll_seconds);
-    for (let i = 0; i < buckets.length && buckets[i].start < b; i++) {
-      const over = Math.min(b, buckets[i].end) - Math.max(a, buckets[i].start);
-      if (over > 0) team[i] += over / 3600;
+    // (cut where the player changed teams, if that change only counted from then on)
+    for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(stop, b0 + r.poll_seconds))) {
+      const team = out[id];
+      if (!team) continue;
+      for (let i = 0; i < buckets.length && buckets[i].start < b; i++) {
+        const over = Math.min(b, buckets[i].end) - Math.max(a, buckets[i].start);
+        if (over > 0) team[i] += over / 3600;
+      }
     }
   }
   return out;
@@ -2036,14 +2077,15 @@ async function teamSeconds(from, to) {
   const r = await memoApi(`/api/sessions?from=${from}&to=${to}`);
   const secs = Object.fromEntries(activityTeams().map((t) => [t.id, emptyWeek()]));
   for (const [, name, a0, b0] of r.rows) {
-    const team = secs[rosterOf(name)?.team];
-    if (!team) continue;
-    const b = Math.min(to, b0 + r.poll_seconds);
-    for (let t = Math.max(from, a0); t < b;) {
-      const end = Math.min(b, Math.floor(t / 3600) * 3600 + 3600);
-      const { dow, hour } = hourInfo(t);
-      team[dow][hour] += end - t;
-      t = end;
+    for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(to, b0 + r.poll_seconds))) {
+      const team = secs[id];
+      if (!team) continue;
+      for (let t = a; t < b;) {
+        const end = Math.min(b, Math.floor(t / 3600) * 3600 + 3600);
+        const { dow, hour } = hourInfo(t);
+        team[dow][hour] += end - t;
+        t = end;
+      }
     }
   }
   return secs;
@@ -2176,16 +2218,18 @@ function teamCounts(pts, sessions, minuteData) {
     return lo;
   };
   const now = nowSec();
-  for (const [name, a, b] of sessions) {
-    const team = out[rosterOf(name)?.team];
-    if (!team) continue;
-    if (minuteData) {
-      for (let i = firstAt(a); i < pts.length && pts[i].t < b; i++) team[i] += 1;
-    } else {
-      for (let i = Math.max(0, firstAt(a - 3600 + 1)); i < pts.length && pts[i].t < b; i++) {
-        const t = pts[i].t, end = Math.min(t + 3600, now);
-        const over = Math.min(b, end) - Math.max(a, t);
-        if (over > 0 && end > t) team[i] += over / (end - t);
+  for (const [name, a0, b0] of sessions) {
+    for (const [id, a, b] of teamSpans(name, a0, b0)) { // their team at the time
+      const team = out[id];
+      if (!team) continue;
+      if (minuteData) {
+        for (let i = firstAt(a); i < pts.length && pts[i].t < b; i++) team[i] += 1;
+      } else {
+        for (let i = Math.max(0, firstAt(a - 3600 + 1)); i < pts.length && pts[i].t < b; i++) {
+          const t = pts[i].t, end = Math.min(t + 3600, now);
+          const over = Math.min(b, end) - Math.max(a, t);
+          if (over > 0 && end > t) team[i] += over / (end - t);
+        }
       }
     }
   }
@@ -4690,8 +4734,8 @@ function factionTotals(rows, shown) {
   const t = { '#outside': 0 }; // (no team's id starts with #)
   for (const x of shown) t[x.id] = { kills: 0, own: 0, other: 0, deaths: 0, by: {} };
   for (const d of rows) {
-    const vt = teamOf(d.victim);
-    const kt = d.killer ? teamOf(d.killer) : null;
+    const vt = teamAt(d.victim, d.ts); // the teams they were on when it happened
+    const kt = d.killer ? teamAt(d.killer, d.ts) : null;
     if (!vt || !t[vt]) { t['#outside']++; continue; }
     t[vt].deaths++;
     if (kt && kt !== vt && t[kt]) {
@@ -4785,7 +4829,7 @@ function combatSeries() {
     ];
   }
   // a kill by each team the admin page gives a series of its own, and everything else
-  const by = (team) => (d) => d.killer && teamOf(d.killer) === team && teamOf(d.victim) !== team;
+  const by = (team) => (d) => d.killer && teamAt(d.killer, d.ts) === team && teamAt(d.victim, d.ts) !== team;
   return [
     ...teams.filter((t) => t.chart).map((t) => ({ key: t.id, label: `${t.short} kills`, color: teamVar(t.id), is: by(t.id) })),
     { key: 'other', label: 'Other deaths', color: 'var(--muted)', is: () => true },
@@ -5054,7 +5098,7 @@ const DEATH_PAGE = 40;
 
 // One death, as the game worded it: every name is a link in its own colors.
 function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
-  const team = m.killer ? teamOf(m.killer) : null;
+  const team = m.killer ? teamAt(m.killer, m.ts / 1000) : null;
   const text = el('div', { class: 'dl-text' });
   if (m.rich) text.append(...richText(m));
   else text.append(noTag(m.text));
@@ -5469,7 +5513,7 @@ async function adminDo(body, done) {
     await adminPost(body);
     if (done) toast(done);
     admin.data = await api('/api/admin');
-    if (/^(roster|alias|team)\./.test(body.action)) await reloadRoster();
+    if (/^(roster|alias|team|history)\./.test(body.action)) await reloadRoster();
   } catch (err) {
     if (err instanceof DbLimitError) showError(err.message);
     toast(err.message, { error: true });
@@ -5487,6 +5531,7 @@ async function reloadRoster() {
   for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
   for (const p of r.players || []) roster.set(p.ign.toLowerCase(), p);
   setTeams(r.teams, r.players);
+  setTeamHistory(r.history);
   syncHeatToggle();
   syncTlTeamToggle();
 }
@@ -5518,9 +5563,15 @@ function renderAdmin() {
   const when = (ms) => fmt(ms / 1000, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
   // teams and eggs
+  const teamName = (id) => teamList.find((x) => x.id === id)?.name || id;
+  // whether a change of team counts from now on, or for everything the player has done (remembered here)
+  const fromNow = el('input', { type: 'checkbox' });
+  fromNow.checked = recall('admFromNow') !== '0';
+  fromNow.addEventListener('change', () => remember('admFromNow', fromNow.checked ? '1' : '0'));
   const rows = d.roster.map((r) => {
     const team = teamSelect(r.team), egg = eggSelect(r.egg);
-    const save = () => adminDo({ action: 'roster.set', ign: r.ign, team: team.value, egg: egg.value || null }, `Saved ${r.ign}`);
+    const save = () => adminDo({ action: 'roster.set', ign: r.ign, team: team.value, egg: egg.value || null, from_now: fromNow.checked },
+      team.value !== r.team ? `${r.ign} is on ${teamName(team.value)}${fromNow.checked ? ' from now on' : ', for everything so far too'}` : `Saved ${r.ign}`);
     team.addEventListener('change', save);
     egg.addEventListener('change', save);
     return el('tr', { class: `adm-team-${r.team}` },
@@ -5539,6 +5590,19 @@ function renderAdmin() {
     el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table' },
       el('thead', {}, el('tr', {}, ...['Player', 'Team', 'Egg', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, ...rows, addRow))),
+    el('label', { class: 'adm-check adm-from-now' }, fromNow, el('span', {},
+      el('strong', { text: 'Team changes count from now on. ' }),
+      'What a player did before stays with the team they were on then (playtime in the by-team charts, kills and deaths in Combat). Untick to move everything they’ve done to the new team.')),
+    ...((d.history || []).length ? [
+      el('div', { class: 'adm-subhead', text: 'Earlier teams' }),
+      el('ul', { class: 'adm-list adm-scroll' }, ...d.history.map((h) => el('li', {},
+        el('span', { class: 'adm-main' }, el('strong', { text: h.ign }), ` was on ${teamName(h.team)} until ${when(h.until * 1000)}`),
+        button('Forget', () => {
+          if (confirm(`Forget that ${h.ign} was on ${teamName(h.team)}? What they did then will count for the team they were on next.`)) {
+            adminDo({ action: 'history.remove', ign: h.ign, until: h.until }, 'Forgotten');
+          }
+        }, 'btn-quiet')))),
+    ] : []),
     el('p', { class: 'muted adm-note', text: `Running npm run roster:remote again replaces these with roster-s${d.season}.json, so copy lasting changes there too.` }));
 
   // the teams themselves: name, color, order, and how much of the dashboard each is part of

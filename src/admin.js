@@ -26,7 +26,7 @@ export const me = (env, who) => json({ email: who.email, admin: isAdmin(env, who
 export async function adminState(env, season) {
   if (!season.n) return json({ error: 'pick a season' }, 400);
   const db = env.DB;
-  const [roster, hidden, aliases, players, uncounted, deleted, teams] = await db.batch([
+  const [roster, hidden, aliases, players, uncounted, deleted, teams, history] = await db.batch([
     db.prepare('SELECT ign, team, egg FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE').bind(season.n),
     db.prepare('SELECT name, note FROM hidden_players ORDER BY name COLLATE NOCASE'),
     db.prepare('SELECT alias, name FROM player_aliases ORDER BY name COLLATE NOCASE, alias COLLATE NOCASE'),
@@ -38,11 +38,13 @@ export async function adminState(env, season) {
                 FROM deleted_chat ORDER BY deleted_at DESC LIMIT 500`),
     db.prepare(`SELECT id, name, short, color, color_dark, show_bar AS bar, show_chart AS chart, show_activity AS activity
                 FROM teams WHERE season = ? ORDER BY sort, id`).bind(season.n),
+    db.prepare('SELECT ign, until, team FROM team_history WHERE season = ? ORDER BY until DESC').bind(season.n),
   ]);
   return json({
     season: season.n,
     roster: roster.results,
     teams: teams.results.map((t) => ({ ...t, bar: !!t.bar, chart: !!t.chart, activity: !!t.activity })),
+    history: history.results,
     hidden: hidden.results,
     aliases: aliases.results,
     players: players.results.map((r) => r.name),
@@ -65,10 +67,25 @@ const ACTIONS = {
     if (typeof b.team !== 'string' || !TEAM_RE.test(b.team)) return bad('bad team');
     const egg = b.egg == null || b.egg === '' ? null : b.egg;
     if (egg != null && (typeof egg !== 'string' || !EGG_RE.test(egg))) return bad('bad egg');
-    await db.prepare(
+    // A change of team either counts from now on (from_now: what they did before stays with the team
+    // they were on, kept in team_history) or for everything they've done (their earlier teams are forgotten).
+    const was = await db.prepare('SELECT team FROM roster WHERE season = ? AND ign = ?').bind(season.n, name).first();
+    const stmts = [db.prepare(
       `INSERT INTO roster (season, ign, name, team, egg) VALUES (?1, ?2, ?2, ?3, ?4)
        ON CONFLICT(season, ign) DO UPDATE SET team = excluded.team, egg = excluded.egg`
-    ).bind(season.n, name, b.team, egg).run();
+    ).bind(season.n, name, b.team, egg)];
+    if (was && was.team !== b.team) {
+      stmts.push(b.from_now === true
+        ? db.prepare('INSERT OR REPLACE INTO team_history (season, ign, until, team) VALUES (?, ?, ?, ?)').bind(season.n, name, Math.floor(Date.now() / 1000), was.team)
+        : db.prepare('DELETE FROM team_history WHERE season = ? AND ign = ?').bind(season.n, name));
+    }
+    await db.batch(stmts);
+  },
+  // forget one earlier team of a player's: { ign, until }. What they did then counts for the team after it.
+  async 'history.remove'(db, b, season) {
+    const name = ign(b.ign);
+    if (!name || !Number.isSafeInteger(b.until)) return bad('bad entry');
+    await db.prepare('DELETE FROM team_history WHERE season = ? AND ign = ? AND until = ?').bind(season.n, name, b.until).run();
   },
   // a team: made if it's new (at the end of the order), otherwise changed. Only what's given changes.
   // { id, name?, short?, color?, bar?, chart?, activity? }; a new color drops the dark-page one, which is
@@ -213,7 +230,7 @@ export async function adminAction(request, env, url, season) {
   }
   const run = body && Object.hasOwn(ACTIONS, body.action) ? ACTIONS[body.action] : null;
   if (!run) return bad('unknown action');
-  if (/^(roster|team)\./.test(body.action) && !season.n) return bad('pick a season');
+  if (/^(roster|team|history)\./.test(body.action) && !season.n) return bad('pick a season');
   const out = (await run(env.DB, body, season, env)) || json({ ok: true });
   if (out.ok) await clearCache(env.DB); // season totals may have changed
   if (out.ok && /^(hidden|alias)\./.test(body.action)) await tellPresence(env, '/invalidate'); // the live badges

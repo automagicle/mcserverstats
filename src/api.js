@@ -49,6 +49,16 @@ export async function teams(db, season) {
   }
 }
 
+// Players' earlier teams (migrations/0017_team_history.sql): [{ ign, until, team }], oldest first.
+export async function teamHistory(db, season) {
+  if (!season.n) return [];
+  try {
+    return (await db.prepare('SELECT ign, until, team FROM team_history WHERE season = ? ORDER BY ign, until').bind(season.n).all()).results;
+  } catch {
+    return [];
+  }
+}
+
 // Other accounts' names and the player each belongs to (src/aliases.js), so the page can give them the same team.
 async function aliases(db) {
   return (await db.prepare('SELECT alias, name FROM player_aliases').all()).results;
@@ -182,7 +192,10 @@ export async function handleApi(request, env, url) {
   }
 
   if (path === '/api/roster') {
-    return json({ players: await roster(env.DB, season), aliases: await aliases(env.DB), teams: await teams(env.DB, season) });
+    return json({
+      players: await roster(env.DB, season), aliases: await aliases(env.DB), teams: await teams(env.DB, season),
+      history: await teamHistory(env.DB, season),
+    });
   }
 
   if (path === '/api/leaderboard') {
