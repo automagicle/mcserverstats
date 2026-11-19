@@ -200,17 +200,28 @@ const roster = new Map(); // lowercased IGN -> { ign, name, team }
 const rosterAliases = new Map(); // another account's lowercased name -> its player's lowercased IGN
 let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN / Name switch shows
 
-// The season's teams, in their order: [{ id, name, short, color, color_dark, bar, chart, activity }]
-// (the admin page edits them). bar and chart say how much of the Combat page a team is part of,
-// activity whether the Activity page's by-team charts show it. Everything colored by team gets its
-// color from a stylesheet written here (the page's own carries red and blue until this loads).
+// The season's teams, in their order: [{ id, name, short, color, color_dark, bar, middle, chart,
+// activity, activity_with }] (the admin page edits them). bar and chart say how much of the Combat
+// page a team is part of (middle: in the scoreboard bar, but between its two sides rather than as a
+// side of its own), activity whether the Activity page's by-team charts show it as a series, and
+// activity_with the team whose series its playtime counts in instead. Everything colored by team gets
+// its color from a stylesheet written here (the page's own carries red and blue until this loads).
 let teams = [];
 const teamById = new Map();
 const teamInfo = (id) => teamById.get(id) || null;
 const teamLabel = (id) => teamInfo(id)?.name || id;
 const teamShort = (id) => teamInfo(id)?.short || id;
 const teamVar = (id) => `var(--team-${id})`;
-const activityTeams = () => teams.filter((t) => t.activity);
+// The teams with a series of their own in the Activity page's charts, and the one a team's playtime
+// counts in there: itself, the team it's grouped with, or none (left out of those charts).
+const activityTeams = () => teams.filter((t) => t.activity && !t.activity_with);
+function activityTeam(id) {
+  const t = teamById.get(id);
+  if (!t) return null;
+  if (!t.activity_with) return t.activity ? t.id : null;
+  const w = teamById.get(t.activity_with);
+  return w && w.activity && !w.activity_with ? w.id : null;
+}
 const TEAM_DEFAULTS = {
   red: { name: 'Red Faction', short: 'Red', color: '#c42f2a', color_dark: '#f27a72' },
   blue: { name: 'Blue Faction', short: 'Blue', color: '#1d5fc4', color_dark: '#6ea8f5' },
@@ -225,7 +236,7 @@ function setTeams(list, players) {
     if (!TEAM_ID.test(p.team || '') || out.some((t) => t.id === p.team)) continue;
     const d = TEAM_DEFAULTS[p.team];
     const name = p.team[0].toUpperCase() + p.team.slice(1);
-    out.push({ id: p.team, name: d?.name || name, short: d?.short || name, color: d?.color || '#7a7f87', color_dark: d?.color_dark || null, bar: true, chart: true, activity: true });
+    out.push({ id: p.team, name: d?.name || name, short: d?.short || name, color: d?.color || '#7a7f87', color_dark: d?.color_dark || null, bar: true, middle: false, chart: true, activity: true, activity_with: null });
   }
   teams = out;
   teamById.clear();
@@ -245,9 +256,9 @@ function writeTeamStyles() {
   const vars = (pick) => teams.map((t) => `--team-${t.id}:${pick(t)};`).join('');
   const rules = teams.map(({ id }) => {
     const c = `var(--team-${id})`;
-    return `.team-${id}{color:${c}}.team-dot.team-${id},.bar.team-${id},.fb-kills.fb-${id},.fb-key.fb-${id}{background:${c}}`
+    return `.team-${id}{color:${c}}.team-dot.team-${id},.bar.team-${id},.fb-kills.fb-${id},.fb-key.fb-kills.fb-${id}{background:${c}}`
       + `.dbar.team-${id}{fill:${c}}.line-${id}{fill:none;stroke:${c};stroke-width:1.25;stroke-linejoin:round;stroke-linecap:round}`
-      + `.area-${id}{fill:${c};opacity:.3}.fb-own.fb-${id},.fb-other.fb-${id}{--c:${c}}.fb-count.fb-${id} strong,.fb-end.fb-${id} strong{color:${c}}`
+      + `.area-${id}{fill:${c};opacity:.3}.fb-own.fb-${id},.fb-other.fb-${id},.fb-all.fb-${id}{--c:${c}}.fb-count.fb-${id} strong,.fb-end.fb-${id} strong{color:${c}}`
       + `.dl-row.by-${id}{border-left-color:${c}}.dl-row.by-${id} .dl-icon,.adm-team-${id} .adm-ign{color:${c}}`
       + `.heat-${id}{--lv1:color-mix(in oklab,${c} 30%,var(--lv0));--lv2:color-mix(in oklab,${c} 55%,var(--lv0));--lv3:color-mix(in oklab,${c} 78%,var(--lv0));--lv4:${c}}`;
   }).join('\n');
@@ -423,9 +434,15 @@ const itemName = (it) => it.name || it.id.replace(/_/g, ' ').replace(/\b\w/g, (c
 /* ---------- tooltip ---------- */
 
 const tip = $('#tooltip');
+// Clicking what a tooltip is for freezes it where it is (tipPinned), so it can be read, scrolled and
+// selected; it stays until a click anywhere outside it (or Escape). While it's frozen nothing else
+// shows or hides a tooltip.
+let tipPinned = false;
+let tipSkipPin = false; // the click that closed a frozen tooltip doesn't freeze another
 
 // rows: [{ value, label, color }]
 function showTip(x, y, rows) {
+  if (tipPinned) return;
   tip.replaceChildren(
     ...rows.map((r) => {
       if (r.players) return playerList(r.players);
@@ -446,10 +463,36 @@ function showTip(x, y, rows) {
   if (left + w > window.innerWidth - 8) left = x - w - 14;
   let top = y - h - 10;
   if (top < 8) top = y + 18;
+  // one too tall to fit below the pointer either keeps as much of itself on screen as it can
+  if (top + h > window.innerHeight - 8) top = Math.max(8, window.innerHeight - h - 8);
   tip.style.left = `${Math.max(8, left)}px`;
   tip.style.top = `${top}px`;
 }
-const hideTip = () => { tip.hidden = true; };
+const hideTip = () => { if (!tipPinned) tip.hidden = true; };
+// Hides it even when it's frozen (the page under it changed).
+function closeTip() {
+  tipPinned = false;
+  tip.classList.remove('pinned');
+  tip.hidden = true;
+}
+document.addEventListener('click', (e) => {
+  const skip = tipSkipPin;
+  tipSkipPin = false;
+  // (a click whose own handler hid the tooltip, or one on a link, isn't a click to keep it)
+  if (skip || tipPinned || tip.hidden || tip.contains(e.target) || e.target.closest?.('a[href]')) return;
+  tipPinned = true;
+  tip.classList.add('pinned');
+  const r = tip.getBoundingClientRect();
+  if (r.bottom > window.innerHeight - 8) tip.style.top = `${Math.max(8, window.innerHeight - r.height - 8)}px`;
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!tipPinned || tip.contains(e.target)) return;
+  closeTip();
+  tipSkipPin = true;
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && tipPinned) closeTip(); });
+// scrolling anything else moves what it was for out from under it
+document.addEventListener('wheel', (e) => { if (tipPinned && !tip.contains(e.target)) closeTip(); }, { passive: true, capture: true });
 
 const TIP_PLAYERS = 10;
 const tipHeads = new Map(); // reused across tooltip redraws so heads don't blink while moving
@@ -777,13 +820,16 @@ function tween(root, draw) {
 // Paging with ‹ ›: the old drawing scrolls out as the new one scrolls in from the side it came from.
 const SLIDE_MS = 450;
 const sliding = new Map(); // root -> slides in progress
-// shift: how far the content moves, in chart widths (-1 = a whole width earlier).
-// Partial shifts also cross-fade, since the old and new drawings overlap.
+let slideClips = 0;
+// shift: how far the content moves, in widths of the plot (-1 = a whole width earlier).
+// Charts that keep their y-axis still (a .slide group inside a .slide-clip one) scroll like one long
+// strip behind the plot's edges, by exactly the time the range moved: where the old and new drawings
+// cover the same time only the new one shows, so a part-way step is a plain scroll too. Other
+// charts slide whole, and cross-fade on a part-way step since the two drawings overlap.
 function slideIn(root, old, shift) {
   const cur = root.firstElementChild;
   if (!old || !cur || !shift || reducedMotion()) return;
   const W = root.clientWidth;
-  const fade = Math.abs(shift) < 0.999;
   Object.assign(old.style, { position: 'absolute', left: '0', top: '0', pointerEvents: 'none' });
   root.style.overflow = 'hidden';
   sliding.set(root, (sliding.get(root) || 0) + 1);
@@ -791,19 +837,38 @@ function slideIn(root, old, shift) {
   const opts = { duration: SLIDE_MS, easing: 'cubic-bezier(0.65, 0, 0.35, 1)' };
   morphAxis(old, cur, opts);
   // Earlier (negative shift) moves content right, like scrolling back along a timeline.
-  const oldBody = old.querySelector(':scope > .slide') || old;
-  const curBody = cur.querySelector(':scope > .slide') || cur;
-  oldBody.animate([
+  const oldBody = old.querySelector('.slide-clip > .slide'), curBody = cur.querySelector('.slide-clip > .slide');
+  const box = root.plotBox;
+  const strip = !!(oldBody && curBody && box);
+  const dist = strip ? Math.max(1, Math.max(280, W) - box.l - box.r) : W;
+  const fade = !strip && Math.abs(shift) < 0.999;
+  const clips = [];
+  if (strip) {
+    const clip = (svg, node, x0, x1) => {
+      const id = `slide-clip-${++slideClips}`;
+      const c = sv('clipPath', { id });
+      c.append(sv('rect', { x: x0, y: -50, width: Math.max(0, x1 - x0), height: 5000 }));
+      svg.append(c);
+      node.setAttribute('clip-path', `url(#${id})`);
+      clips.push([c, node]);
+    };
+    // both drawings stay inside the plot, and the old one shows only the time the new one doesn't cover
+    for (const [svg, body] of [[old, oldBody], [cur, curBody]]) clip(svg, body.parentNode, box.l - 1, box.l + dist + 1);
+    if (shift < 0) clip(old, oldBody, box.l + dist * (1 + shift), box.l + dist + 1);
+    else clip(old, oldBody, box.l - 1, box.l + dist * shift);
+  }
+  (oldBody && strip ? oldBody : old).animate([
     { transform: 'translateX(0)', opacity: 1 },
-    { transform: `translateX(${-shift * W}px)`, opacity: fade ? 0 : 1 },
+    { transform: `translateX(${-shift * dist}px)`, opacity: fade ? 0 : 1 },
   ], opts);
-  curBody.animate([
-    { transform: `translateX(${shift * W}px)`, opacity: fade ? 0 : 1 },
+  (curBody && strip ? curBody : cur).animate([
+    { transform: `translateX(${shift * dist}px)`, opacity: fade ? 0 : 1 },
     { transform: 'translateX(0)', opacity: 1 },
   ], opts).finished
     .catch(() => {})
     .finally(() => {
       old.remove();
+      for (const [c, node] of clips) { c.remove(); node.removeAttribute('clip-path'); }
       const n = sliding.get(root) - 1;
       if (n) sliding.set(root, n);
       else { sliding.delete(root); root.style.overflow = ''; }
@@ -1004,7 +1069,9 @@ function drawLineChart(root, opts, f) {
   // The y-axis stays put while paging slides the rest (.slide) sideways; see slideIn.
   const yaxis = sv('g', { class: 'yaxis' });
   const body = sv('g', { class: 'slide' });
-  svg.append(yaxis, body);
+  const bodyClip = sv('g', { class: 'slide-clip' }); // clipped to the plot while a slide is under way
+  bodyClip.append(body);
+  svg.append(yaxis, bodyClip);
   svg.dataset.top = m.t;
   svg.dataset.ph = ph;
   svg.dataset.ymax = ymax;
@@ -1148,6 +1215,7 @@ function drawLineChart(root, opts, f) {
     hit.style.cursor = 'pointer';
     hit.addEventListener('click', (e) => {
       const t = from + ((e.clientX - svg.getBoundingClientRect().left - m.l) / pw) * (to - from);
+      hideTip(); // this click goes somewhere; it isn't one to keep the tooltip
       opts.onPick(Math.max(from, Math.min(to, t)));
     });
   }
@@ -1242,19 +1310,32 @@ function drawBars(root, spec, f) {
     return b.start + (u - i) * (b.end - b.start);
   };
 
-  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Activity over time' });
+  const root_svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Activity over time' });
 
+  // The y-axis (and the strips' names) stays put while paging slides the rest (.slide) sideways; see slideIn.
+  const yaxis = sv('g', { class: 'yaxis' });
+  const svg = sv('g', { class: 'slide' });
+  const bodyClip = sv('g', { class: 'slide-clip' });
+  bodyClip.append(svg);
+  root_svg.append(yaxis, bodyClip);
+  root_svg.dataset.top = m.t;
+  root_svg.dataset.ph = ph;
+  root_svg.dataset.ymax = ymax;
   for (let v = 0; v <= ymax + 1e-9; v += ystep) {
-    if (v > 0) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
+    const tick = sv('g', { class: 'ytick' });
+    tick.dataset.v = Math.round(v * 1000) / 1000;
+    if (v > 0) tick.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: 'gridline' }));
     const t = sv('text', { x: m.l - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'axis-text' });
     t.textContent = fmtTick(Math.round(v * 100) / 100);
-    svg.append(t);
+    tick.append(t);
+    yaxis.append(tick);
   }
+  yaxis.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
   const hatchId = `${root.id}-hatch`;
   // a bar stands for its whole bucket, so the hatch stops at the start of the one the data (or season) begins in
   const firstBar = spec.dataStart && (buckets.find((bk) => spec.dataStart < bk.end)?.start ?? spec.dataStart);
-  if (spec.dataStart && firstBar > from) noDataBlock(svg, svg, hatchId, m.l, xAt(firstBar), m.t, ph);
+  if (spec.dataStart && firstBar > from) noDataBlock(root_svg, svg, hatchId, m.l, xAt(firstBar), m.t, ph);
 
   const gap = slot >= 8 ? 2 * Math.max(2, slot * 0.15) : slot * 0.3;
   const bw = Math.min(40, slot - gap);
@@ -1308,14 +1389,13 @@ function drawBars(root, spec, f) {
     hit.dataset.i = i;
     svg.append(hit);
   });
-  svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
   // when-online strip, sharing the bars' time scale
   let stripCross = null, chatCross = null, chatMarks = [];
   if (strip) {
     const sy = m.t + ph + 8, sh = 14;
     svg.append(sv('rect', { x: m.l, y: sy, width: pw, height: sh, rx: 3, class: 'strip-bg' }));
-    if (spec.dataStart && spec.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(spec.dataStart), sy, sh, { label: false });
+    if (spec.dataStart && spec.dataStart > from) noDataBlock(root_svg, svg, hatchId, m.l, xAt(spec.dataStart), sy, sh, { label: false });
     for (const [a, e] of strip.intervals) {
       const x0 = xAt(Math.max(a, from));
       svg.append(sv('rect', { x: x0, y: sy, width: Math.max(1.5, xAt(Math.min(e, to)) - x0), height: sh, class: 'strip-on' }));
@@ -1331,10 +1411,10 @@ function drawBars(root, spec, f) {
       for (const [label, y0, cls] of [['Online', sy, 'strip-label-on'], ['Chat', cy, 'strip-label-chat']]) {
         const t = sv('text', { x: m.l - 6, y: y0 + (y0 === sy ? sh : ch) / 2 + 3.5, 'text-anchor': 'end', class: `axis-text strip-label ${cls}` });
         t.textContent = label;
-        svg.append(t);
+        yaxis.append(t);
       }
       svg.append(sv('rect', { x: m.l, y: cy, width: pw, height: ch, rx: 3, class: 'strip-bg' }));
-      if (chatStrip.dataStart && chatStrip.dataStart > from) noDataBlock(svg, svg, hatchId, m.l, xAt(chatStrip.dataStart), cy, ch, { label: false });
+      if (chatStrip.dataStart && chatStrip.dataStart > from) noDataBlock(root_svg, svg, hatchId, m.l, xAt(chatStrip.dataStart), cy, ch, { label: false });
       const talk = [], marks = [];
       for (const ev of chatStrip.events) {
         const x = xAt(ev[1] / 1000);
@@ -1377,7 +1457,7 @@ function drawBars(root, spec, f) {
   const move = (e) => {
     if (e.target.classList.contains('chat-hit')) {
       clearHover();
-      const c = chatAt(e.clientX - svg.getBoundingClientRect().left);
+      const c = chatAt(e.clientX - root_svg.getBoundingClientRect().left);
       if (!c) return hideTip();
       chatCross.setAttribute('x1', c.x);
       chatCross.setAttribute('x2', c.x);
@@ -1394,7 +1474,7 @@ function drawBars(root, spec, f) {
     }
     if (e.target.classList.contains('strip-hit')) {
       clearHover();
-      const px = e.clientX - svg.getBoundingClientRect().left;
+      const px = e.clientX - root_svg.getBoundingClientRect().left;
       const t = Math.floor(tAt(px) / 60) * 60;
       const iv = strip.intervals.find(([a, b]) => t >= a && t < b) || null;
       stripCross.setAttribute('x1', xAt(t));
@@ -1417,21 +1497,21 @@ function drawBars(root, spec, f) {
     }
     showTip(e.clientX, e.clientY, spec.describe(i));
   };
-  svg.addEventListener('pointermove', move);
-  svg.addEventListener('pointerdown', move);
-  svg.addEventListener('pointerleave', () => { clearHover(); hideTip(); });
+  root_svg.addEventListener('pointermove', move);
+  root_svg.addEventListener('pointerdown', move);
+  root_svg.addEventListener('pointerleave', () => { clearHover(); hideTip(); });
   if (chatStrip) {
-    svg.addEventListener('click', (e) => {
+    root_svg.addEventListener('click', (e) => {
       if (!e.target.classList.contains('chat-hit')) return;
-      const c = chatAt(e.clientX - svg.getBoundingClientRect().left);
+      const c = chatAt(e.clientX - root_svg.getBoundingClientRect().left);
       if (!c) return;
       hideTip();
-      const box = svg.getBoundingClientRect();
+      const box = root_svg.getBoundingClientRect();
       chatStrip.onPick(c.ev, box.left + c.x, Number(chatCross.getAttribute('y2')) + box.top);
     });
   }
 
-  root.append(svg);
+  root.append(root_svg);
 }
 
 const CHAT_KINDS = {
@@ -2015,9 +2095,11 @@ async function renderServerDaily(animate = false, slide = 0) {
   const shown = hours ? activityTeams() : [];
   // each team's share of the bar. The bar's height is the server's player count, which can run a little past
   // the time of the players it names (it doesn't always list everyone), so the teams fill it in proportion.
+  // A team with no time to speak of that day (what would read as 0.0 hours) isn't in the bar or its tooltip at all.
+  const on = (i) => shown.filter((t) => hours[t.id][i] >= 0.05);
   const split = hours && r.buckets.map((b, i) => {
-    const whole = shown.reduce((n, t) => n + hours[t.id][i], 0);
-    return shown.map((t) => [`team-${t.id}`, whole > 0 ? hours[t.id][i] / whole : 0]);
+    const whole = on(i).reduce((n, t) => n + hours[t.id][i], 0);
+    return on(i).map((t) => [`team-${t.id}`, hours[t.id][i] / whole]);
   });
   const teamRow = (t, i) => ({ value: fmtHours(hours[t.id][i]), label: t.name, color: teamVar(t.id) });
   renderBars($('#heatmap'), {
@@ -2025,14 +2107,15 @@ async function renderServerDaily(animate = false, slide = 0) {
     fmtTick: (v) => `${v}h`, dataStart: chartStart(),
     describe: (i) => [
       { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
-      ...(vals[i] ? shown.map((t) => teamRow(t, i)) : []),
+      ...(vals[i] && hours ? on(i).map((t) => teamRow(t, i)) : []),
       { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
     ],
   }, { animate, slide });
 }
 
 // Hours each team played in every bucket ({ start, end }, in order), from everyone's sessions.
-// { team id: [hours] } for the teams the Activity page shows; null when there are none.
+// { team id: [hours] } for the teams the Activity page shows (a team grouped with another counts in
+// that one's); null when there are none.
 async function teamHoursPerBucket(buckets) {
   if (!roster.size || !buckets.length || !activityTeams().length) return null;
   const from = buckets[0].start, to = buckets[buckets.length - 1].end;
@@ -2043,7 +2126,7 @@ async function teamHoursPerBucket(buckets) {
   for (const [, name, a0, b0] of r.rows) {
     // (cut where the player changed teams, if that change only counted from then on)
     for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(stop, b0 + r.poll_seconds))) {
-      const team = out[id];
+      const team = out[activityTeam(id)];
       if (!team) continue;
       for (let i = 0; i < buckets.length && buckets[i].start < b; i++) {
         const over = Math.min(b, buckets[i].end) - Math.max(a, buckets[i].start);
@@ -2078,7 +2161,7 @@ async function teamSeconds(from, to) {
   const secs = Object.fromEntries(activityTeams().map((t) => [t.id, emptyWeek()]));
   for (const [, name, a0, b0] of r.rows) {
     for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(to, b0 + r.poll_seconds))) {
-      const team = secs[id];
+      const team = secs[activityTeam(id)];
       if (!team) continue;
       for (let t = a; t < b;) {
         const end = Math.min(b, Math.floor(t / 3600) * 3600 + 3600);
@@ -2219,8 +2302,8 @@ function teamCounts(pts, sessions, minuteData) {
   };
   const now = nowSec();
   for (const [name, a0, b0] of sessions) {
-    for (const [id, a, b] of teamSpans(name, a0, b0)) { // their team at the time
-      const team = out[id];
+    for (const [id, a, b] of teamSpans(name, a0, b0)) { // their team at the time (or the one it's grouped with)
+      const team = out[activityTeam(id)];
       if (!team) continue;
       if (minuteData) {
         for (let i = firstAt(a); i < pts.length && pts[i].t < b; i++) team[i] += 1;
@@ -3340,6 +3423,31 @@ function whisperRow(w) {
 }
 const WHISPER_ICON = ['M4.5 7V5.5a3.5 3.5 0 0 1 7 0V7', 'M3.5 7h9v6.5h-9z'];
 
+// A date floating at the top of a scrolling log while what's at its top is from another day than
+// today: the day of the last day line ([data-day]) that has scrolled up past the top.
+function dayBadge(scroller) {
+  const label = el('span', { class: 'day-badge' });
+  const wrap = el('div', { class: 'day-badge-wrap', 'aria-hidden': 'true', hidden: '' }, label);
+  scroller.prepend(wrap);
+  let queued = false;
+  const update = () => {
+    queued = false;
+    if (!scroller.isConnected || !scroller.offsetParent) return;
+    const top = scroller.getBoundingClientRect().top + 6;
+    let day = null;
+    for (const sep of scroller.querySelectorAll('[data-day]')) {
+      if (sep.getBoundingClientRect().bottom > top) break;
+      day = sep.dataset.day;
+    }
+    wrap.hidden = !day || day === todayStr();
+    if (!wrap.hidden) label.textContent = relativeDay(day, { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  const soon = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+  scroller.addEventListener('scroll', soon, { passive: true });
+  return { update: soon };
+}
+const chatDayBadge = dayBadge(chatScroll);
+
 function renderChat(fresh = new Set(), freshWhispers = new Set()) {
   const frag = document.createDocumentFragment();
   chat.lines = [];
@@ -3347,7 +3455,7 @@ function renderChat(fresh = new Set(), freshWhispers = new Set()) {
   const dayBreak = (ts) => {
     const d = hourInfo(ts / 1000).date;
     if (d === day) return;
-    frag.append(el('div', { class: 'chat-day', role: 'separator' },
+    frag.append(el('div', { class: 'chat-day', role: 'separator', 'data-day': d },
       el('span', { text: relativeDay(d, { weekday: 'long', month: 'long', day: 'numeric' }) })));
     day = d;
     group = null;
@@ -3394,6 +3502,7 @@ function renderChat(fresh = new Set(), freshWhispers = new Set()) {
   putWhispers(Infinity);
   $('#chat-list').replaceChildren(frag);
   renderChatEdge();
+  chatDayBadge.update();
 }
 
 function renderChatEdge() {
@@ -4750,14 +4859,19 @@ function factionTotals(rows, shown) {
 // One long bar of every death. With two teams it's a tug of war: left of the divider is every death
 // of the second team (the ones nobody on the other side caused, hatched; then its own team kills;
 // then the first team's kills, ending at the divider), and right of it, mirrored, every death of the
-// first. With any other number, each team gets a block of its deaths in order, the kills against it
-// in the color of the team that made them.
+// first. A team shown "in the middle" (the admin page) sits between those two sides, with no headline
+// of its own: its deaths, with its kills of the first team to their left and of the second to their
+// right. With any other number of sides, each team gets a block of its deaths in order, the kills
+// against it in the color of the team that made them. A segment that would be empty isn't there at all.
 function renderFactionBar() {
   const card = $('#cb-score-card');
   const shown = teams.filter((t) => t.bar);
   card.hidden = !roster.size || !shown.length;
   if (card.hidden || !combat.view) return;
-  card.querySelector('h2').textContent = shown.length === 2 ? `${shown[0].short} vs ${shown[1].short}` : shown.length === 1 ? shown[0].name : 'Teams';
+  const sides = shown.filter((t) => !t.middle);
+  const tug = sides.length === 2;
+  const mids = tug ? shown.filter((t) => t.middle) : [];
+  card.querySelector('h2').textContent = tug ? `${sides[0].short} vs ${sides[1].short}` : shown.length === 1 ? shown[0].name : 'Teams';
   const root = $('#cb-score');
   const t = factionTotals(combat.view.rows, shown);
   const total = shown.reduce((n, x) => n + t[x.id].deaths, 0);
@@ -4765,6 +4879,7 @@ function renderFactionBar() {
     if (!n) return null;
     const s = el('div', { class: `fb-seg ${cls}`, style: `flex-grow:${n}` }, n / total > 0.06 ? el('span', { text: String(n) }) : null);
     s.tipRows = tipRows;
+    s.n = n;
     return s;
   };
   const tipRow = (n, what, id) => [{ value: n.toLocaleString(), label: what, color: teamVar(id) }];
@@ -4773,29 +4888,48 @@ function renderFactionBar() {
   const killed = (v, k) => seg(`fb-kills fb-${k.id}`, t[v.id].by[k.id] || 0, tipRow(t[v.id].by[k.id] || 0, `${v.short} players killed by ${k.short}`, k.id));
   const key = (cls, text) => el('span', {}, el('i', { class: `fb-key ${cls}` }), text);
   const plural = (n, word) => `${word}${n === 1 ? '' : 's'}`;
-  const anyOwn = shown.some((x) => t[x.id].own);
+  const anyOwn = shown.some((x) => !mids.includes(x) && t[x.id].own);
   const legend = el('div', { class: 'legend fb-legend' },
-    ...shown.filter(() => shown.length > 1).map((x) => key(`fb-kills fb-${x.id}`, `${x.short} kills`)),
+    ...shown.filter((x) => shown.length > 1 && !mids.includes(x)).map((x) => key(`fb-kills fb-${x.id}`, `${x.short} kills`)),
+    ...mids.flatMap((x) => [key(`fb-kills fb-${x.id}`, `${x.short} kills`), key(`fb-all fb-${x.id}`, `${x.short} deaths`)]),
     ...(anyOwn ? [key('fb-own fb-mix', 'Killed by their own team')] : []),
     key('fb-other fb-mix', 'Other deaths (mobs, falls, lava…)'),
     ...(t['#outside'] ? [el('span', { class: 'muted', text: `${t['#outside']} ${plural(t['#outside'], 'death')} of players not on ${shown.length === 1 ? 'this team' : 'these teams'} not shown` })] : []));
   const none = el('span', { class: 'fb-none', text: 'No deaths in this range yet' });
+  const ends = (segs) => { segs[0]?.classList.add('fb-first'); segs.at(-1)?.classList.add('fb-last'); return segs; };
+  const count = (segs) => segs.reduce((n, s) => n + s.n, 0);
 
-  if (shown.length === 2) {
-    const [a, b] = shown; // b's deaths on the left, a's on the right
-    const segs = [other(b), own(b), killed(b, a), killed(a, b), own(a), other(a)].filter(Boolean);
-    // the divider sits where b's deaths end; the kill counts hang off it, kept on screen
-    const split = total ? (t[b.id].deaths / total) * 100 : 50;
+  if (tug) {
+    const [a, b] = sides; // b's deaths on the left, a's on the right
+    // a team in the middle: every death of its players as one segment (the tooltip says who caused them),
+    // between its kills of a and its kills of b
+    const allDeaths = (x) => {
+      const d = t[x.id];
+      const rows = [{ value: d.deaths.toLocaleString(), label: `${x.short} ${plural(d.deaths, 'death')}`, color: teamVar(x.id) }];
+      for (const k of shown) if (k !== x && d.by[k.id]) rows.push({ value: d.by[k.id].toLocaleString(), label: `killed by ${k.short}`, color: teamVar(k.id) });
+      if (d.own) rows.push({ value: d.own.toLocaleString(), label: 'killed by their own team' });
+      if (d.other) rows.push({ value: d.other.toLocaleString(), label: 'other: mobs, falls, lava…' });
+      return seg(`fb-all fb-${x.id}`, d.deaths, rows);
+    };
+    const left = [other(b), own(b), ...sides.filter((k) => k !== b).map((k) => killed(b, k))].filter(Boolean);
+    const mid = mids.flatMap((x) => [killed(a, x), allDeaths(x), killed(b, x)]).filter(Boolean);
+    const right = [killed(a, b), own(a), other(a)].filter(Boolean);
+    const segs = ends([...left, ...mid, ...right]);
+    // the dividers sit either side of the middle (one, where the left side's deaths end, when nothing's
+    // in the middle); the kill counts hang off them, kept on screen
+    const pct = (n) => (total ? (n / total) * 100 : 50);
+    const splitL = pct(count(left)), splitR = pct(count(left) + count(mid));
     const room = Math.min(42, (118 / Math.max(280, root.clientWidth || 600)) * 100);
-    const at = Math.min(100 - room, Math.max(room, split));
+    const clamp = (v) => Math.min(100 - room, Math.max(room, v));
     const kills = (x, side, style) => el('div', { class: `fb-count fb-${side} fb-${x.id}`, style },
       el('strong', { text: t[x.id].kills.toLocaleString() }), el('span', { text: `${x.short} ${plural(t[x.id].kills, 'kill')}` }));
     const end = (x) => el('div', { class: 'fb-end' },
       el('strong', { text: t[x.id].deaths.toLocaleString() }), ` ${x.short} ${plural(t[x.id].deaths, 'death')}`);
+    const divider = (at) => el('i', { class: 'fb-mid', style: `left:${at}%` });
     const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...segs,
-      total ? el('i', { class: 'fb-mid', style: `left:${split}%` }) : none);
+      ...(total ? (mid.length ? [divider(splitL), divider(splitR)] : [divider(splitL)]) : [none]));
     root.replaceChildren(
-      el('div', { class: 'fb-counts' }, kills(a, 'left', `right:${100 - at}%`), kills(b, 'right', `left:${at}%`)),
+      el('div', { class: 'fb-counts' }, kills(a, 'left', `right:${100 - clamp(splitL)}%`), kills(b, 'right', `left:${clamp(splitR)}%`)),
       bar, el('div', { class: 'fb-ends' }, end(b), end(a)), legend);
     attachCellTips(bar, '.fb-seg', (s) => s.tipRows);
   } else {
@@ -4805,7 +4939,7 @@ function renderFactionBar() {
       segs[0]?.classList.add('fb-block');
       return segs;
     });
-    const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...blocks.flat(), total ? el('i', { class: 'fb-mid', hidden: '' }) : none);
+    const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...ends(blocks.flat()), ...(total ? [] : [none]));
     const stats = el('div', { class: 'fb-teams' }, ...shown.map((x) => el('div', { class: `fb-team fb-count-n fb-${x.id}` },
       el('span', { class: `team-dot team-${x.id}` }),
       el('strong', { class: `team-${x.id}`, text: t[x.id].kills.toLocaleString() }),
@@ -5113,13 +5247,17 @@ function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
     text, time);
 }
 
+const deathDay = (d) => el('div', { class: 'chat-day dl-day', role: 'separator', 'data-day': d },
+  el('span', { text: relativeDay(d, { weekday: 'short', month: 'short', day: 'numeric' }) }));
+const deathDayBadge = dayBadge($('#dl-scroll'));
+
 function renderDeathLog(fresh = new Set()) {
   const frag = document.createDocumentFragment();
   let day = null;
   for (const m of deathLog.items.toReversed()) {
     const d = hourInfo(m.ts / 1000).date;
     if (d !== day) {
-      frag.append(el('div', { class: 'chat-day dl-day', role: 'separator' }, el('span', { text: relativeDay(d, { weekday: 'short', month: 'short', day: 'numeric' }) })));
+      frag.append(deathDay(d));
       day = d;
     }
     const row = deathRow(m);
@@ -5137,6 +5275,7 @@ function renderDeathLog(fresh = new Set()) {
   else if (!deathLog.more) edge.replaceChildren(el('div', { class: 'chat-note', text: 'This is the first death of the season.' }));
   else edge.replaceChildren();
   for (const b of $('#dl-type').children) b.setAttribute('aria-pressed', String(b.dataset.v === deathLog.type));
+  deathDayBadge.update();
 }
 
 const deathLogEnd = () => { const s = $('#dl-scroll'); s.scrollTop = s.scrollHeight; };
@@ -5337,38 +5476,103 @@ async function renderPlayerCombat(name) {
     list('Killed by most', tally(deaths.filter((d) => d.killer), (d) => d.killer), person, 'Never killed by a player'),
     list('Other deaths', tally(deaths.filter((d) => !d.killer), naturalCause), thing, 'None'));
 
+  // Their latest kills and deaths, like the chat log: the newest at the bottom, the time of each, a
+  // line where the day changes, and older ones loading above as the top comes into view.
   const recent = el('div', { class: 'pcb-recent' }, el('h3', { text: 'Latest kills and deaths' }));
+  let box = null;
   if (log?.results.length) {
-    // all of them, scrolling; older ones load as the end comes into view
-    const box = el('div', { class: 'pcb-scroll pcb-log', tabindex: '0' });
-    const add = (results) => {
-      for (const m of results) {
-        const row = deathRow(m, { when: ago(m.ts / 1000) });
+    box = el('div', { class: 'pcb-scroll pcb-log', tabindex: '0', role: 'log', 'aria-label': 'Their kills and deaths, newest at the bottom' });
+    const list = el('div');
+    box.append(list);
+    const badge = dayBadge(box);
+    let items = log.results, more = log.more, loading = false; // newest first, as they come
+    const draw = () => {
+      const frag = document.createDocumentFragment();
+      if (!more) frag.append(el('div', { class: 'chat-note pcb-log-start', text: 'Their first kill or death of the season.' }));
+      let day = null;
+      for (const m of items.toReversed()) {
+        const d = hourInfo(m.ts / 1000).date;
+        if (d !== day) { frag.append(deathDay(d)); day = d; }
+        const row = deathRow(m);
         row.classList.add(is(m.killer) ? 'is-kill' : 'is-death');
         row.querySelector('.dl-icon').title = is(m.killer) ? 'Their kill' : 'Their death';
-        box.append(row);
+        frag.append(row);
       }
+      list.replaceChildren(frag);
+      badge.update();
     };
-    add(log.results);
-    let last = log.results.at(-1), more = log.more, loading = false;
+    draw();
     box.addEventListener('scroll', async () => {
-      if (!more || loading || box.scrollTop + box.clientHeight < box.scrollHeight - 80) return;
+      if (!more || loading || box.scrollTop > 80) return;
       loading = true;
       try {
+        const last = items.at(-1);
         const next = await api(`/api/combat/log?player=${encodeURIComponent(name)}&limit=50&before=${last.ts}:${last.id}`);
-        if (next.results.length) { add(next.results); last = next.results.at(-1); }
+        const have = new Set(items.map((m) => m.id));
+        items = items.concat(next.results.filter((m) => !have.has(m.id)));
         more = next.more;
+        const fromEnd = box.scrollHeight - box.scrollTop; // what's on screen stays where it is
+        draw();
+        box.scrollTop = box.scrollHeight - fromEnd;
       } catch { /* try again on the next scroll */ } finally { loading = false; }
     }, { passive: true });
     recent.append(box);
   } else recent.append(el('div', { class: 'muted pcb-none', text: log ? 'None yet' : 'Couldn’t load the latest ones.' }));
   root.replaceChildren(stats, lists, recent);
+  if (box) box.scrollTop = box.scrollHeight; // opened on the newest
 }
 
 /* a player's egg: what it does, and (from the server mod) its level and energy */
 
 let eggInfoLoad = null;
 const loadEggInfo = () => (eggInfoLoad ??= import('/eggdata.js').then((m) => m.EGG_INFO).catch(() => { eggInfoLoad = null; return {}; }));
+
+// The egg's item tooltip word for word as the game shows it (public/eggtips.js, made from the egg
+// datapack by scripts/egg-tooltips.py), folded away under the summary until it's asked for. It opens
+// at the level and energy the player's egg has, and either level can be looked at.
+let eggTipsLoad = null;
+const loadEggTips = () => (eggTipsLoad ??= import('/eggtips.js').catch(() => { eggTipsLoad = null; return null; }));
+
+function eggGameTip(egg, live) {
+  let tier = live && live.tier >= 2 ? 2 : 1;
+  const energy = live ? Math.max(0, Math.min(5, live.energy ?? 0)) : 5;
+  let open = recall('eggFull') === '1';
+  const box = el('div', { class: 'egg-game' });
+  const toggle = el('button', { type: 'button', class: 'egg-game-toggle' });
+  const run = ([text, color, style]) => el('span', { style: `color:${color};${style & 1 ? 'font-weight:700;' : ''}${style & 2 ? 'font-style:italic' : ''}`, text });
+  const draw = async () => {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.replaceChildren(icon([open ? 'M3.5 10 8 5.5 12.5 10' : 'M3.5 6 8 10.5 12.5 6'], 12), open ? 'Hide the in-game description' : 'Show the full in-game description');
+    box.hidden = !open;
+    if (!open) return;
+    if (!box.firstChild) box.replaceChildren(el('div', { class: 'muted egg-game-note', text: 'Loading…' }));
+    const tips = await loadEggTips();
+    const lines = tips?.EGG_TIPS[egg.id]?.[tier];
+    if (!lines) {
+      box.replaceChildren(el('div', { class: 'muted egg-game-note', text: tips ? 'This egg’s in-game description isn’t in the egg datapack.' : 'Couldn’t load the in-game description.' }));
+      return;
+    }
+    const shown = lines.map((line, i) => (i === 0 && energy < 1 ? [...line, [' (Cracked)', '#AAAAAA', 0]]
+      : i === 1 && line.length ? [line[0], ...tips.EGG_TIP_ENERGY[energy]] : line));
+    const levels = el('div', { class: 'seg egg-game-level', role: 'group', 'aria-label': 'Level shown' }, ...[1, 2].map((n) => {
+      const b = el('button', { type: 'button', text: n === 1 ? 'Level I' : 'Level II', 'aria-pressed': String(n === tier) });
+      b.addEventListener('click', () => { tier = n; draw(); });
+      return b;
+    }));
+    box.replaceChildren(
+      el('div', { class: 'egg-game-head' }, levels,
+        el('span', { class: 'muted', text: live ? `theirs is Level ${live.tier >= 2 ? 'II' : 'I'}` : 'as the item shows it in game' })),
+      el('div', { class: 'item-tip egg-game-tip', tabindex: '0' },
+        ...shown.map((line, i) => el('div', { class: `it-line${i ? '' : ' it-name'}` }, ...(line.length ? line.map(run) : ['\u00a0'])))));
+  };
+  toggle.addEventListener('click', () => {
+    open = !open;
+    remember('eggFull', open ? '1' : '0');
+    draw();
+  });
+  draw();
+  return el('div', { class: 'egg-game-wrap' }, toggle, box);
+}
 
 async function renderPlayerEgg(name, gear) {
   const card = $('#p-egg-card');
@@ -5421,6 +5625,7 @@ async function renderPlayerEgg(name, gear) {
       row('Primary', info.primary),
       row('Secondary', info.secondary, { second: true })));
   }
+  body.push(eggGameTip(egg, live));
   if (live && gear.ts) body.push(el('div', { class: 'egg-asof muted', text: `Level and energy as of ${ago(gear.ts)}` }));
   else if (!live) body.push(el('div', { class: 'egg-asof muted', text: 'Level and energy show once they’ve played with the server mod (1.4.0 or newer).' }));
   $('#p-egg-body').replaceChildren(...body);
@@ -5429,7 +5634,7 @@ async function renderPlayerEgg(name, gear) {
 /* ---------- the IGN / Name switch: redraw names where they're showing ---------- */
 
 function rerenderNames() {
-  hideTip();
+  closeTip();
   closeCard();
   if (!$('#view-home').hidden && state.status) {
     renderOnlineChips();
@@ -5484,7 +5689,101 @@ function toast(text, { error = false, ms = 3000 } = {}) {
   setTimeout(() => t.remove(), ms);
 }
 
-const admin = { data: null, busy: false };
+// The page's settings (teams, the roster, each player's teams over time, hidden players, merged
+// accounts) are edited as a draft: nothing changes on the server until Save is pressed, and Reset
+// changes puts the draft back to what's saved. The rest of the page (restoring a message, counting a
+// death again, filling gaps, testing the link) acts at once.
+const admin = {
+  data: null, // as the server has it
+  draft: null, // { teams, roster, history, hidden, aliases } as edited here
+  busy: false,
+  open: new Set(), // lowercased IGNs whose teams-over-time editor is open
+  stale: false, // the draft changed without the page being redrawn (typing in a field)
+};
+
+const admCopy = (v) => JSON.parse(JSON.stringify(v));
+function adminDraftFrom(d) {
+  return {
+    teams: admCopy(d.teams || []),
+    roster: admCopy(d.roster),
+    history: admCopy(d.history || []),
+    hidden: admCopy(d.hidden),
+    aliases: admCopy(d.aliases),
+  };
+}
+
+// What Save would change, part by part: { teams: [text, …], roster, history, hidden, aliases }.
+// A part with nothing listed is left alone when saving.
+function adminChanges() {
+  const base = admin.data, draft = admin.draft;
+  const out = { teams: [], roster: [], history: [], hidden: [], aliases: [] };
+  if (!base || !draft) return out;
+  const lower = (v) => v.toLowerCase();
+  const tName = (id) => draft.teams.find((t) => t.id === id)?.name || (base.teams || []).find((t) => t.id === id)?.name || id || 'no team';
+
+  // teams
+  const baseTeams = base.teams || [];
+  for (const t of draft.teams) {
+    const was = baseTeams.find((x) => x.id === t.id);
+    if (!was) { out.teams.push(`New team: ${t.name}`); continue; }
+    const what = [];
+    if (was.name !== t.name) what.push('name');
+    if (was.short !== t.short) what.push('short name');
+    if (was.color.toLowerCase() !== t.color.toLowerCase()) what.push('color');
+    if (was.bar !== t.bar || was.middle !== t.middle) what.push('scoreboard');
+    if (was.chart !== t.chart) what.push('kills chart');
+    if (was.activity !== t.activity || (was.activity_with || null) !== (t.activity_with || null)) what.push('activity charts');
+    if (what.length) out.teams.push(`${t.name}: ${what.join(', ')}`);
+  }
+  for (const t of baseTeams) if (!draft.teams.some((x) => x.id === t.id)) out.teams.push(`Remove the team ${t.name}`);
+  const kept = (list, other) => list.filter((t) => other.some((x) => x.id === t.id)).map((t) => t.id).join(' ');
+  if (kept(baseTeams, draft.teams) !== kept(draft.teams, baseTeams)) out.teams.push('The order of the teams');
+
+  // roster
+  for (const r of draft.roster) {
+    const was = base.roster.find((x) => lower(x.ign) === lower(r.ign));
+    if (!was) { out.roster.push(`Add ${r.ign} (${tName(r.team)})`); continue; }
+    if (was.team !== r.team) out.roster.push(`${r.ign}: ${tName(was.team)} → ${tName(r.team)}`);
+    if ((was.egg || null) !== (r.egg || null)) out.roster.push(`${r.ign}: egg → ${r.egg ? eggInfo(r.egg).name : 'none'}`);
+  }
+  for (const r of base.roster) if (!draft.roster.some((x) => lower(x.ign) === lower(r.ign))) out.roster.push(`Remove ${r.ign} from the roster`);
+
+  // each player's teams over time
+  const periods = (list) => {
+    const by = new Map();
+    for (const h of list) {
+      if (!by.has(lower(h.ign))) by.set(lower(h.ign), { ign: h.ign, rows: [] });
+      by.get(lower(h.ign)).rows.push(`${h.until}:${h.team}`);
+    }
+    for (const p of by.values()) p.rows.sort();
+    return by;
+  };
+  const was = periods(base.history || []), now = periods(draft.history);
+  for (const key of new Set([...was.keys(), ...now.keys()])) {
+    if ((was.get(key)?.rows.join('|') || '') !== (now.get(key)?.rows.join('|') || '')) {
+      out.history.push(`${(now.get(key) || was.get(key)).ign}: teams over time`);
+    }
+  }
+
+  // hidden players, merged accounts
+  for (const h of draft.hidden) {
+    const b = base.hidden.find((x) => lower(x.name) === lower(h.name));
+    if (!b) out.hidden.push(`Hide ${h.name}`);
+    else if ((b.note || '') !== (h.note || '')) out.hidden.push(`${h.name}: note`);
+  }
+  for (const h of base.hidden) if (!draft.hidden.some((x) => lower(x.name) === lower(h.name))) out.hidden.push(`Show ${h.name} again`);
+  for (const a of draft.aliases) {
+    const b = base.aliases.find((x) => lower(x.alias) === lower(a.alias));
+    if (!b || lower(b.name) !== lower(a.name)) out.aliases.push(`Count ${a.alias} as ${a.name}`);
+  }
+  for (const a of base.aliases) if (!draft.aliases.some((x) => lower(x.alias) === lower(a.alias))) out.aliases.push(`Unmerge ${a.alias}`);
+  return out;
+}
+const adminDirty = () => Object.values(adminChanges()).some((list) => list.length);
+
+window.addEventListener('beforeunload', (e) => {
+  if (admin.draft && adminDirty()) e.preventDefault(); // "Leave site? Changes you made may not be saved."
+});
 
 async function showAdmin() {
   showView('admin');
@@ -5500,11 +5799,13 @@ async function showAdmin() {
     return;
   }
   if (!admin.data) root.replaceChildren(el('div', { class: 'card empty', text: 'Loading…' }));
+  const keep = admin.draft && adminDirty(); // unsaved changes from an earlier visit stay
   [admin.data] = await Promise.all([api('/api/admin'), loadStatus()]);
+  if (!keep) admin.draft = adminDraftFrom(admin.data);
   renderAdmin();
 }
 
-// Runs one change, then reloads the lists (and the roster the rest of the page uses).
+// Runs one of the things that happen at once, then reloads the lists. Unsaved changes stay as they are.
 async function adminDo(body, done) {
   if (admin.busy) return;
   admin.busy = true;
@@ -5513,7 +5814,6 @@ async function adminDo(body, done) {
     await adminPost(body);
     if (done) toast(done);
     admin.data = await api('/api/admin');
-    if (/^(roster|alias|team|history)\./.test(body.action)) await reloadRoster();
   } catch (err) {
     if (err instanceof DbLimitError) showError(err.message);
     toast(err.message, { error: true });
@@ -5522,6 +5822,44 @@ async function adminDo(body, done) {
     $('#admin').classList.remove('adm-busy');
     renderAdmin();
   }
+}
+
+// Save: every part of the draft that differs from what's saved, in one request (all of it or none).
+async function adminSave() {
+  if (admin.busy || !admin.draft) return;
+  const changes = adminChanges();
+  const d = admin.draft;
+  const body = { action: 'config.save' };
+  if (changes.teams.length) body.teams = d.teams.map(({ id, name, short, color, bar, middle, chart, activity, activity_with }) => ({ id, name, short, color, bar, middle, chart, activity, activity_with }));
+  if (changes.roster.length) body.roster = d.roster.map(({ ign, team, egg }) => ({ ign, team, egg: egg || null }));
+  if (changes.history.length) body.history = d.history.map(({ ign, team, until }) => ({ ign, team, until }));
+  if (changes.hidden.length) body.hidden = d.hidden.map(({ name, note }) => ({ name, note: note || null }));
+  if (changes.aliases.length) body.aliases = d.aliases.map(({ alias, name }) => ({ alias, name }));
+  if (Object.keys(body).length === 1) return;
+  admin.busy = true;
+  $('#admin').classList.add('adm-busy');
+  try {
+    await adminPost(body);
+    admin.data = await api('/api/admin');
+    admin.draft = adminDraftFrom(admin.data);
+    await reloadRoster();
+    toast('Saved');
+  } catch (err) {
+    if (err instanceof DbLimitError) showError(err.message);
+    toast(`Not saved: ${err.message}`, { error: true, ms: 6000 });
+  } finally {
+    admin.busy = false;
+    $('#admin').classList.remove('adm-busy');
+    renderAdmin();
+  }
+}
+
+function adminReset() {
+  if (!admin.data || admin.busy) return;
+  admin.draft = adminDraftFrom(admin.data);
+  admin.open.clear();
+  renderAdmin();
+  toast('Changes reset: back to what’s saved');
 }
 
 async function reloadRoster() {
@@ -5536,23 +5874,53 @@ async function reloadRoster() {
   syncTlTeamToggle();
 }
 
+// A field that was typed in changes the draft without redrawing the page, so the click that took the
+// focus away still lands on what it was aimed at; the page is redrawn right after that click (or at
+// once, when the focus left by keyboard).
+let admPointerDown = false;
+document.addEventListener('pointerdown', () => { admPointerDown = true; }, true);
+for (const type of ['pointerup', 'pointercancel']) {
+  document.addEventListener(type, () => {
+    admPointerDown = false;
+    if (admin.stale) setTimeout(adminRedrawIfStale, 0);
+  }, true);
+}
+function adminRedrawIfStale() {
+  if (admin.stale && !admin.busy && !$('#view-admin').hidden) renderAdmin();
+}
+function adminEdited() {
+  admin.stale = true;
+  if (!admPointerDown) setTimeout(adminRedrawIfStale, 0);
+}
+
 function renderAdmin() {
   const d = admin.data;
   if (!d) return;
-  const teamList = d.teams || [];
-  const teams = [...new Set([...teamList.map((t) => t.id), ...d.roster.map((r) => r.team)])];
+  admin.draft ??= adminDraftFrom(d);
+  admin.stale = false;
+  admPointerDown = false;
+  const draft = admin.draft;
+  const changes = adminChanges();
+  const focusKey = document.activeElement?.dataset?.fk;
+  const lower = (v) => v.toLowerCase();
+  const redraw = () => renderAdmin();
+
+  const teamList = draft.teams;
+  const teamIds = [...new Set([...teamList.map((t) => t.id), ...draft.roster.map((r) => r.team)])];
+  const teamName = (id) => teamList.find((x) => x.id === id)?.name || (id ? id[0].toUpperCase() + id.slice(1) : 'No team');
   const eggIds = Object.keys(EGGS).sort((a, b) => EGGS[a][0].localeCompare(EGGS[b][0]));
   const players = el('datalist', { id: 'adm-players' }, ...d.players.map((n) => el('option', { value: n })));
-  const select = (options, value, label) => {
-    const s = el('select', { class: 'adm-input', 'aria-label': label });
+  const select = (options, value, label, fk) => {
+    const s = el('select', { class: 'adm-input', 'aria-label': label, 'data-fk': fk });
     for (const [v, text] of options) s.append(el('option', { value: v, text }));
+    if (value != null && !options.some(([v]) => v === value)) s.append(el('option', { value, text: value })); // a team that's gone
     s.value = value ?? '';
     return s;
   };
-  const teamSelect = (v) => select(teams.map((t) => [t, teamList.find((x) => x.id === t)?.name || t[0].toUpperCase() + t.slice(1)]), v, 'Team');
-  const eggSelect = (v) => select([['', 'No egg'], ...eggIds.map((id) => [id, EGGS[id][0]])], v, 'Egg');
-  const button = (text, onClick, cls = '') => {
-    const b = el('button', { type: 'button', class: `btn ${cls}`, text });
+  const teamSelect = (v, fk) => select(teamIds.map((t) => [t, teamName(t)]), v, 'Team', fk);
+  const eggSelect = (v, fk) => select([['', 'No egg'], ...eggIds.map((id) => [id, EGGS[id][0]])], v, 'Egg', fk);
+  const button = (text, onClick, cls = '', fk = null) => {
+    const b = el('button', { type: 'button', class: `btn ${cls}`, text, 'data-fk': fk });
     b.addEventListener('click', onClick);
     return b;
   };
@@ -5561,132 +5929,273 @@ function renderAdmin() {
     el('div', { class: 'card-head' }, el('h2', { text: title }), sub ? el('span', { class: 'card-sub', text: sub }) : null), ...kids);
   const empty = (text) => el('div', { class: 'muted adm-empty', text });
   const when = (ms) => fmt(ms / 1000, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const unsaved = (text = 'not saved yet') => el('span', { class: 'adm-unsaved', text });
+  const onEnter = (input, run) => input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
 
-  // teams and eggs
-  const teamName = (id) => teamList.find((x) => x.id === id)?.name || id;
-  // whether a change of team counts from now on, or for everything the player has done (remembered here)
-  const fromNow = el('input', { type: 'checkbox' });
-  fromNow.checked = recall('admFromNow') !== '0';
-  fromNow.addEventListener('change', () => remember('admFromNow', fromNow.checked ? '1' : '0'));
-  const rows = d.roster.map((r) => {
-    const team = teamSelect(r.team), egg = eggSelect(r.egg);
-    const save = () => adminDo({ action: 'roster.set', ign: r.ign, team: team.value, egg: egg.value || null, from_now: fromNow.checked },
-      team.value !== r.team ? `${r.ign} is on ${teamName(team.value)}${fromNow.checked ? ' from now on' : ', for everything so far too'}` : `Saved ${r.ign}`);
-    team.addEventListener('change', save);
-    egg.addEventListener('change', save);
-    return el('tr', { class: `adm-team-${r.team}` },
-      el('td', { class: 'adm-ign', text: r.ign }), el('td', {}, team), el('td', {}, egg),
-      el('td', { class: 'adm-act' }, button('Remove', () => {
-        if (confirm(`Take ${r.ign} off the Season ${d.season} roster?`)) adminDo({ action: 'roster.remove', ign: r.ign }, `Removed ${r.ign}`);
-      }, 'btn-quiet')));
-  });
-  const newIgn = nameInput('IGN'), newTeam = teamSelect(teams[0]), newEgg = eggSelect('');
-  const addRow = el('tr', { class: 'adm-add' }, el('td', {}, newIgn), el('td', {}, newTeam), el('td', {}, newEgg),
-    el('td', { class: 'adm-act' }, button('Add', () => {
-      const ign = newIgn.value.trim();
-      if (ign) adminDo({ action: 'roster.set', ign, team: newTeam.value, egg: newEgg.value || null }, `Added ${ign}`);
-    }, 'btn-primary')));
-  const rosterCard = card('Teams and eggs', `Season ${d.season} · changes save right away`,
-    el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table' },
-      el('thead', {}, el('tr', {}, ...['Player', 'Team', 'Egg', ''].map((h) => el('th', { text: h })))),
-      el('tbody', {}, ...rows, addRow))),
-    el('label', { class: 'adm-check adm-from-now' }, fromNow, el('span', {},
-      el('strong', { text: 'Team changes count from now on. ' }),
-      'What a player did before stays with the team they were on then (playtime in the by-team charts, kills and deaths in Combat). Untick to move everything they’ve done to the new team.')),
-    ...((d.history || []).length ? [
-      el('div', { class: 'adm-subhead', text: 'Earlier teams' }),
-      el('ul', { class: 'adm-list adm-scroll' }, ...d.history.map((h) => el('li', {},
-        el('span', { class: 'adm-main' }, el('strong', { text: h.ign }), ` was on ${teamName(h.team)} until ${when(h.until * 1000)}`),
-        button('Forget', () => {
-          if (confirm(`Forget that ${h.ign} was on ${teamName(h.team)}? What they did then will count for the team they were on next.`)) {
-            adminDo({ action: 'history.remove', ign: h.ign, until: h.until }, 'Forgotten');
-          }
-        }, 'btn-quiet')))),
-    ] : []),
-    el('p', { class: 'muted adm-note', text: `Running npm run roster:remote again replaces these with roster-s${d.season}.json, so copy lasting changes there too.` }));
-
-  // the teams themselves: name, color, order, and how much of the dashboard each is part of
-  const onTeam = (id) => d.roster.filter((r) => r.team === id).length;
-  const check = (t, field, label, title) => {
-    const box = el('input', { type: 'checkbox' });
-    box.checked = !!t[field];
-    box.addEventListener('change', () => adminDo({ action: 'team.set', id: t.id, [field]: box.checked }, `Saved ${t.name}`));
-    return el('label', { class: 'adm-check', title }, box, label);
-  };
-  const move = (i, by) => {
-    const ids = teamList.map((t) => t.id);
-    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
-    adminDo({ action: 'team.order', ids }, 'Order saved');
-  };
+  /* ---- the teams themselves: name, color, order, and how much of the dashboard each is part of ---- */
+  const onTeam = (id) => draft.roster.filter((r) => r.team === id).length;
+  const ownSeries = (t) => t.activity && !t.activity_with;
   const arrow = (i, by, label) => {
-    const b = el('button', { type: 'button', class: 'btn btn-quiet adm-arrow', 'aria-label': label, title: label, text: by < 0 ? '↑' : '↓' });
+    const b = el('button', { type: 'button', class: 'btn btn-quiet adm-arrow', 'aria-label': label, title: label, text: by < 0 ? '↑' : '↓', 'data-fk': `team:${teamList[i].id}:${by}` });
     b.disabled = i + by < 0 || i + by >= teamList.length;
-    b.addEventListener('click', () => move(i, by));
+    b.addEventListener('click', () => {
+      [teamList[i], teamList[i + by]] = [teamList[i + by], teamList[i]];
+      redraw();
+    });
     return b;
   };
   const teamRows = teamList.map((t, i) => {
-    const name = el('input', { class: 'adm-input', type: 'text', value: t.name, maxlength: '40', 'aria-label': 'Name' });
-    const short = el('input', { class: 'adm-input adm-short', type: 'text', value: t.short, maxlength: '16', 'aria-label': 'Short name' });
-    const color = el('input', { class: 'adm-color', type: 'color', value: t.color, 'aria-label': 'Color', title: 'Color (a lighter shade of it is used on a dark page)' });
-    name.addEventListener('change', () => { if (name.value.trim()) adminDo({ action: 'team.set', id: t.id, name: name.value.trim() }, 'Saved'); });
-    short.addEventListener('change', () => { if (short.value.trim()) adminDo({ action: 'team.set', id: t.id, short: short.value.trim() }, 'Saved'); });
-    color.addEventListener('change', () => adminDo({ action: 'team.set', id: t.id, color: color.value }, `Saved ${t.name}’s color`));
+    const base = (d.teams || []).find((x) => x.id === t.id);
+    const name = el('input', { class: 'adm-input', type: 'text', value: t.name, maxlength: '40', 'aria-label': 'Name', 'data-fk': `team:${t.id}:name` });
+    const short = el('input', { class: 'adm-input adm-short', type: 'text', value: t.short, maxlength: '16', 'aria-label': 'Short name', 'data-fk': `team:${t.id}:short` });
+    const color = el('input', { class: 'adm-color', type: 'color', value: t.color, 'aria-label': 'Color', title: 'Color (a lighter shade of it is used on a dark page)', 'data-fk': `team:${t.id}:color` });
+    name.addEventListener('change', () => { if (name.value.trim()) t.name = name.value.trim().slice(0, 40); else name.value = t.name; adminEdited(); });
+    short.addEventListener('change', () => { if (short.value.trim()) t.short = short.value.trim().slice(0, 16); else short.value = t.short; adminEdited(); });
+    color.addEventListener('change', () => { t.color = color.value; redraw(); });
+    // the Combat scoreboard: a side (or block) of its own, in the middle of the two sides, or not at all
+    const bar = select([['show', 'Shown'], ['middle', 'In the middle'], ['hide', 'Hidden']], !t.bar ? 'hide' : t.middle ? 'middle' : 'show', 'Combat scoreboard', `team:${t.id}:bar`);
+    bar.title = 'The Combat page’s scoreboard bar. In the middle: between the two sides of the bar, with no kills and deaths headline of its own: its deaths, with its kills of each side beside them.';
+    bar.addEventListener('change', () => { t.bar = bar.value !== 'hide'; t.middle = bar.value === 'middle'; redraw(); });
+    const chart = el('input', { type: 'checkbox', 'data-fk': `team:${t.id}:chart` });
+    chart.checked = !!t.chart;
+    chart.addEventListener('change', () => { t.chart = chart.checked; redraw(); });
+    // the Activity page's by-team charts: a series of its own, none, or counted in another team's
+    const hosts = teamList.filter((x) => x !== t && ownSeries(x));
+    const activity = select([['show', 'Show'], ['hide', 'Hide'], ...hosts.map((x) => [`with:${x.id}`, `Group with ${x.short}`])],
+      t.activity_with ? `with:${t.activity_with}` : t.activity ? 'show' : 'hide', 'Activity charts', `team:${t.id}:activity`);
+    activity.title = 'The Activity page’s by-team charts: Players online, Daily activity and Busiest times. Group with: the team isn’t shown there, and its players’ time counts as the other team’s.';
+    activity.addEventListener('change', () => {
+      t.activity = activity.value === 'show';
+      t.activity_with = activity.value.startsWith('with:') ? activity.value.slice(5) : null;
+      // a team that was counted in this one has nowhere to count once this one has no series of its own
+      if (!ownSeries(t)) for (const x of teamList) if (x.activity_with === t.id) { x.activity_with = null; x.activity = false; }
+      redraw();
+    });
     const n = onTeam(t.id);
-    return el('tr', {},
+    const removable = !n;
+    return el('tr', { class: !base ? 'adm-row-new' : changes.teams.some((c) => c.startsWith(`${t.name}:`)) ? 'adm-row-changed' : '' },
       el('td', { class: 'adm-order' }, arrow(i, -1, 'Move up'), arrow(i, 1, 'Move down')),
       el('td', {}, color), el('td', {}, name), el('td', {}, short),
-      el('td', {}, el('div', { class: 'adm-checks' },
-        check(t, 'bar', 'Scoreboard', 'In the Combat page’s scoreboard bar'),
-        check(t, 'chart', 'Kills chart', 'Its kills as their own color in the Combat page’s chart (otherwise with the other deaths)'),
-        check(t, 'activity', 'Activity charts', 'In the Activity page’s by-team charts: Players online, Daily activity and Busiest times'))),
+      el('td', {}, bar),
+      el('td', {}, el('label', { class: 'adm-check', title: 'Its kills as their own color in the Combat page’s chart (otherwise with the other deaths)' }, chart, 'Own color')),
+      el('td', {}, activity),
       el('td', { class: 'muted adm-count', text: `${n} ${n === 1 ? 'player' : 'players'}` }),
-      el('td', { class: 'adm-act' }, n ? null : button('Remove', () => {
-        if (confirm(`Remove the team ${t.name}?`)) adminDo({ action: 'team.remove', id: t.id }, `Removed ${t.name}`);
-      }, 'btn-quiet')));
+      el('td', { class: 'adm-act' }, removable ? button('Remove', () => {
+        draft.teams = teamList.filter((x) => x !== t);
+        for (const x of draft.teams) if (x.activity_with === t.id) { x.activity_with = null; x.activity = false; }
+        redraw();
+      }, 'btn-quiet', `team:${t.id}:remove`) : null));
   });
-  const newTeamName = el('input', { class: 'adm-input', type: 'text', placeholder: 'New team’s name', maxlength: '40' });
+  const newTeamName = el('input', { class: 'adm-input', type: 'text', placeholder: 'New team’s name', maxlength: '40', 'data-fk': 'team-new:name' });
   const newTeamColor = el('input', { class: 'adm-color', type: 'color', value: '#7a7f87', 'aria-label': 'Color' });
   const addTeam = () => {
     const name = newTeamName.value.trim();
     if (!name) return;
+    if (teamList.length >= 12) return toast('At most 12 teams', { error: true });
     // its id: the first word, as lowercase letters and digits (what the roster calls it)
     let id = name.toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9-]/g, '').replace(/^[^a-z]+/, '').slice(0, 20);
     if (!id) id = 'team';
-    for (let k = 2; teamList.some((t) => t.id === id); k++) id = `${id.replace(/\d+$/, '')}${k}`.slice(0, 20);
-    adminDo({ action: 'team.set', id, name, short: name.split(/\s+/)[0].slice(0, 16), color: newTeamColor.value }, `Added ${name}`);
+    const taken = (x) => teamList.some((t) => t.id === x) || (d.teams || []).some((t) => t.id === x);
+    for (let k = 2; taken(id); k++) id = `${id.replace(/\d+$/, '').slice(0, 18)}${k}`;
+    teamList.push({ id, name: name.slice(0, 40), short: name.split(/\s+/)[0].slice(0, 16), color: newTeamColor.value, color_dark: null, bar: true, middle: false, chart: true, activity: true, activity_with: null });
+    redraw();
   };
+  onEnter(newTeamName, addTeam);
   const teamsCard = card('Teams', `Season ${d.season} · the order here is the order they’re listed and stacked in`,
     el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table adm-teams' },
-      el('thead', {}, el('tr', {}, ...['', 'Color', 'Name', 'Short', 'Shown in', '', ''].map((h) => el('th', { text: h })))),
+      el('thead', {}, el('tr', {}, ...['', 'Color', 'Name', 'Short', 'Combat scoreboard', 'Kills chart', 'Activity charts', '', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, ...teamRows))),
     el('div', { class: 'adm-form adm-team-add' }, newTeamColor, newTeamName, button('Add team', addTeam, 'btn-primary')),
-    el('p', { class: 'muted adm-note', text: 'Put players on a team in Teams and eggs below. With two teams in the scoreboard it’s the tug-of-war bar; with one, or three or more, each gets a block. A team left out of a chart still has its players everywhere else.' }));
+    el('p', { class: 'muted adm-note', text: 'Put players on a team in Teams and eggs below. Combat scoreboard: with two teams shown it’s the tug-of-war bar; with one, or three or more, each gets a block. A team “in the middle” sits between the two sides of the tug-of-war bar: its deaths, with its kills of each side to their left and right, and no headline of its own. Activity charts: “Group with” leaves the team out of the by-team charts and counts its players’ time as the other team’s. A team left out of a chart still has its players, in their color, everywhere else.' }));
 
-  // hidden players
+  /* ---- teams and eggs: the roster, and each player's teams over time ---- */
+  const now = nowSec();
+  const seasonFrom = Math.min(now - 3600, Math.max(d.lo || 0, state.dataStart || 0) || now - 30 * 86400);
+  const periodsOf = (ign) => draft.history.filter((h) => lower(h.ign) === lower(ign)).sort((a, b) => a.until - b.until);
+  const minute = (ts) => fmt(ts, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const teamColor = (id) => teamList.find((x) => x.id === id)?.color || null;
+  const dot = (id) => el('i', { class: 'adm-dot', style: teamColor(id) ? `background:${teamColor(id)}` : '' });
+
+  // from the season's start to now, in the colors of the teams they were on
+  const timeline = (r, periods) => {
+    const bar = el('div', { class: 'adm-tl', role: 'img', 'aria-label': `${r.ign}’s teams over the season` });
+    let t = seasonFrom;
+    for (const [team, end] of [...periods.map((h) => [h.team, h.until]), [r.team, now]]) {
+      const to = Math.min(now, Math.max(t, end));
+      if (to > t) {
+        bar.append(el('span', {
+          class: `adm-tl-seg${team ? '' : ' none'}`, style: `flex-grow:${to - t};${teamColor(team) ? `background:${teamColor(team)}` : ''}`,
+          title: `${teamName(team)}: ${t === seasonFrom ? 'the start of the season' : minute(t)} – ${to === now ? 'now' : minute(to)}`,
+        }));
+      }
+      t = to;
+    }
+    return bar;
+  };
+
+  const periodEditor = (r) => {
+    const periods = periodsOf(r.ign);
+    const key = lower(r.ign);
+    const rows = periods.map((h, i) => {
+      const team = select([...teamIds.map((t) => [t, teamName(t)]), ['', 'No team']], h.team, 'Team then', `per:${key}:${i}:team`);
+      team.addEventListener('change', () => { h.team = team.value; delete h.auto; redraw(); });
+      const until = el('input', { class: 'adm-input adm-time', type: 'datetime-local', value: localInput(h.until), max: localInput(now), 'aria-label': 'Until', 'data-fk': `per:${key}:${i}:until` });
+      until.addEventListener('change', () => {
+        const [date, time] = until.value.split('T');
+        const [hh, mm] = (time || '').split(':').map(Number);
+        const ts = date && Number.isFinite(hh) && Number.isFinite(mm) ? zonedTs(date, hh, mm) : NaN;
+        if (!Number.isFinite(ts) || ts <= 0) { until.value = localInput(h.until); return; }
+        if (ts > nowSec()) { until.value = localInput(h.until); return toast('That time hasn’t come yet', { error: true }); }
+        if (periods.some((x) => x !== h && x.until === ts)) { until.value = localInput(h.until); return toast(`${r.ign} already has an earlier team ending then`, { error: true }); }
+        h.until = ts;
+        delete h.auto;
+        adminEdited();
+      });
+      return el('div', { class: 'adm-period' },
+        dot(h.team), team,
+        el('span', { class: 'muted adm-period-from', text: i ? `from ${minute(periods[i - 1].until)}` : 'from the start' }),
+        el('span', { class: 'muted', text: 'until' }), until,
+        button('Remove', () => { draft.history = draft.history.filter((x) => x !== h); redraw(); }, 'btn-quiet', `per:${key}:${i}:remove`));
+    });
+    const last = periods.at(-1);
+    const add = button('Add an earlier team', () => {
+      // before everything there is so far (a day before the first change, or an hour ago), on another team than what follows
+      const first = periods[0];
+      let until = first ? Math.max(seasonFrom + 3600, first.until - 86400) : now - 3600;
+      while (periods.some((x) => x.until === until)) until -= 60;
+      const after = first ? first.team : r.team;
+      draft.history.push({ ign: r.ign, team: teamIds.find((t) => t !== after) ?? '', until: Math.floor(until / 60) * 60 });
+      redraw();
+    }, '', `per:${key}:add`);
+    return el('div', { class: 'adm-periods' },
+      timeline(r, periods),
+      ...rows,
+      el('div', { class: 'adm-period adm-period-now' }, dot(r.team), el('strong', { text: teamName(r.team) }),
+        el('span', { class: 'muted', text: last ? `from ${minute(last.until)} on · their team now (the Team column)` : 'the whole season · their team now (the Team column)' })),
+      el('div', { class: 'adm-form adm-period-add' }, add,
+        el('span', { class: 'muted adm-period-help', text: 'What they did before each time counts for the team they were on then: playtime in the by-team charts, kills and deaths in Combat. Their name shows the team they’re on now.' })));
+  };
+
+  const rosterRows = draft.roster.flatMap((r) => {
+    const key = lower(r.ign);
+    const base = d.roster.find((x) => lower(x.ign) === key);
+    const periods = periodsOf(r.ign);
+    const team = teamSelect(r.team, `ros:${key}:team`), egg = eggSelect(r.egg, `ros:${key}:egg`);
+    team.addEventListener('change', () => {
+      const was = r.team;
+      r.team = team.value;
+      // A change of team counts from now on: before now, they were on the team they had. The time can
+      // be changed, and removing that earlier team makes the new one count for everything.
+      const auto = draft.history.find((h) => h.auto && lower(h.ign) === key);
+      if (auto) {
+        if (auto.team === r.team) draft.history = draft.history.filter((h) => h !== auto); // changed back
+      } else if (base && was !== r.team) {
+        draft.history.push({ ign: r.ign, team: was, until: nowSec(), auto: true });
+        admin.open.add(key);
+      }
+      redraw();
+    });
+    egg.addEventListener('change', () => { r.egg = egg.value || null; redraw(); });
+    const open = admin.open.has(key);
+    const toggle = el('button', { type: 'button', class: `btn btn-quiet adm-periods-toggle${open ? ' open' : ''}`, 'aria-expanded': String(open), 'data-fk': `ros:${key}:periods` },
+      periods.length ? timeline(r, periods) : null,
+      el('span', { text: periods.length ? `${periods.length} earlier ${periods.length === 1 ? 'team' : 'teams'}` : 'Earlier teams' }),
+      icon([open ? 'M3.5 10 8 5.5 12.5 10' : 'M3.5 6 8 10.5 12.5 6'], 12));
+    toggle.addEventListener('click', () => { if (open) admin.open.delete(key); else admin.open.add(key); redraw(); });
+    const changed = !base ? 'adm-row-new' : changes.roster.some((c) => c.startsWith(`${r.ign}:`)) || changes.history.some((c) => c.startsWith(`${r.ign}:`)) ? 'adm-row-changed' : '';
+    const main = el('tr', { class: changed },
+      el('td', { class: 'adm-ign' }, dot(r.team), r.ign, !base ? unsaved('new') : null), el('td', {}, team), el('td', {}, egg),
+      el('td', {}, toggle),
+      el('td', { class: 'adm-act' }, button('Remove', () => {
+        draft.roster = draft.roster.filter((x) => x !== r);
+        draft.history = draft.history.filter((h) => lower(h.ign) !== key);
+        admin.open.delete(key);
+        redraw();
+      }, 'btn-quiet', `ros:${key}:remove`)));
+    return open ? [main, el('tr', { class: `adm-periods-row ${changed}` }, el('td', { colspan: '5' }, periodEditor(r)))] : [main];
+  });
+  const newIgn = nameInput('IGN'), newTeam = teamSelect(teamIds[0]), newEgg = eggSelect('');
+  const addPlayer = () => {
+    const ign = newIgn.value.trim();
+    if (!ign) return;
+    if (!/^[A-Za-z0-9_]{1,32}$/.test(ign)) return toast('An IGN is letters, digits and underscores', { error: true });
+    if (draft.roster.some((x) => lower(x.ign) === lower(ign))) return toast(`${ign} is already on the roster`, { error: true });
+    if (!newTeam.value) return toast('Add a team first', { error: true });
+    const was = d.roster.find((x) => lower(x.ign) === lower(ign)); // taken off and put back: as they were known
+    draft.roster.push({ ign: was?.ign || ign, team: newTeam.value, egg: newEgg.value || null });
+    redraw();
+  };
+  onEnter(newIgn, addPlayer);
+  const addRow = el('tr', { class: 'adm-add' }, el('td', {}, newIgn), el('td', {}, newTeam), el('td', {}, newEgg), el('td', {}),
+    el('td', { class: 'adm-act' }, button('Add', addPlayer, 'btn-primary')));
+  const rosterCard = card('Teams and eggs', `Season ${d.season}`,
+    el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table adm-roster' },
+      el('thead', {}, el('tr', {}, ...['Player', 'Team', 'Egg', 'Teams over time', ''].map((h) => el('th', { text: h })))),
+      el('tbody', {}, ...rosterRows, addRow))),
+    el('p', { class: 'adm-note adm-from-now' }, el('strong', { text: 'A team change counts from now on. ' }),
+      'Changing a player’s team keeps what they did before with the team they were on then, as an earlier team ending now. Open Teams over time to move that moment, change which team they were on in any stretch, add or remove stretches, or remove the earlier team so everything they’ve done counts for the new one.'),
+    el('p', { class: 'muted adm-note', text: `Running npm run roster:remote again replaces the players, teams and eggs with roster-s${d.season}.json, so copy lasting changes there too.` }));
+
+  /* ---- hidden players ---- */
   const hidName = nameInput('Player'), hidNote = el('input', { class: 'adm-input', type: 'text', placeholder: 'Note (optional)', maxlength: '200' });
+  const hide = () => {
+    const name = hidName.value.trim();
+    if (!name) return;
+    if (!/^[A-Za-z0-9_]{1,32}$/.test(name)) return toast('A player’s name is letters, digits and underscores', { error: true });
+    const have = draft.hidden.find((h) => lower(h.name) === lower(name));
+    if (have) have.note = hidNote.value.trim() || have.note;
+    else draft.hidden.push({ name, note: hidNote.value.trim() || null });
+    redraw();
+  };
+  onEnter(hidName, hide);
+  onEnter(hidNote, hide);
   const hiddenCard = card('Hidden players', 'left out of Activity and Combat; chat still shows them',
-    d.hidden.length ? el('ul', { class: 'adm-list' }, ...d.hidden.map((h) => el('li', {},
+    draft.hidden.length ? el('ul', { class: 'adm-list' }, ...draft.hidden.map((h) => el('li', {},
       el('span', { class: 'adm-main', text: h.name }), h.note ? el('span', { class: 'muted', text: h.note }) : null,
-      button('Show again', () => adminDo({ action: 'hidden.remove', name: h.name }, `${h.name} is shown again`), 'btn-quiet'))))
+      d.hidden.some((x) => lower(x.name) === lower(h.name)) ? null : unsaved(),
+      button('Show again', () => { draft.hidden = draft.hidden.filter((x) => x !== h); redraw(); }, 'btn-quiet', `hid:${lower(h.name)}`))))
       : empty('Nobody is hidden.'),
-    el('div', { class: 'adm-form' }, hidName, hidNote, button('Hide', () => {
-      const name = hidName.value.trim();
-      if (name) adminDo({ action: 'hidden.add', name, note: hidNote.value }, `${name} is hidden`);
-    }, 'btn-primary')));
+    el('div', { class: 'adm-form' }, hidName, hidNote, button('Hide', hide, 'btn-primary')));
 
-  // merged accounts
+  /* ---- merged accounts ---- */
   const alAlias = nameInput('Other account'), alName = nameInput('Main account');
+  const merge = () => {
+    const alias = alAlias.value.trim(), name = alName.value.trim();
+    if (!alias || !name) return;
+    if (![alias, name].every((v) => /^[A-Za-z0-9_]{1,32}$/.test(v))) return toast('A player’s name is letters, digits and underscores', { error: true });
+    if (lower(alias) === lower(name)) return toast('An account can’t be its own alias', { error: true });
+    const rest = draft.aliases.filter((a) => lower(a.alias) !== lower(alias));
+    if (rest.some((a) => lower(a.alias) === lower(name)) || rest.some((a) => lower(a.name) === lower(alias))) {
+      return toast(`${name} is itself merged into another account, or ${alias} already has accounts merged into it; merge into the main account`, { error: true, ms: 6000 });
+    }
+    draft.aliases = [...rest, { alias, name }];
+    redraw();
+  };
+  onEnter(alAlias, merge);
+  onEnter(alName, merge);
   const aliasCard = card('Merged accounts', 'another account counted as part of a player',
-    d.aliases.length ? el('ul', { class: 'adm-list' }, ...d.aliases.map((a) => el('li', {},
+    draft.aliases.length ? el('ul', { class: 'adm-list' }, ...draft.aliases.map((a) => el('li', {},
       el('span', { class: 'adm-main', text: a.alias }), el('span', { class: 'muted', text: `→ ${a.name}` }),
-      button('Unmerge', () => adminDo({ action: 'alias.remove', alias: a.alias }, `${a.alias} is separate again`), 'btn-quiet'))))
+      d.aliases.some((x) => lower(x.alias) === lower(a.alias) && lower(x.name) === lower(a.name)) ? null : unsaved(),
+      button('Unmerge', () => { draft.aliases = draft.aliases.filter((x) => x !== a); redraw(); }, 'btn-quiet', `al:${lower(a.alias)}`))))
       : empty('No merged accounts.'),
-    el('div', { class: 'adm-form' }, alAlias, el('span', { class: 'muted', text: '→' }), alName, button('Merge', () => {
-      const alias = alAlias.value.trim(), name = alName.value.trim();
-      if (alias && name) adminDo({ action: 'alias.set', alias, name }, `${alias} now counts as ${name}`);
-    }, 'btn-primary')));
+    el('div', { class: 'adm-form' }, alAlias, el('span', { class: 'muted', text: '→' }), alName, button('Merge', merge, 'btn-primary')));
 
-  // deaths left out of Combat, and deleted messages
+  /* ---- the Save bar: nothing above takes effect until it's pressed ---- */
+  const all = Object.values(changes).flat();
+  const save = button('Save', adminSave, 'btn-primary adm-save', 'adm:save');
+  const reset = button('Reset changes', adminReset, 'adm-reset', 'adm:reset');
+  save.disabled = reset.disabled = !all.length;
+  const saveBar = el('div', { class: `adm-savebar${all.length ? ' dirty' : ''}`, role: 'region', 'aria-label': 'Save changes' },
+    el('div', { class: 'adm-save-text' },
+      el('strong', { text: all.length ? `${all.length} unsaved ${all.length === 1 ? 'change' : 'changes'}` : 'No unsaved changes' }),
+      el('span', { class: 'muted', text: all.length ? 'Nothing has changed on the site yet. Save applies them all at once; Reset changes puts everything back to how it was last saved.'
+        : 'Edits above are only kept and applied once you press Save.' }),
+      all.length ? el('ul', { class: 'adm-change-list' }, ...all.slice(0, 40).map((c) => el('li', { text: c })),
+        all.length > 40 ? el('li', { class: 'muted', text: `and ${all.length - 40} more` }) : null) : null),
+    el('div', { class: 'adm-save-actions' }, reset, save));
+
+  /* ---- what happens at once: deaths left out of Combat, deleted messages, gaps, the link ---- */
   const uncountedCard = card('Left out of Combat', 'right-click a death to leave it out',
     d.uncounted.length ? el('ul', { class: 'adm-list adm-scroll' }, ...d.uncounted.map((u) => el('li', {},
       el('span', { class: 'adm-main', text: u.text }), el('span', { class: 'muted adm-when', text: when(u.ts) }),
@@ -5743,7 +6252,15 @@ function renderAdmin() {
         el('span', { class: 'adm-main', text: e.what }), el('span', { class: 'muted adm-when', text: `${secs(e.ago)} ago` }))))
         : empty('Nothing has happened to it lately.')));
 
-  $('#admin').replaceChildren(players, teamsCard, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard, linkCard);
+  $('#admin').replaceChildren(players,
+    el('div', { class: 'adm-settings' },
+      el('p', { class: 'adm-intro' }, el('strong', { text: 'Settings. ' }),
+        'Nothing you change in this part takes effect until you press Save at the bottom of it. Reset changes puts it all back to how it was last saved.'),
+      teamsCard, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), saveBar),
+    el('p', { class: 'adm-intro adm-intro-now' }, el('strong', { text: 'Done right away. ' }),
+      'These aren’t part of Save: each button here acts as soon as it’s pressed.'),
+    uncountedCard, deletedCard, gapsCard, linkCard);
+  if (focusKey) $('#admin').querySelector(`[data-fk="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
 // Right-click a chat line or a death, as an admin: delete it, or leave a death out of Combat.
@@ -5806,13 +6323,12 @@ async function adminRemove(id, action) {
   for (const n of document.querySelectorAll(`.pcb-recent [data-chat-id="${id}"]`)) n.remove();
   if (!$('#view-combat').hidden) { renderDeathLog(); renderCombat(); }
   else if (state.playerData && !$('#view-player').hidden) renderPlayerCombat(state.playerData.name).catch(() => {});
-  admin.data = null;
 }
 
 /* ---------- routing & refresh ---------- */
 
 async function route() {
-  hideTip();
+  closeTip();
   showError('');
   const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
   try {
@@ -6034,11 +6550,11 @@ const tlCtl = rangeControl($('#tl-ctl'), {
 });
 const dailyCtl = rangeControl($('#daily-ctl'), {
   presets: DAILY_PRESETS, picker: 'date', fromPicker: pickDays(DAILY_PRESETS),
-  onChange: (w, dir) => renderServerDaily(false, dir).catch((e) => showError(e.message)),
+  onChange: (w, dir, prev) => renderServerDaily(false, pageShift(prev, w, dir)).catch((e) => showError(e.message)),
 });
 const pCtl = rangeControl($('#pa-ctl'), {
   presets: PLAYER_PRESETS, picker: 'datetime', fromPicker: pickPlayerRange,
-  onChange: (w, dir) => renderPlayerActivity(false, dir),
+  onChange: (w, dir, prev) => renderPlayerActivity(false, pageShift(prev, w, dir)),
 });
 tlCtl.set(presetWindow(TL_PRESETS[1]));
 dailyCtl.set(presetWindow(DAILY_PRESETS[0]));
@@ -6080,7 +6596,15 @@ pinchZoom($('#heatmap'), {
   render: () => renderServerDaily().catch((e) => showError(e.message)),
 });
 pinchZoom($('#p-heatmap'), {
-  ctl: pCtl, toWindow: pickPlayerRange, min: 2 * 3600, max: 365 * 86400,
+  ctl: pCtl, min: 2 * 3600, max: 365 * 86400,
+  // Hourly ranges keep a whole number of hours as they're moved or stretched (snapping each end
+  // outward on its own would add an hour to a range that was only scrolled sideways).
+  toWindow: (from, to) => {
+    if (to - from > 48 * 3600) return pickPlayerRange(from, to);
+    const n = Math.max(1, Math.round((to - from) / 3600));
+    const end = to >= nowSec() - 60 ? currentHourEnd() : Math.round(from / 3600) * 3600 + n * 3600;
+    return pickPlayerRange(end - n * 3600, end);
+  },
   render: () => renderPlayerActivity(),
 });
 

@@ -73,25 +73,43 @@ log is left empty.
 
 ## Admin page
 
-`#/admin` (linked in the footer for admins only) edits the season's teams and eggs, hidden players and merged
-accounts, and lists the deaths left out of Combat and the deleted chat messages so either can be undone. Admins can
-also right-click a chat line or a death: **Delete message** takes it out of the chat log (and Combat), and
-**Don't count in combat** leaves a death out of Combat while the chat log keeps it. Shift + right-click opens the
-browser's own menu. Deleted lines are kept in `deleted_chat` and come back with Restore; a copy the mod resends
-stays out.
+`#/admin` (linked in the footer for admins only) has two parts.
 
-**Teams** (table `teams`): the page's Teams card makes new teams, renames them, picks each one's color (a dark page
+**Settings** (the teams, the season's players with their teams and eggs, each player's teams over time, hidden
+players and merged accounts) are a draft: nothing changes on the site until **Save** is pressed, in the bar at the
+bottom of that part, which lists what's about to change. **Reset changes** puts everything back to how it was last
+saved. Save applies all of it at once, or none of it if something's wrong. Unsaved changes stay while you look at
+other pages, and the browser warns before the tab is closed with some.
+
+**Done right away**: the deaths left out of Combat and the deleted chat messages (so either can be undone), filling
+gaps, and testing the web chat connection. Admins can also right-click a chat line or a death: **Delete message**
+takes it out of the chat log (and Combat), and **Don't count in combat** leaves a death out of Combat while the chat
+log keeps it. Shift + right-click opens the browser's own menu. Deleted lines are kept in `deleted_chat` and come
+back with Restore; a copy the mod resends stays out.
+
+**Teams** (table `teams`): the Teams card makes new teams, renames them, picks each one's color (a dark page
 uses a lighter shade of it), and orders them with the arrows; that order is the one they're listed and stacked in
-everywhere. Three checkboxes per team say how much of the dashboard it's part of: the Combat **scoreboard** (two teams
-there make the tug-of-war bar; one, or three or more, get a block each), the Combat **kills chart** (its kills as their
-own color, otherwise with the other deaths), and the **Activity charts** (Players online by team and share, Daily
-activity's stacks, Busiest times). A team left out of a chart still has its players, in their color, everywhere else.
-A team can be removed once nobody's on it.
+everywhere. Three settings per team say how much of the dashboard it's part of:
 
-Moving a player to another team (Teams and eggs) either **counts from now on**, the default, or for everything
-they've done. From now on, what they did before stays with the team they were on then: their playtime in the by-team
-charts and their kills and deaths in Combat (table `team_history`; names show the team they're on now). Earlier teams
-are listed under the roster, where each can be forgotten. The web chat connection card shows the server mod's link and tests it.
+- **Combat scoreboard**: *Shown* (two teams shown make the tug-of-war bar; one, or three or more, get a block
+  each), *In the middle*, or *Hidden*. A team in the middle sits between the two sides of the tug-of-war bar with no
+  kills and deaths headline of its own: its deaths as one segment, its kills of the first side to their left and of
+  the second side to their right. Segments that would be empty aren't drawn, so with nothing in the middle the bar
+  is the plain two-team one.
+- **Kills chart**: its kills as their own color in the Combat chart, otherwise with the other deaths.
+- **Activity charts** (Players online by team and share, Daily activity's stacks, Busiest times): *Show*, *Hide*, or
+  *Group with* another team: the team has no series of its own there and its players' time counts as the other
+  team's (`teams.activity_with`). In Daily activity a team with no time that day isn't in the bar or its tooltip.
+
+A team left out of a chart still has its players, in their color, everywhere else. A team can be removed once
+nobody's on it.
+
+**Teams over time** (table `team_history`): changing a player's team counts from now on. What they did before stays
+with the team they were on then: their playtime in the by-team charts and their kills and deaths in Combat (names
+show the team they're on now). Each player's row opens an editor of their earlier teams, oldest first, with a bar of
+the season in the teams' colors: move the moment a stretch ended (to the minute), change which team (or no team)
+they were on in it, add a stretch, or remove one. Removing the earlier team makes the new one count for everything.
+The web chat connection card shows the server mod's link and tests it.
 
 Admins are the sign-in emails in the `ADMIN_EMAIL` secret (comma-separated), so they stay out of this repository:
 
@@ -99,7 +117,7 @@ Admins are the sign-in emails in the `ADMIN_EMAIL` secret (comma-separated), so 
 npx wrangler secret put ADMIN_EMAIL
 ```
 
-For local development, add `ADMIN_EMAIL=` with your `DEV_EMAIL` to `.dev.vars`. Roster changes made on the page are
+For local development, add `ADMIN_EMAIL=` with your `DEV_EMAIL` to `.dev.vars`. Players, teams and eggs changed on the page are
 replaced the next time `npm run roster:remote` runs, so copy lasting ones into the roster file (it also holds the real
 names and chat emails, which the page doesn't show).
 
@@ -233,7 +251,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
     totals as lines.
   - **Leaderboard**: kills, deaths and K/D (kills ÷ deaths) for everyone on the roster. Click a heading to sort by it,
     again to reverse; the sorted column is highlighted and the bar under each name follows it. The sort is remembered.
-  - **Death log** (beside the page, foldable): every death message, newest first, as the game worded it, with a bar in
+  - **Death log** (beside the page, foldable): every death message, newest at the bottom, as the game worded it, with a bar in
     the killer's faction color; All / PvP / Other filters it, a row's time opens the chat log at that moment, and new
     deaths slide in as they're logged.
   A kill is a death the game credits to another player (being knocked off a cliff counts). Deaths logged before mod
@@ -241,7 +259,12 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Player pages: egg and combat**: an **egg card** (what the player's Egg SMP egg does: passive, primary, secondary
   and their cost, from `public/eggdata.js`, plus its level and energy as the mod last reported them) and a **combat
   card** (kills, deaths, K/D and where that ranks, who they kill most, who kills them most, what else kills them, and
-  their latest kills and deaths).
+  their latest kills and deaths: like the chat log, the newest at the bottom with its time, a line where the day
+  changes, and older ones loading as you scroll up).
+  **Show the full in-game description** on the egg card unfolds the egg's item tooltip word for word as the game
+  shows it, at the player's level and energy (either level can be looked at). It comes from `public/eggtips.js`,
+  which `python3 scripts/egg-tooltips.py [path to the Egg SMP datapack]` writes from the datapack's own tooltip
+  reader (`tools/generate_tooltips.py`); run it again when the datapack changes.
 - **3D player model**: player pages show the player in 3D with their skin, the armor they last wore (trims, leather dye
   and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, axe, pickaxe,
   shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
@@ -265,16 +288,22 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
   defaults to the last 24 hours, and stepping back with ‹ pages through whole days (midnight to midnight).
+  A step scrolls the chart by exactly the time it moved, with the y-axis held still, also when that's less than a
+  whole range (stepping forward to now after scrolling back a little).
   The leaderboard defaults to 1d (today since midnight; ‹ › steps a day at a time), and the other
   charts to the smallest preset that covers all the data so far. Anything before tracking began is hatched out.
 - **Pinch to zoom**: on Players online, Daily activity and a player's Activity chart, a trackpad pinch (or Ctrl+scroll,
-  or two fingers on a phone) zooms the time range in or out around the point under the fingers.
+  or two fingers on a phone) zooms the time range in or out around the point under the fingers, and scrolling
+  sideways moves it along.
+- **Tooltips**: clicking what a tooltip is for (a bar, a cell, an item named in chat, an advancement) keeps it
+  open where it is, so it can be read, scrolled and selected; a click anywhere else, or Escape, closes it.
 - **Leaderboard**: keeps the height of the most rows seen for the current range size, so paging doesn't
   shift the page, and rows glide to their new ranks.
 - **Live updates**: about 20 seconds after each minute's check, the page refreshes in place (only while the
   tab is visible), with animations that are skipped when the system's reduce-motion setting is on.
 - **Chat log**: the server's chat, newest at the bottom, loading older messages as you scroll up and new ones every
-  10 seconds. Players whose login email is on the roster can **send chat** from the box under the log: it shows in game
+  10 seconds. Scrolled back to another day, that day's date floats at the top of the log (the Death log and a
+  player's latest kills and deaths do the same). Players whose login email is on the roster can **send chat** from the box under the log: it shows in game
   as `[Web] <name> message` (needs mod 1.3.0 and the server online; the box says when it can't send) and comes back into
   the log with a "web" tag. At most one message every 1.5 seconds and 8 per 30 seconds per player, 256 characters each.
   Above it, a players online graph follows the chat. Its cursor marks the time of the bottom message on screen,

@@ -402,7 +402,11 @@ tr.link:hover td { background: var(--hover); }
   padding: 8px 10px;
   font-size: 13px;
   max-width: 260px;
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
 }
+/* clicked to keep it: it takes the pointer, scrolls if it's taller than the window, and its text can be selected */
+.tooltip.pinned { pointer-events: auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; outline: 2px solid var(--series-1); outline-offset: 1px; }
 .tooltip.tip-item { background: #150a1f; box-shadow: 0 0 0 1px #100010, inset 0 0 0 2px #2f0a6b, 0 6px 20px rgba(0, 0, 0, 0.3); border-radius: 4px; padding: 8px 11px; max-width: 320px; }
 .item-tip { color: #fff; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; }
 .item-tip .it-name { font-weight: 650; margin-bottom: 2px; }
@@ -808,6 +812,11 @@ body.chat-mode .foot { display: none; }
 }
 .chat-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--series-1); }
 
+/* the date of what's at the top of a log, floating there while it isn't today's */
+.day-badge-wrap { position: sticky; top: 8px; z-index: 3; height: 0; display: flex; justify-content: center; pointer-events: none; }
+.day-badge-wrap[hidden] { display: none; }
+.day-badge { align-self: flex-start; padding: 3px 11px; border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  box-shadow: 0 0 0 1px var(--ring), 0 3px 10px rgb(0 0 0 / 0.12); }
 .chat-day { display: flex; align-items: center; gap: 12px; margin: 16px 20px 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .chat-day::before, .chat-day::after { content: ''; flex: 1; height: 1px; background: var(--grid); }
 .chat-note { padding: 14px 16px 0; text-align: center; font-size: 12px; color: var(--muted); }
@@ -1416,9 +1425,9 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
   transition: filter 0.12s;
 }
 .fb-seg:hover { filter: brightness(1.1) saturate(1.1); }
-.fb-seg:first-child { border-radius: 8px 0 0 8px; }
-.fb-seg:nth-last-child(2) { border-radius: 0 8px 8px 0; }
-.fb-seg:first-child:nth-last-child(2) { border-radius: 8px; }
+.fb-seg.fb-first { border-radius: 8px 0 0 8px; }
+.fb-seg.fb-last { border-radius: 0 8px 8px 0; }
+.fb-seg.fb-first.fb-last { border-radius: 8px; }
 .fb-kills.fb-red { background: var(--team-red); }
 .fb-kills.fb-blue { background: var(--team-blue); }
 /* deaths nobody on the other side caused: the faction's color, greyed and hatched */
@@ -1436,6 +1445,8 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 .fb-own {
   background-image: repeating-linear-gradient(45deg, var(--c) 0 3px, color-mix(in oklab, var(--c) 45%, var(--surface)) 3px 6px);
 }
+/* a team in the middle of the bar: every death of its players, in a pale shade of its color */
+.fb-all { background: color-mix(in oklab, var(--c) 38%, var(--surface-2)); color: var(--ink); }
 .fb-mid { position: absolute; top: -6px; bottom: -6px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 2px var(--surface); }
 .fb-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 13px; color: var(--ink-2); }
 .fb-ends strong { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -1547,6 +1558,17 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 .egg-cost { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; white-space: nowrap; }
 .egg-row.locked .egg-row-text { opacity: 0.55; }
 .egg-none { margin-top: 12px; font-size: 13px; }
+/* the egg's tooltip as the game shows it, folded under the summary */
+.egg-game-wrap { margin-top: 12px; }
+.egg-game-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 8px; border: 0; border-radius: 7px; background: var(--surface-2); color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.egg-game-toggle:hover { color: var(--ink); background: var(--grid); }
+.egg-game { margin-top: 10px; }
+.egg-game[hidden] { display: none; }
+.egg-game-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+.egg-game-note { font-size: 12.5px; }
+.egg-game-tip { max-height: 440px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 10px 12px; border-radius: 4px; background: #150a1f;
+  box-shadow: inset 0 0 0 1px #100010, inset 0 0 0 3px #2f0a6b; font-size: 12px; line-height: 1.5; outline: none; }
+.egg-game-tip:focus-visible { box-shadow: inset 0 0 0 1px #100010, inset 0 0 0 3px #7a4be0; }
 .egg-asof { margin-top: 12px; font-size: 11.5px; }
 
 .pcb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -1653,7 +1675,9 @@ a.pcb-who:hover { text-decoration: underline; }
 /* ---------- a player's combat lists: all of them, scrolling past their space ---------- */
 .pcb-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .pcb-list .pcb-scroll { max-height: 112px; padding-right: 4px; }
-.pcb-log { max-height: 260px; padding-right: 4px; }
+.pcb-log { position: relative; max-height: 260px; padding-right: 4px; }
+.pcb-log .dl-day { margin: 10px 4px 4px; }
+.pcb-log-start { padding: 2px 0 6px; font-size: 12px; }
 
 /* ---------- admin ---------- */
 .adm-title { margin: 16px 0 4px; }
@@ -1714,7 +1738,45 @@ a.pcb-who:hover { text-decoration: underline; }
 .adm-count { font-size: 12px; }
 .adm-team-add { margin-top: 10px; }
 .adm-team-add .adm-input { flex: 0 1 240px; }
-.adm-from-now { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 13px; white-space: normal; color: var(--ink-2); line-height: 1.45; }
-.adm-from-now input { margin-top: 3px; flex: none; }
+.adm-teams select.adm-input { width: auto; max-width: 170px; }
+
+/* admin: settings are a draft until Save */
+.adm-intro { margin: 10px 2px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+.adm-intro strong { color: var(--ink); }
+.adm-intro-now { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--grid); }
+.adm-row-changed > td:first-child, .adm-row-new > td:first-child { box-shadow: inset 3px 0 0 var(--warning); padding-left: 9px; }
+.adm-unsaved { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--ink); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.adm-savebar { position: sticky; bottom: 10px; z-index: 20; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px 18px; flex-wrap: wrap;
+  margin: 12px 0; padding: 12px 16px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--ring), 0 8px 24px rgb(0 0 0 / 0.14); }
+.adm-savebar.dirty { box-shadow: 0 0 0 2px var(--warning), 0 8px 24px rgb(0 0 0 / 0.18); }
+.adm-save-text { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.4; }
+.adm-save-text strong { font-size: 14px; }
+.adm-change-list { margin: 6px 0 0; padding: 0 0 0 18px; max-height: 96px; overflow-y: auto; scrollbar-width: thin; font-size: 12.5px; color: var(--ink-2); }
+.adm-save-actions { display: flex; gap: 8px; }
+.adm-save-actions .btn { padding: 8px 16px; font-size: 14px; }
+.adm-save-actions .btn:disabled { opacity: 0.45; cursor: default; }
+
+/* admin: a player's teams over time */
+.adm-dot { display: inline-block; flex: none; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%; background: var(--grid); vertical-align: 0; }
+.adm-roster .adm-ign { color: var(--ink); }
+.adm-periods-toggle { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 12.5px; }
+.adm-periods-toggle.open { background: var(--surface-2); color: var(--ink); }
+.adm-periods-toggle .adm-tl { width: 72px; height: 8px; }
+.adm-chev { font-size: 10px; }
+.adm-tl { display: flex; gap: 1px; height: 12px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.adm-tl-seg { flex: 1 1 0; min-width: 2px; background: var(--muted); }
+.adm-tl-seg.none { background: repeating-linear-gradient(135deg, var(--grid) 0 4px, transparent 4px 7px); }
+.adm-table tr.adm-periods-row > td { border-top: 0; padding: 0 0 12px; }
+.adm-periods { display: grid; gap: 6px; margin-left: 16px; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); }
+.adm-periods > .adm-tl { margin-bottom: 4px; }
+.adm-period { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; }
+.adm-period .adm-dot { margin-right: 0; }
+.adm-period select.adm-input { width: auto; max-width: 180px; }
+.adm-period-from { min-width: 150px; }
+.adm-table .adm-time { width: auto; max-width: none; font-variant-numeric: tabular-nums; }
+.adm-period-now { min-height: 30px; }
+.adm-period-add { margin-top: 4px; align-items: flex-start; }
+.adm-period-help { flex: 1 1 260px; font-size: 12px; line-height: 1.4; }
+.adm-from-now { color: var(--ink-2); line-height: 1.45; font-size: 13px; margin-top: 12px; }
 .adm-from-now strong { color: var(--ink); }
 .adm-subhead { margin: 14px 0 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }

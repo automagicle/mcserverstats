@@ -15,6 +15,7 @@ import { json, UUID_RE } from './util.js';
 import { adminAction, adminState, isAdmin, me } from './admin.js';
 import { cached } from './cache.js';
 import { presence } from './presence.js';
+import { teamRows } from './teams.js';
 
 const DAY = 86400;
 
@@ -35,19 +36,8 @@ async function roster(db, season) {
   return results;
 }
 
-// The season's teams in their order (migrations/0016_teams.sql); [] before that table exists.
-export async function teams(db, season) {
-  if (!season.n) return [];
-  try {
-    const { results } = await db.prepare(
-      `SELECT id, name, short, color, color_dark, show_bar AS bar, show_chart AS chart, show_activity AS activity
-       FROM teams WHERE season = ? ORDER BY sort, id`
-    ).bind(season.n).all();
-    return results.map((t) => ({ ...t, bar: !!t.bar, chart: !!t.chart, activity: !!t.activity }));
-  } catch {
-    return [];
-  }
-}
+// The season's teams in their order (src/teams.js); [] before that table exists.
+export const teams = (db, season) => (season.n ? teamRows(db, season.n) : []);
 
 // Players' earlier teams (migrations/0017_team_history.sql): [{ ign, until, team }], oldest first.
 export async function teamHistory(db, season) {
