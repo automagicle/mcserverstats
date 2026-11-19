@@ -12,6 +12,8 @@ import { linkProbe, linkStatus } from './link.js';
 const IGN_RE = /^[A-Za-z0-9_]{1,32}$/;
 const TEAM_RE = /^[a-z][a-z0-9-]{0,19}$/;
 const EGG_RE = /^[a-z][a-z0-9_]{0,23}$/;
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
+const MAX_TEAMS = 12;
 
 export const isAdmin = (env, who) => {
   const email = who?.email?.toLowerCase();
@@ -24,7 +26,7 @@ export const me = (env, who) => json({ email: who.email, admin: isAdmin(env, who
 export async function adminState(env, season) {
   if (!season.n) return json({ error: 'pick a season' }, 400);
   const db = env.DB;
-  const [roster, hidden, aliases, players, uncounted, deleted] = await db.batch([
+  const [roster, hidden, aliases, players, uncounted, deleted, teams] = await db.batch([
     db.prepare('SELECT ign, team, egg FROM roster WHERE season = ? ORDER BY team, ign COLLATE NOCASE').bind(season.n),
     db.prepare('SELECT name, note FROM hidden_players ORDER BY name COLLATE NOCASE'),
     db.prepare('SELECT alias, name FROM player_aliases ORDER BY name COLLATE NOCASE, alias COLLATE NOCASE'),
@@ -34,10 +36,13 @@ export async function adminState(env, season) {
     db.prepare(`SELECT event_id, ts_ms AS ts, deleted_at, json_extract(chat, '$.kind') AS kind,
                 json_extract(chat, '$.name') AS name, json_extract(chat, '$.text') AS text, death IS NOT NULL AS death
                 FROM deleted_chat ORDER BY deleted_at DESC LIMIT 500`),
+    db.prepare(`SELECT id, name, short, color, color_dark, show_bar AS bar, show_chart AS chart, show_activity AS activity
+                FROM teams WHERE season = ? ORDER BY sort, id`).bind(season.n),
   ]);
   return json({
     season: season.n,
     roster: roster.results,
+    teams: teams.results.map((t) => ({ ...t, bar: !!t.bar, chart: !!t.chart, activity: !!t.activity })),
     hidden: hidden.results,
     aliases: aliases.results,
     players: players.results.map((r) => r.name),
@@ -64,6 +69,44 @@ const ACTIONS = {
       `INSERT INTO roster (season, ign, name, team, egg) VALUES (?1, ?2, ?2, ?3, ?4)
        ON CONFLICT(season, ign) DO UPDATE SET team = excluded.team, egg = excluded.egg`
     ).bind(season.n, name, b.team, egg).run();
+  },
+  // a team: made if it's new (at the end of the order), otherwise changed. Only what's given changes.
+  // { id, name?, short?, color?, bar?, chart?, activity? }; a new color drops the dark-page one, which is
+  // then worked out from it.
+  async 'team.set'(db, b, season) {
+    if (typeof b.id !== 'string' || !TEAM_RE.test(b.id)) return bad('a team needs an id: lowercase letters, digits and dashes, starting with a letter');
+    const text = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+    if (b.color != null && (typeof b.color !== 'string' || !COLOR_RE.test(b.color))) return bad('bad color');
+    const flag = (v) => (typeof v === 'boolean' ? (v ? 1 : 0) : null);
+    const had = await db.prepare('SELECT 1 FROM teams WHERE season = ? AND id = ?').bind(season.n, b.id).first();
+    if (!had) {
+      const { n, last } = await db.prepare('SELECT COUNT(*) AS n, MAX(sort) AS last FROM teams WHERE season = ?').bind(season.n).first();
+      if (n >= MAX_TEAMS) return bad(`at most ${MAX_TEAMS} teams`);
+      const name = text(b.name, 40) || b.id[0].toUpperCase() + b.id.slice(1);
+      await db.prepare(
+        `INSERT INTO teams (season, id, name, short, color, sort, show_bar, show_chart, show_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(season.n, b.id, name, text(b.short, 16) || name.split(/\s+/)[0].slice(0, 16), (b.color || '#7a7f87').toLowerCase(),
+        (last ?? -1) + 1, flag(b.bar) ?? 1, flag(b.chart) ?? 1, flag(b.activity) ?? 1).run();
+      return;
+    }
+    await db.prepare(
+      `UPDATE teams SET name = COALESCE(?3, name), short = COALESCE(?4, short),
+         color_dark = CASE WHEN ?5 IS NULL OR ?5 = color THEN color_dark ELSE NULL END, color = COALESCE(?5, color),
+         show_bar = COALESCE(?6, show_bar), show_chart = COALESCE(?7, show_chart), show_activity = COALESCE(?8, show_activity)
+       WHERE season = ?1 AND id = ?2`
+    ).bind(season.n, b.id, text(b.name, 40), text(b.short, 16), b.color ? b.color.toLowerCase() : null, flag(b.bar), flag(b.chart), flag(b.activity)).run();
+  },
+  // the order teams are listed and stacked in: { ids: [every team's id, in order] }
+  async 'team.order'(db, b, season) {
+    if (!Array.isArray(b.ids) || b.ids.length > MAX_TEAMS || !b.ids.every((id) => typeof id === 'string' && TEAM_RE.test(id))) return bad('bad order');
+    await db.batch(b.ids.map((id, i) => db.prepare('UPDATE teams SET sort = ? WHERE season = ? AND id = ?').bind(i, season.n, id)));
+  },
+  // only once nobody's on it
+  async 'team.remove'(db, b, season) {
+    if (typeof b.id !== 'string' || !TEAM_RE.test(b.id)) return bad('bad team');
+    const on = await db.prepare('SELECT COUNT(*) AS n FROM roster WHERE season = ? AND team = ?').bind(season.n, b.id).first();
+    if (on.n) return bad(`${on.n} player${on.n === 1 ? ' is' : 's are'} still on that team; move them first`);
+    await db.prepare('DELETE FROM teams WHERE season = ? AND id = ?').bind(season.n, b.id).run();
   },
   async 'roster.remove'(db, b, season) {
     const name = ign(b.ign);
@@ -170,7 +213,7 @@ export async function adminAction(request, env, url, season) {
   }
   const run = body && Object.hasOwn(ACTIONS, body.action) ? ACTIONS[body.action] : null;
   if (!run) return bad('unknown action');
-  if (body.action.startsWith('roster.') && !season.n) return bad('pick a season');
+  if (/^(roster|team)\./.test(body.action) && !season.n) return bad('pick a season');
   const out = (await run(env.DB, body, season, env)) || json({ ok: true });
   if (out.ok) await clearCache(env.DB); // season totals may have changed
   if (out.ok && /^(hidden|alias)\./.test(body.action)) await tellPresence(env, '/invalidate'); // the live badges

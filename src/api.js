@@ -35,6 +35,20 @@ async function roster(db, season) {
   return results;
 }
 
+// The season's teams in their order (migrations/0016_teams.sql); [] before that table exists.
+export async function teams(db, season) {
+  if (!season.n) return [];
+  try {
+    const { results } = await db.prepare(
+      `SELECT id, name, short, color, color_dark, show_bar AS bar, show_chart AS chart, show_activity AS activity
+       FROM teams WHERE season = ? ORDER BY sort, id`
+    ).bind(season.n).all();
+    return results.map((t) => ({ ...t, bar: !!t.bar, chart: !!t.chart, activity: !!t.activity }));
+  } catch {
+    return [];
+  }
+}
+
 // Other accounts' names and the player each belongs to (src/aliases.js), so the page can give them the same team.
 async function aliases(db) {
   return (await db.prepare('SELECT alias, name FROM player_aliases').all()).results;
@@ -167,7 +181,9 @@ export async function handleApi(request, env, url) {
     });
   }
 
-  if (path === '/api/roster') return json({ players: await roster(env.DB, season), aliases: await aliases(env.DB) });
+  if (path === '/api/roster') {
+    return json({ players: await roster(env.DB, season), aliases: await aliases(env.DB), teams: await teams(env.DB, season) });
+  }
 
   if (path === '/api/leaderboard') {
     const [from, to] = clampRange(season, ...range(url, 36500));

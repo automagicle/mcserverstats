@@ -80,6 +80,14 @@ also right-click a chat line or a death: **Delete message** takes it out of the 
 browser's own menu. Deleted lines are kept in `deleted_chat` and come back with Restore; a copy the mod resends
 stays out.
 
+**Teams** (table `teams`): the page's Teams card makes new teams, renames them, picks each one's color (a dark page
+uses a lighter shade of it), and orders them with the arrows; that order is the one they're listed and stacked in
+everywhere. Three checkboxes per team say how much of the dashboard it's part of: the Combat **scoreboard** (two teams
+there make the tug-of-war bar; one, or three or more, get a block each), the Combat **kills chart** (its kills as their
+own color, otherwise with the other deaths), and the **Activity charts** (Players online by team and share, Daily
+activity's stacks, Busiest times). A team left out of a chart still has its players, in their color, everywhere else.
+A team can be removed once nobody's on it. The web chat connection card shows the server mod's link and tests it.
+
 Admins are the sign-in emails in the `ADMIN_EMAIL` secret (comma-separated), so they stay out of this repository:
 
 ```bash

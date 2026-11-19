@@ -925,8 +925,7 @@ a.msg-name:hover { text-decoration: underline; }
 .chat-online-empty { flex: 1; font-size: 13px; }
 .chat-online-close { flex: none; width: 28px; height: 28px; margin-left: auto; }
 .chat-online.collapsed { display: contents; }
-/* room under the last message so the floating count never covers it */
-.chat-card:has(.chat-online.collapsed) .chat-scroll { padding-bottom: 50px; }
+/* folded, the count floats over the log's corner and takes no room of its own */
 .chat-online.collapsed > :not(.online-pill) { display: none; }
 .online-pill {
   position: absolute;
@@ -1393,10 +1392,14 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 .fb-counts { position: relative; height: 50px; }
 .fb-count { position: absolute; bottom: 8px; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; font-size: 13px; color: var(--ink-2); }
 .fb-count strong { font-size: 28px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-.fb-count.fb-red { padding-right: 10px; flex-direction: row-reverse; }
-.fb-count.fb-blue { padding-left: 10px; }
-.fb-count.fb-red strong { color: var(--team-red); }
-.fb-count.fb-blue strong { color: var(--team-blue); }
+.fb-count.fb-left { padding-right: 10px; flex-direction: row-reverse; }
+.fb-count.fb-right { padding-left: 10px; }
+/* one team, or three or more: a line of each team's kills and deaths over a bar with a block per team */
+.fb-teams { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-bottom: 12px; font-size: 13px; color: var(--ink-2); }
+.fb-team { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.fb-team strong { font-size: 24px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.fb-team .team-dot { align-self: center; }
+.fb-seg.fb-block:not(:first-child) { margin-left: 6px; }
 .fb-bar { position: relative; display: flex; gap: 2px; height: 34px; }
 .fb-bar.empty { border-radius: 8px; background: var(--surface-2); align-items: center; justify-content: center; }
 .fb-none { font-size: 13px; color: var(--muted); }
@@ -1661,8 +1664,6 @@ a.pcb-who:hover { text-decoration: underline; }
 .adm-table th { text-align: left; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 0 8px 6px 0; }
 .adm-table td { padding: 4px 8px 4px 0; border-top: 1px solid var(--grid); vertical-align: middle; }
 .adm-table .adm-ign { font-weight: 600; white-space: nowrap; }
-.adm-team-red .adm-ign { color: var(--team-red, #d03b3b); }
-.adm-team-blue .adm-ign { color: var(--team-blue, #3b6fd0); }
 .adm-act { text-align: right; width: 1%; white-space: nowrap; }
 .adm-input { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--grid); background: var(--surface); color: var(--ink); min-width: 0; }
 .adm-input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
@@ -1700,3 +1701,16 @@ a.pcb-who:hover { text-decoration: underline; }
 .adm-link-now { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 14px; }
 .adm-link-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--critical); }
 .adm-link-dot.up { background: var(--good); }
+
+/* admin: the teams */
+.adm-teams td { white-space: nowrap; }
+.adm-order { width: 1%; }
+.adm-arrow { padding: 2px 7px; min-width: 0; }
+.adm-arrow:disabled { opacity: 0.3; cursor: default; }
+.adm-color { width: 34px; height: 28px; padding: 0; border: 1px solid var(--grid); border-radius: 7px; background: none; cursor: pointer; }
+.adm-table .adm-short { max-width: 110px; }
+.adm-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; white-space: normal; }
+.adm-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.adm-count { font-size: 12px; }
+.adm-team-add { margin-top: 10px; }
+.adm-team-add .adm-input { flex: 0 1 240px; }

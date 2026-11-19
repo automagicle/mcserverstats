@@ -198,10 +198,67 @@ function dummyApi() {
 // The season's teams, from the server (its roster table, so real names stay out of the repository).
 const roster = new Map(); // lowercased IGN -> { ign, name, team }
 const rosterAliases = new Map(); // another account's lowercased name -> its player's lowercased IGN
-const TEAM_NAMES = { red: 'Red Faction', blue: 'Blue Faction' };
 let nameMode = recall('nameMode') === 'real' ? 'real' : 'ign'; // what the IGN / Name switch shows
+
+// The season's teams, in their order: [{ id, name, short, color, color_dark, bar, chart, activity }]
+// (the admin page edits them). bar and chart say how much of the Combat page a team is part of,
+// activity whether the Activity page's by-team charts show it. Everything colored by team gets its
+// color from a stylesheet written here (the page's own carries red and blue until this loads).
+let teams = [];
+const teamById = new Map();
+const teamInfo = (id) => teamById.get(id) || null;
+const teamLabel = (id) => teamInfo(id)?.name || id;
+const teamShort = (id) => teamInfo(id)?.short || id;
+const teamVar = (id) => `var(--team-${id})`;
+const activityTeams = () => teams.filter((t) => t.activity);
+const TEAM_DEFAULTS = {
+  red: { name: 'Red Faction', short: 'Red', color: '#c42f2a', color_dark: '#f27a72' },
+  blue: { name: 'Blue Faction', short: 'Blue', color: '#1d5fc4', color_dark: '#6ea8f5' },
+};
+const TEAM_ID = /^[a-z][a-z0-9-]{0,19}$/;
+const HEX = /^#[0-9a-f]{6}$/i;
+
+function setTeams(list, players) {
+  const out = (list || []).filter((t) => t && TEAM_ID.test(t.id) && HEX.test(t.color || ''));
+  // a team the roster names that isn't listed (an older dashboard, or one not set up yet) still shows
+  for (const p of players || []) {
+    if (!TEAM_ID.test(p.team || '') || out.some((t) => t.id === p.team)) continue;
+    const d = TEAM_DEFAULTS[p.team];
+    const name = p.team[0].toUpperCase() + p.team.slice(1);
+    out.push({ id: p.team, name: d?.name || name, short: d?.short || name, color: d?.color || '#7a7f87', color_dark: d?.color_dark || null, bar: true, chart: true, activity: true });
+  }
+  teams = out;
+  teamById.clear();
+  for (const t of teams) teamById.set(t.id, t);
+  writeTeamStyles();
+}
+
+// On a dark page a team's color is its own dark one, or the light one lifted toward white.
+const darkOf = (t) => (HEX.test(t.color_dark || '') ? t.color_dark : `color-mix(in oklab, ${t.color} 62%, white)`);
+function writeTeamStyles() {
+  let sheet = document.getElementById('team-styles');
+  if (!sheet) {
+    sheet = document.createElement('style');
+    sheet.id = 'team-styles';
+    document.head.append(sheet);
+  }
+  const vars = (pick) => teams.map((t) => `--team-${t.id}:${pick(t)};`).join('');
+  const rules = teams.map(({ id }) => {
+    const c = `var(--team-${id})`;
+    return `.team-${id}{color:${c}}.team-dot.team-${id},.bar.team-${id},.fb-kills.fb-${id},.fb-key.fb-${id}{background:${c}}`
+      + `.dbar.team-${id}{fill:${c}}.line-${id}{fill:none;stroke:${c};stroke-width:1.25;stroke-linejoin:round;stroke-linecap:round}`
+      + `.area-${id}{fill:${c};opacity:.3}.fb-own.fb-${id},.fb-other.fb-${id}{--c:${c}}.fb-count.fb-${id} strong,.fb-end.fb-${id} strong{color:${c}}`
+      + `.dl-row.by-${id}{border-left-color:${c}}.dl-row.by-${id} .dl-icon,.adm-team-${id} .adm-ign{color:${c}}`
+      + `.heat-${id}{--lv1:color-mix(in oklab,${c} 30%,var(--lv0));--lv2:color-mix(in oklab,${c} 55%,var(--lv0));--lv3:color-mix(in oklab,${c} 78%,var(--lv0));--lv4:${c}}`;
+  }).join('\n');
+  sheet.textContent = `:root{${vars((t) => t.color)}}\n`
+    + `@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${vars(darkOf)}}}\n`
+    + `:root[data-theme="dark"]{${vars(darkOf)}}\n${rules}`;
+}
+
 const rosterLoad = api('/api/roster').then((r) => {
   for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
+  setTeams(r.teams, r.players);
   return r.players;
 }, () => []).then((players) => {
   for (const p of players) roster.set(p.ign.toLowerCase(), p);
@@ -217,9 +274,9 @@ const shownName = (ign) => (nameMode === 'real' && realName(ign)) || ign;
 const otherName = (ign) => (realName(ign) ? (nameMode === 'real' ? ign : realName(ign)) : null);
 
 // A styled name ([{ t, c }] pieces, as chat shows it) with the IGN swapped for the real name when that's shown.
-// The game puts a [RED] / [BLUE] team tag before each name; the name's color already says it.
-const TEAM_TAG = /\[(?:RED|BLUE)\]\s*/g;
-const noTag = (t) => t.replace(TEAM_TAG, '');
+// The game puts a team tag ([RED], [BLUE], …) before each name; the name's color already says it.
+const noTag = (t) => t.replace(/\[([A-Z0-9_-]{2,20})\]\s*/g, (tag, word) => (word === 'RED' || word === 'BLUE'
+  || teams.some((x) => x.id.toUpperCase() === word || x.short.toUpperCase() === word) ? '' : tag));
 function swapParts(parts, ign) {
   const real = nameMode === 'real' && ign && realName(ign);
   return parts
@@ -360,7 +417,7 @@ const tipHeads = new Map(); // reused across tooltip redraws so heads don't blin
 function playerList(names) {
   const list = el('div', { class: 'tip-players' });
   // red team first, then blue, then anyone on neither; each in the order given
-  const rank = (name) => ({ red: 0, blue: 1 })[rosterOf(name)?.team] ?? 2;
+  const rank = (name) => { const i = teams.findIndex((t) => t.id === rosterOf(name)?.team); return i < 0 ? teams.length : i; };
   names = names.map((name, i) => [rank(name), i, name]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
   for (const name of names.slice(0, TIP_PLAYERS)) {
     if (!tipHeads.has(name)) tipHeads.set(name, headImg(name, 14, { width: 14, height: 14, loading: 'eager' }));
@@ -1084,7 +1141,7 @@ function barScale(vals) {
 //   dataStart   hatch everything before it
 //   strip?      { intervals: [[start, end]], describe(t, interval) } — a when-online bar under the plot
 //   scale?      { ymax, ystep } — fixed y-axis instead of fitting the values
-//   split?      [{ red, blue }] — each bar's share (0 to 1) that is the red and the blue team's
+//   split?      [[[class, share], …]] — each bar's stack from the bottom: a team's class and its share (0 to 1)
 // }
 // grow: bars rise from zero (first drawing for a newly opened page).
 function renderBars(root, spec, { animate = false, slide = 0, grow = false } = {}) {
@@ -1173,10 +1230,10 @@ function drawBars(root, spec, f) {
     const top = Math.max(m.t, y(f.vals[i])), base = y(0);
     const h = base - top;
     if (h > 0.5) {
-      // rounded top, square base; with spec.split the bar is stacked: red at the bottom, then blue, then the rest
+      // rounded top, square base; with spec.split the bar is stacked: the teams from the bottom in their order, then the rest
       const x0 = cx - bw / 2, x1 = cx + bw / 2;
       const sp = spec.split?.[i];
-      const segs = (sp ? [['team-red', sp.red], ['team-blue', sp.blue], ['', 1 - sp.red - sp.blue]] : [['', 1]])
+      const segs = (sp ? [...sp, ['', Math.max(0, 1 - sp.reduce((n, [, share]) => n + share, 0))]] : [['', 1]])
         .filter(([, share]) => share * h > 0.5);
       const bar = sv('g', { class: 'dbar-stack' });
       let from = base;
@@ -1914,34 +1971,35 @@ async function renderServerDaily(animate = false, slide = 0) {
     vals[i] += sum / 60;
     peaks[i] = Math.max(peaks[i], pk);
   }
-  const teams = await teamHoursPerBucket(r.buckets).catch(() => null);
+  const hours = await teamHoursPerBucket(r.buckets).catch(() => null);
   if (dailyCtl.get() !== w) return;
+  const shown = hours ? activityTeams() : [];
   // each team's share of the bar. The bar's height is the server's player count, which can run a little past
   // the time of the players it names (it doesn't always list everyone), so the teams fill it in proportion.
-  const split = teams && r.buckets.map((b, i) => {
-    const whole = teams.red[i] + teams.blue[i];
-    return whole > 0 ? { red: teams.red[i] / whole, blue: teams.blue[i] / whole } : { red: 0, blue: 0 };
+  const split = hours && r.buckets.map((b, i) => {
+    const whole = shown.reduce((n, t) => n + hours[t.id][i], 0);
+    return shown.map((t) => [`team-${t.id}`, whole > 0 ? hours[t.id][i] / whole : 0]);
   });
-  const teamRow = (team, i) => ({ value: fmtHours(teams[team][i]), label: TEAM_NAMES[team], color: `var(--team-${team})` });
+  const teamRow = (t, i) => ({ value: fmtHours(hours[t.id][i]), label: t.name, color: teamVar(t.id) });
   renderBars($('#heatmap'), {
     buckets: r.buckets, vals, windowKey: windowKey(w), labels: 'day', split,
     fmtTick: (v) => `${v}h`, dataStart: chartStart(),
     describe: (i) => [
       { value: vals[i] ? `${fmtHours(vals[i])} player-hours` : 'No activity' },
-      ...(teams && vals[i] ? [teamRow('red', i), teamRow('blue', i)] : []),
+      ...(vals[i] ? shown.map((t) => teamRow(t, i)) : []),
       { label: `${fmtDay(r.buckets[i].date)}${peaks[i] ? ` · peak ${peaks[i]} online` : ''}` },
     ],
   }, { animate, slide });
 }
 
 // Hours each team played in every bucket ({ start, end }, in order), from everyone's sessions.
-// null when the season has no teams.
+// { team id: [hours] } for the teams the Activity page shows; null when there are none.
 async function teamHoursPerBucket(buckets) {
-  if (!roster.size || !buckets.length) return null;
+  if (!roster.size || !buckets.length || !activityTeams().length) return null;
   const from = buckets[0].start, to = buckets[buckets.length - 1].end;
   // asked for up to now in ten-minute steps, so today's bar keeps up without a request per redraw
   const r = await memoApi(`/api/sessions?from=${from}&to=${Math.min(to, Math.ceil(nowSec() / 600) * 600)}`);
-  const out = { red: buckets.map(() => 0), blue: buckets.map(() => 0) };
+  const out = Object.fromEntries(activityTeams().map((t) => [t.id, buckets.map(() => 0)]));
   const stop = Math.min(to, nowSec());
   for (const [, name, a0, b0] of r.rows) {
     const team = out[rosterOf(name)?.team];
@@ -1955,21 +2013,28 @@ async function teamHoursPerBucket(buckets) {
   return out;
 }
 
-// Busiest times for everyone, one team, or both teams blended (red and blue mixed by their share).
-const HEAT_MODES = ['all', 'red', 'blue', 'mix'];
-let heatTeam = HEAT_MODES.includes(recall('heatTeam')) ? recall('heatTeam') : 'all';
+// Busiest times for everyone, one team, or the teams blended (their colors mixed by their share).
+let heatTeam = recall('heatTeam') || 'all';
 let heatToken = 0;
+const heatModes = () => {
+  const shown = activityTeams();
+  return ['all', ...shown.map((t) => t.id), ...(shown.length > 1 ? ['mix'] : [])];
+};
 
 function syncHeatToggle() {
   const t = $('#heat-team');
-  t.hidden = !roster.size;
-  for (const b of t.children) b.setAttribute('aria-pressed', String(b.dataset.v === heatTeam));
+  const shown = activityTeams();
+  t.hidden = !roster.size || !shown.length;
+  if (!heatModes().includes(heatTeam)) heatTeam = 'all';
+  const button = (v, text, title) => el('button', { type: 'button', 'data-v': v, title, text, 'aria-pressed': String(v === heatTeam) });
+  t.replaceChildren(button('all', 'All', 'Everyone'), ...shown.map((x) => button(x.id, x.short, `${x.name} only`)),
+    ...(shown.length > 1 ? [button('mix', 'Mix', 'The teams, blended by their share')] : []));
 }
 
 // Seconds each team spent online in every weekday-hour of [from, to), from everyone's sessions.
 async function teamSeconds(from, to) {
   const r = await memoApi(`/api/sessions?from=${from}&to=${to}`);
-  const secs = { red: emptyWeek(), blue: emptyWeek() };
+  const secs = Object.fromEntries(activityTeams().map((t) => [t.id, emptyWeek()]));
   for (const [, name, a0, b0] of r.rows) {
     const team = secs[rosterOf(name)?.team];
     if (!team) continue;
@@ -1988,9 +2053,9 @@ const fmtAvg = (v) => v.toFixed(v < 10 ? 1 : 0);
 
 async function renderServerWeekGrid() {
   const token = ++heatToken;
+  syncHeatToggle();
   const mode = roster.size ? heatTeam : 'all';
   const root = $('#weekgrid');
-  syncHeatToggle();
   // Hours are whole so the sessions request stays the same (and cached) until the next hour.
   const now = nowSec();
   const to = mode === 'all' ? Infinity : Math.floor(now / 3600) * 3600;
@@ -2006,7 +2071,7 @@ async function renderServerWeekGrid() {
   }
   const per = (g) => g.map((row, d) => row.map((v, h) => (cnt[d][h] ? v / cnt[d][h] : 0)));
   const span = archived() ? 'whole season' : 'last 90 days';
-  root.className = mode === 'red' || mode === 'blue' ? `heat-${mode}` : '';
+  root.className = mode !== 'all' && mode !== 'mix' ? `heat-${mode}` : '';
 
   if (mode === 'all') {
     renderWeekGrid(root, per(sum), (v, label) => [
@@ -2019,32 +2084,46 @@ async function renderServerWeekGrid() {
   const secs = await teamSeconds(since, to);
   if (token !== heatToken) return; // the mode changed or a newer render started meanwhile
   // a player online for a whole hour shows up in every check of it, so seconds / POLL = their samples
-  const red = per(secs.red.map((row) => row.map((v) => v / POLL)));
-  const blue = per(secs.blue.map((row) => row.map((v) => v / POLL)));
+  const shown = activityTeams();
+  const grids = Object.fromEntries(shown.map((t) => [t.id, per(secs[t.id].map((row) => row.map((v) => v / POLL)))]));
   const tip = (rows, label) => [...rows, { label: `${label} · ${span}` }];
-  const teamRow = (team, v) => ({ color: `var(--team-${team})`, value: `${fmtAvg(v)} ${team}`, label: 'avg' });
+  const teamRow = (t, v) => ({ color: teamVar(t.id), value: `${fmtAvg(v)} ${t.short}`, label: 'avg' });
 
   if (mode !== 'mix') {
-    const grid = mode === 'red' ? red : blue;
-    renderWeekGrid(root, grid, (v, label) => tip([teamRow(mode, v)], label), { animate: live() });
+    const t = teamInfo(mode);
+    renderWeekGrid(root, grids[mode], (v, label) => tip([teamRow(t, v)], label), { animate: live() });
     return;
   }
 
-  // Blended: the hue is the red/blue share, the strength is how many are on in all (in five steps, like the others).
-  const both = red.map((row, d) => row.map((v, h) => v + blue[d][h]));
+  // Blended: the hue is the teams' shares, the strength is how many are on in all (in five steps, like the others).
+  const both = grids[shown[0].id].map((row, d) => row.map((_, h) => shown.reduce((n, t) => n + grids[t.id][d][h], 0)));
   const max = Math.max(0, ...both.flat());
   const STRENGTH = [0, 30, 55, 78, 100];
-  const mixColor = (pRed, strength) => `color-mix(in oklab, color-mix(in oklch, var(--team-red) ${pRed}%, var(--team-blue)) ${strength}%, var(--lv0))`;
-  const legend = el('div', { class: 'scale' }, el('span', { class: 'lbl', text: 'Red' }));
-  for (const p of [100, 75, 50, 25, 0]) legend.append(el('span', { class: 'sw', style: `background:${mixColor(p, 100)}` }));
-  legend.append(el('span', { class: 'lbl', text: 'Blue' }));
-  renderWeekGrid(root, both, (v, label, d, h) => tip([teamRow('red', red[d][h]), teamRow('blue', blue[d][h])], label), {
+  // the teams' colors mixed by weight, one more team at a time
+  const mixColor = (weights, strength) => {
+    let color = null, total = 0;
+    shown.forEach((t, k) => {
+      if (!(weights[k] > 0)) return;
+      total += weights[k];
+      color = color ? `color-mix(in oklch, ${color} ${Math.round((1 - weights[k] / total) * 100)}%, ${teamVar(t.id)})` : teamVar(t.id);
+    });
+    return color ? `color-mix(in oklab, ${color} ${strength}%, var(--lv0))` : 'var(--lv0)';
+  };
+  const legend = el('div', { class: 'scale' });
+  if (shown.length === 2) {
+    legend.append(el('span', { class: 'lbl', text: shown[0].short }));
+    for (const p of [1, 0.75, 0.5, 0.25, 0]) legend.append(el('span', { class: 'sw', style: `background:${mixColor([p, 1 - p], 100)}` }));
+    legend.append(el('span', { class: 'lbl', text: shown[1].short }));
+  } else {
+    for (const t of shown) legend.append(el('span', { class: 'sw', style: `background:${teamVar(t.id)}` }), el('span', { class: 'lbl', text: t.short }));
+  }
+  renderWeekGrid(root, both, (v, label, d, h) => tip(shown.map((t) => teamRow(t, grids[t.id][d][h])), label), {
     animate: live(),
     legend,
     cellColor: (d, h) => {
       const v = both[d][h];
       if (v <= 0 || max <= 0) return 'var(--lv0)';
-      return mixColor(Math.round((red[d][h] / v) * 100), STRENGTH[Math.min(4, Math.ceil((v / max) * 4))]);
+      return mixColor(shown.map((t) => grids[t.id][d][h]), STRENGTH[Math.min(4, Math.ceil((v / max) * 4))]);
     },
   });
 }
@@ -2067,7 +2146,7 @@ const TL_MODES = ['all', 'teams', 'share'];
 let tlTeams = TL_MODES.includes(recall('tlTeams')) ? recall('tlTeams') : 'all';
 function syncTlTeamToggle() {
   const t = $('#tl-team');
-  t.hidden = !roster.size;
+  t.hidden = !roster.size || !activityTeams().length;
   for (const b of t.children) b.setAttribute('aria-pressed', String(b.dataset.v === tlTeams));
 }
 $('#tl-team').addEventListener('click', (e) => {
@@ -2086,7 +2165,7 @@ rosterLoad.then(() => {
 // How many of each team were on at each point (minute data), or on average through the hour starting
 // at each point (hourly data), from everyone's sessions ([name, start, end]).
 function teamCounts(pts, sessions, minuteData) {
-  const out = { red: pts.map(() => 0), blue: pts.map(() => 0) };
+  const out = Object.fromEntries(activityTeams().map((t) => [t.id, pts.map(() => 0)]));
   if (!pts.length) return out;
   const firstAt = (t) => {
     let lo = 0, hi = pts.length;
@@ -2113,30 +2192,37 @@ function teamCounts(pts, sessions, minuteData) {
   return out;
 }
 
-// Red at the bottom, Blue stacked on it, each shaded down to the line below.
-function teamSeries(pts, counts, word) {
-  const red = pts.map((p, i) => ({ t: p.t, v: counts.red[i] }));
-  const blue = pts.map((p, i) => ({ t: p.t, v: counts.red[i] + counts.blue[i] }));
-  return [
-    { name: `Red ${word}`, cls: 'red', color: 'var(--team-red)', area: true, pts: red },
-    { name: `Blue ${word}`, cls: 'blue', color: 'var(--team-blue)', band: 1, pts: blue, raw: counts.blue },
-  ];
+// The teams stacked in their order, the first at the bottom, each shaded down to the line below.
+// first: where the first of them will sit among the chart's series.
+function teamSeries(pts, counts, word, first) {
+  let sum = pts.map(() => 0);
+  return activityTeams().map((t, k) => {
+    sum = sum.map((v, i) => v + counts[t.id][i]);
+    const stacked = pts.map((p, i) => ({ t: p.t, v: sum[i] }));
+    return { name: `${t.short} ${word}`, cls: t.id, color: teamVar(t.id), pts: stacked, raw: counts[t.id], ...(k ? { band: first + k - 1 } : { area: true }) };
+  });
 }
 
-// Red's share of the two teams at each point, as a percentage (no point where neither is on): one line,
-// shaded red below and blue above, up to 100%.
+// Each team's share of all of them at each point, as percentages stacked to 100% (no point where
+// none is on): a line between each two, shaded in the team's color on its side. The top team comes
+// first, so the lines are drawn over the shading.
 function shareSeries(pts, counts) {
+  const shown = activityTeams();
   const keep = [];
   pts.forEach((p, i) => {
-    const whole = counts.red[i] + counts.blue[i];
-    if (whole > 0.01) keep.push({ t: p.t, v: (counts.red[i] / whole) * 100 });
+    const whole = shown.reduce((n, t) => n + counts[t.id][i], 0);
+    if (whole > 0.01) keep.push({ t: p.t, share: shown.map((t) => (counts[t.id][i] / whole) * 100) });
   });
-  // Blue first, so the line between the two is drawn over both shadings
-  return [
-    { name: 'Blue', cls: 'none', color: 'var(--team-blue)', band: 1, areaCls: 'blue', noMarker: true,
-      pts: keep.map((p) => ({ t: p.t, v: 100 })), raw: keep.map((p) => 100 - p.v) },
-    { name: 'Red', cls: 'share', color: 'var(--team-red)', area: true, areaCls: 'red', pts: keep },
-  ];
+  const n = shown.length;
+  return shown.map((t, k) => {
+    const top = k === n - 1;
+    return {
+      name: t.short, cls: top ? 'none' : 'share', areaCls: t.id, color: teamVar(t.id), noMarker: top,
+      pts: keep.map((p) => ({ t: p.t, v: top ? 100 : p.share.slice(0, k + 1).reduce((a, b) => a + b, 0) })),
+      raw: keep.map((p) => p.share[k]),
+      ...(k ? { band: n - k } : { area: true }), // the series after it in the list is the team below it
+    };
+  }).reverse();
 }
 
 async function loadTimeline(slide = 0) {
@@ -2167,8 +2253,9 @@ async function loadTimeline(slide = 0) {
     return [...new Set(sessions.filter(([, a, b]) => a < end && b > t).map(([name]) => name))];
   };
 
-  const teams = tlTeams === 'teams' && roster.size > 0;
-  const share = tlTeams === 'share' && roster.size > 0;
+  const shownTeams = activityTeams();
+  const teams = tlTeams === 'teams' && roster.size > 0 && shownTeams.length > 0;
+  const share = tlTeams === 'share' && roster.size > 0 && shownTeams.length > 0;
   const cm = 'var(--muted)';
   const band = (color, text) => el('span', {}, el('span', { class: 'key key-band', style: `background:${color}` }), text);
   if (minuteData) {
@@ -2182,11 +2269,10 @@ async function loadTimeline(slide = 0) {
       const counts = teamCounts(pts, sessions, true);
       if (trend) {
         const avg = (vs) => rollingAverage(pts.map((p, i) => ({ t: p.t, v: vs[i] })), 3600).map((p) => p.v);
-        counts.red = avg(counts.red);
-        counts.blue = avg(counts.blue);
+        for (const id of Object.keys(counts)) counts[id] = avg(counts[id]);
       }
       if (share) series.splice(0, 1, ...shareSeries(pts, counts));
-      else series.push(...teamSeries(pts, counts, trend ? 'avg (1 hour)' : 'online'));
+      else series.push(...teamSeries(pts, counts, trend ? 'avg (1 hour)' : 'online', 1));
     } else if (trend) series.push({ name: 'avg (1 hour)', cls: '2', color: c2, pts: rollingAverage(pts, 3600) });
     opts = {
       from, to, step: POLL, series, whoAt,
@@ -2195,8 +2281,8 @@ async function loadTimeline(slide = 0) {
     };
     const what = trend ? 'average online (1 hour)' : 'online';
     legend.replaceChildren(...(!pts.length ? []
-      : share ? [band('var(--team-red)', `Red share${trend ? ' (1-hour average)' : ''}`), band('var(--team-blue)', 'Blue share')]
-      : teams ? [key(cm, 'Players online'), band('var(--team-red)', `Red ${what}`), band('var(--team-blue)', `Blue ${what}`)]
+      : share ? shownTeams.map((t, k) => band(teamVar(t.id), `${t.short} share${trend && !k ? ' (1-hour average)' : ''}`))
+      : teams ? [key(cm, 'Players online'), ...shownTeams.map((t) => band(teamVar(t.id), `${t.short} ${what}`))]
         : trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
     const rows = await getHourlyRange(from, to);
@@ -2207,16 +2293,16 @@ async function loadTimeline(slide = 0) {
       from, to, step: 3600,
       series: share ? shareSeries(avgPts, teamCounts(avgPts, sessions, false))
         : teams
-        ? [{ name: 'average', cls: 'muted', color: cm, pts: avgPts }, ...teamSeries(avgPts, teamCounts(avgPts, sessions, false), 'average'), peak]
+        ? [{ name: 'average', cls: 'muted', color: cm, pts: avgPts }, ...teamSeries(avgPts, teamCounts(avgPts, sessions, false), 'average', 1), peak]
         : [{ name: 'average', cls: '1', color: c1, area: true, pts: avgPts }, peak],
       whoAt,
       fmtValue: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)),
       fmtTime: (t) => `${fmt(t, { weekday: 'short', month: 'short', day: 'numeric' })}, ${hourName(hourInfo(t).hour)}`,
     };
     legend.replaceChildren(...(share
-      ? [band('var(--team-red)', 'Red share'), band('var(--team-blue)', 'Blue share')]
+      ? shownTeams.map((t) => band(teamVar(t.id), `${t.short} share`))
       : teams
-      ? [key(cm, 'Average online'), band('var(--team-red)', 'Red average'), band('var(--team-blue)', 'Blue average'), key(c3, 'Peak online')]
+      ? [key(cm, 'Average online'), ...shownTeams.map((t) => band(teamVar(t.id), `${t.short} average`)), key(c3, 'Peak online')]
       : [key(c1, 'Average online'), key(c3, 'Peak online')]));
   }
   opts.key = `${windowKey(w)}|${share ? 'share' : teams ? 'teams' : 'all'}`;
@@ -2634,7 +2720,7 @@ function renderPlayerName() {
   if (r) {
     const egg = eggInfo(playerEggId(d.name, d.gear));
     team.replaceChildren(el('span', { class: `team-dot team-${r.team}` }),
-      el('span', { class: `team-${r.team}`, text: TEAM_NAMES[r.team] || r.team }),
+      el('span', { class: `team-${r.team}`, text: teamLabel(r.team) }),
       el('span', { class: 'muted', text: `· ${nameMode === 'real' ? r.ign : r.name}` }),
       ...(egg ? [el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: `· ${egg.name}` })] : []));
   }
@@ -4189,7 +4275,7 @@ function renderCard({ name, uuid, chatInfo, player, error }) {
   const headRow = el('div', { class: 'pc-head' },
     headImg(name || 'MHF_Steve', 48, { width: 48, height: 48, class: 'pc-avatar' }),
     el('div', { class: 'pc-who' },
-      el('div', { class: 'pc-name' }, ...(rosterOf(name) ? [el('span', { class: `team-dot team-${rosterOf(name).team}`, title: TEAM_NAMES[rosterOf(name).team] || rosterOf(name).team })] : []),
+      el('div', { class: 'pc-name' }, ...(rosterOf(name) ? [el('span', { class: `team-dot team-${rosterOf(name).team}`, title: teamLabel(rosterOf(name).team) })] : []),
         ...nameParts(display, name || '…')),
       el('div', { class: 'pc-status', id: 'pc-status' })));
   const kids = [headRow];
@@ -4507,8 +4593,6 @@ const mobLabel = (mob) => mob.replace(/^.*:/, '').replace(/_/g, ' ').replace(/\b
 const naturalCause = (d) => (d.mob ? mobLabel(d.mob) : CAUSE_LABELS[d.cause] || 'Other');
 // a sword, point up and to the right: blade, crossguard, grip, pommel
 const SWORD_ICON = ['M13.5 2.5 10.6 3 4.9 8.7', 'M13.5 2.5 13 5.4 7.3 11.1', 'M3.4 7.2l5.4 5.4', 'M6.1 9.9 3.4 12.6', 'M2.7 13.3h.01'];
-const TEAMS = ['red', 'blue'];
-const TEAM_SHORT = { red: 'Red', blue: 'Blue' };
 const teamOf = (name) => rosterOf(name)?.team ?? null;
 
 const combat = {
@@ -4597,77 +4681,101 @@ function combatView() {
   return { ...r, w, rows, hourly: r.buckets[0].end - r.buckets[0].start <= 3600 };
 }
 
-/* Red vs Blue: each side's deaths, split by what caused them */
+/* The teams against each other: each one's deaths, split by what caused them */
 
-function factionTotals(rows) {
-  const t = { red: { kills: 0, own: 0, other: 0, deaths: 0 }, blue: { kills: 0, own: 0, other: 0, deaths: 0 }, noTeam: 0 };
+// For the teams in the scoreboard (the admin page picks them): { id: { kills, own, other, deaths,
+// by: { killer's team: n } } }, and '#outside': deaths of anyone not on one of them. A kill by someone
+// who isn't on one of these teams counts with the other deaths.
+function factionTotals(rows, shown) {
+  const t = { '#outside': 0 }; // (no team's id starts with #)
+  for (const x of shown) t[x.id] = { kills: 0, own: 0, other: 0, deaths: 0, by: {} };
   for (const d of rows) {
     const vt = teamOf(d.victim);
     const kt = d.killer ? teamOf(d.killer) : null;
-    if (!t[vt]) { t.noTeam++; continue; }
+    if (!vt || !t[vt]) { t['#outside']++; continue; }
     t[vt].deaths++;
-    if (kt && kt !== vt && t[kt]) t[kt].kills++;
-    else if (kt === vt) t[vt].own++;
+    if (kt && kt !== vt && t[kt]) {
+      t[kt].kills++;
+      t[vt].by[kt] = (t[vt].by[kt] || 0) + 1;
+    } else if (kt === vt) t[vt].own++;
     else t[vt].other++;
   }
   return t;
 }
 
-// One long bar. Left of the divider is every Blue death: the ones nobody caused (hatched), then
-// Blue's own team kills, then Red's kills, ending at the divider. Right of it, mirrored, is every
-// Red death: Blue's kills from the divider out, then Red's team kills, then the rest.
+// One long bar of every death. With two teams it's a tug of war: left of the divider is every death
+// of the second team (the ones nobody on the other side caused, hatched; then its own team kills;
+// then the first team's kills, ending at the divider), and right of it, mirrored, every death of the
+// first. With any other number, each team gets a block of its deaths in order, the kills against it
+// in the color of the team that made them.
 function renderFactionBar() {
   const card = $('#cb-score-card');
-  card.hidden = !roster.size;
-  if (!roster.size || !combat.view) return;
+  const shown = teams.filter((t) => t.bar);
+  card.hidden = !roster.size || !shown.length;
+  if (card.hidden || !combat.view) return;
+  card.querySelector('h2').textContent = shown.length === 2 ? `${shown[0].short} vs ${shown[1].short}` : shown.length === 1 ? shown[0].name : 'Teams';
   const root = $('#cb-score');
-  const t = factionTotals(combat.view.rows);
-  const total = t.red.deaths + t.blue.deaths;
+  const t = factionTotals(combat.view.rows, shown);
+  const total = shown.reduce((n, x) => n + t[x.id].deaths, 0);
   const seg = (cls, n, tipRows) => {
     if (!n) return null;
     const s = el('div', { class: `fb-seg ${cls}`, style: `flex-grow:${n}` }, n / total > 0.06 ? el('span', { text: String(n) }) : null);
     s.tipRows = tipRows;
     return s;
   };
-  const tipRow = (n, what, color) => [{ value: n.toLocaleString(), label: what, color }];
-  const segs = [
-    seg('fb-other fb-blue', t.blue.other, tipRow(t.blue.other, 'Other Blue deaths: mobs, falls, lava…', 'var(--team-blue)')),
-    seg('fb-own fb-blue', t.blue.own, tipRow(t.blue.own, 'Blue players killed by their own faction', 'var(--team-blue)')),
-    seg('fb-kills fb-red', t.red.kills, tipRow(t.red.kills, 'Blue players killed by Red', 'var(--team-red)')),
-    seg('fb-kills fb-blue', t.blue.kills, tipRow(t.blue.kills, 'Red players killed by Blue', 'var(--team-blue)')),
-    seg('fb-own fb-red', t.red.own, tipRow(t.red.own, 'Red players killed by their own faction', 'var(--team-red)')),
-    seg('fb-other fb-red', t.red.other, tipRow(t.red.other, 'Other Red deaths: mobs, falls, lava…', 'var(--team-red)')),
-  ].filter(Boolean);
-
-  // the divider sits where Blue's deaths end; the kill counts hang off it, kept on screen
-  const split = total ? (t.blue.deaths / total) * 100 : 50;
-  const room = Math.min(42, (118 / Math.max(280, root.clientWidth || 600)) * 100);
-  const at = Math.min(100 - room, Math.max(room, split));
-  const kills = (team, style) => el('div', { class: `fb-count fb-${team}`, style },
-    el('strong', { text: t[team].kills.toLocaleString() }), el('span', { text: `${TEAM_SHORT[team]} ${t[team].kills === 1 ? 'kill' : 'kills'}` }));
-  const end = (team) => el('div', { class: `fb-end fb-${team}` },
-    el('strong', { text: t[team].deaths.toLocaleString() }), ` ${TEAM_SHORT[team]} ${t[team].deaths === 1 ? 'death' : 'deaths'}`);
+  const tipRow = (n, what, id) => [{ value: n.toLocaleString(), label: what, color: teamVar(id) }];
+  const other = (x) => seg(`fb-other fb-${x.id}`, t[x.id].other, tipRow(t[x.id].other, `Other ${x.short} deaths: mobs, falls, lava…`, x.id));
+  const own = (x) => seg(`fb-own fb-${x.id}`, t[x.id].own, tipRow(t[x.id].own, `${x.short} players killed by their own team`, x.id));
+  const killed = (v, k) => seg(`fb-kills fb-${k.id}`, t[v.id].by[k.id] || 0, tipRow(t[v.id].by[k.id] || 0, `${v.short} players killed by ${k.short}`, k.id));
   const key = (cls, text) => el('span', {}, el('i', { class: `fb-key ${cls}` }), text);
+  const plural = (n, word) => `${word}${n === 1 ? '' : 's'}`;
+  const anyOwn = shown.some((x) => t[x.id].own);
+  const legend = el('div', { class: 'legend fb-legend' },
+    ...shown.filter(() => shown.length > 1).map((x) => key(`fb-kills fb-${x.id}`, `${x.short} kills`)),
+    ...(anyOwn ? [key('fb-own fb-mix', 'Killed by their own team')] : []),
+    key('fb-other fb-mix', 'Other deaths (mobs, falls, lava…)'),
+    ...(t['#outside'] ? [el('span', { class: 'muted', text: `${t['#outside']} ${plural(t['#outside'], 'death')} of players not on ${shown.length === 1 ? 'this team' : 'these teams'} not shown` })] : []));
+  const none = el('span', { class: 'fb-none', text: 'No deaths in this range yet' });
 
-  const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...segs,
-    total ? el('i', { class: 'fb-mid', style: `left:${split}%` }) : el('span', { class: 'fb-none', text: 'No deaths in this range yet' }));
-  root.replaceChildren(
-    el('div', { class: 'fb-counts' }, kills('red', `right:${100 - at}%`), kills('blue', `left:${at}%`)),
-    bar,
-    el('div', { class: 'fb-ends' }, end('blue'), end('red')),
-    el('div', { class: 'legend fb-legend' },
-      key('fb-kills fb-red', 'Red kills'), key('fb-kills fb-blue', 'Blue kills'),
-      ...(t.red.own + t.blue.own ? [key('fb-own fb-mix', 'Killed by their own faction')] : []),
-      key('fb-other fb-mix', 'Other deaths (mobs, falls, lava…)'),
-      ...(t.noTeam ? [el('span', { class: 'muted', text: `${t.noTeam} by players without a faction not shown` })] : [])),
-  );
-  attachCellTips(bar, '.fb-seg', (s) => s.tipRows);
+  if (shown.length === 2) {
+    const [a, b] = shown; // b's deaths on the left, a's on the right
+    const segs = [other(b), own(b), killed(b, a), killed(a, b), own(a), other(a)].filter(Boolean);
+    // the divider sits where b's deaths end; the kill counts hang off it, kept on screen
+    const split = total ? (t[b.id].deaths / total) * 100 : 50;
+    const room = Math.min(42, (118 / Math.max(280, root.clientWidth || 600)) * 100);
+    const at = Math.min(100 - room, Math.max(room, split));
+    const kills = (x, side, style) => el('div', { class: `fb-count fb-${side} fb-${x.id}`, style },
+      el('strong', { text: t[x.id].kills.toLocaleString() }), el('span', { text: `${x.short} ${plural(t[x.id].kills, 'kill')}` }));
+    const end = (x) => el('div', { class: 'fb-end' },
+      el('strong', { text: t[x.id].deaths.toLocaleString() }), ` ${x.short} ${plural(t[x.id].deaths, 'death')}`);
+    const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...segs,
+      total ? el('i', { class: 'fb-mid', style: `left:${split}%` }) : none);
+    root.replaceChildren(
+      el('div', { class: 'fb-counts' }, kills(a, 'left', `right:${100 - at}%`), kills(b, 'right', `left:${at}%`)),
+      bar, el('div', { class: 'fb-ends' }, end(b), end(a)), legend);
+    attachCellTips(bar, '.fb-seg', (s) => s.tipRows);
+  } else {
+    // a block per team: who killed its players (each in the killer's color), its own team kills, the rest
+    const blocks = shown.map((v) => {
+      const segs = [...shown.filter((k) => k !== v).map((k) => killed(v, k)), own(v), other(v)].filter(Boolean);
+      segs[0]?.classList.add('fb-block');
+      return segs;
+    });
+    const bar = el('div', { class: `fb-bar${total ? '' : ' empty'}` }, ...blocks.flat(), total ? el('i', { class: 'fb-mid', hidden: '' }) : none);
+    const stats = el('div', { class: 'fb-teams' }, ...shown.map((x) => el('div', { class: `fb-team fb-count-n fb-${x.id}` },
+      el('span', { class: `team-dot team-${x.id}` }),
+      el('strong', { class: `team-${x.id}`, text: t[x.id].kills.toLocaleString() }),
+      el('span', { text: `${x.short} ${plural(t[x.id].kills, 'kill')}` }),
+      el('span', { class: 'muted', text: `· ${t[x.id].deaths.toLocaleString()} ${plural(t[x.id].deaths, 'death')}` }))));
+    root.replaceChildren(stats, bar, legend);
+    attachCellTips(bar, '.fb-seg', (s) => s.tipRows);
+  }
   redraws.set(root, renderFactionBar);
 }
 
 /* kills and deaths over time */
 
-// The three things a death can be, for the chart: a kill by each faction, or anything else.
+// What a death can be, for the chart: a kill by one of the teams, or anything else.
 // Without factions (an earlier season) it's kills by players and everything else.
 function combatSeries() {
   if (!roster.size) {
@@ -4676,10 +4784,10 @@ function combatSeries() {
       { key: 'other', label: 'Other deaths', color: 'var(--muted)', is: () => true },
     ];
   }
+  // a kill by each team the admin page gives a series of its own, and everything else
   const by = (team) => (d) => d.killer && teamOf(d.killer) === team && teamOf(d.victim) !== team;
   return [
-    { key: 'red', label: 'Red kills', color: 'var(--team-red)', is: by('red') },
-    { key: 'blue', label: 'Blue kills', color: 'var(--team-blue)', is: by('blue') },
+    ...teams.filter((t) => t.chart).map((t) => ({ key: t.id, label: `${t.short} kills`, color: teamVar(t.id), is: by(t.id) })),
     { key: 'other', label: 'Other deaths', color: 'var(--muted)', is: () => true },
   ];
 }
@@ -5361,7 +5469,7 @@ async function adminDo(body, done) {
     await adminPost(body);
     if (done) toast(done);
     admin.data = await api('/api/admin');
-    if (body.action.startsWith('roster.') || body.action.startsWith('alias.')) await reloadRoster();
+    if (/^(roster|alias|team)\./.test(body.action)) await reloadRoster();
   } catch (err) {
     if (err instanceof DbLimitError) showError(err.message);
     toast(err.message, { error: true });
@@ -5378,12 +5486,16 @@ async function reloadRoster() {
   rosterAliases.clear();
   for (const a of r.aliases || []) rosterAliases.set(a.alias.toLowerCase(), a.name.toLowerCase());
   for (const p of r.players || []) roster.set(p.ign.toLowerCase(), p);
+  setTeams(r.teams, r.players);
+  syncHeatToggle();
+  syncTlTeamToggle();
 }
 
 function renderAdmin() {
   const d = admin.data;
   if (!d) return;
-  const teams = [...new Set(['red', 'blue', ...d.roster.map((r) => r.team)])];
+  const teamList = d.teams || [];
+  const teams = [...new Set([...teamList.map((t) => t.id), ...d.roster.map((r) => r.team)])];
   const eggIds = Object.keys(EGGS).sort((a, b) => EGGS[a][0].localeCompare(EGGS[b][0]));
   const players = el('datalist', { id: 'adm-players' }, ...d.players.map((n) => el('option', { value: n })));
   const select = (options, value, label) => {
@@ -5392,7 +5504,7 @@ function renderAdmin() {
     s.value = value ?? '';
     return s;
   };
-  const teamSelect = (v) => select(teams.map((t) => [t, t[0].toUpperCase() + t.slice(1)]), v, 'Team');
+  const teamSelect = (v) => select(teams.map((t) => [t, teamList.find((x) => x.id === t)?.name || t[0].toUpperCase() + t.slice(1)]), v, 'Team');
   const eggSelect = (v) => select([['', 'No egg'], ...eggIds.map((id) => [id, EGGS[id][0]])], v, 'Egg');
   const button = (text, onClick, cls = '') => {
     const b = el('button', { type: 'button', class: `btn ${cls}`, text });
@@ -5417,7 +5529,7 @@ function renderAdmin() {
         if (confirm(`Take ${r.ign} off the Season ${d.season} roster?`)) adminDo({ action: 'roster.remove', ign: r.ign }, `Removed ${r.ign}`);
       }, 'btn-quiet')));
   });
-  const newIgn = nameInput('IGN'), newTeam = teamSelect('red'), newEgg = eggSelect('');
+  const newIgn = nameInput('IGN'), newTeam = teamSelect(teams[0]), newEgg = eggSelect('');
   const addRow = el('tr', { class: 'adm-add' }, el('td', {}, newIgn), el('td', {}, newTeam), el('td', {}, newEgg),
     el('td', { class: 'adm-act' }, button('Add', () => {
       const ign = newIgn.value.trim();
@@ -5428,6 +5540,63 @@ function renderAdmin() {
       el('thead', {}, el('tr', {}, ...['Player', 'Team', 'Egg', ''].map((h) => el('th', { text: h })))),
       el('tbody', {}, ...rows, addRow))),
     el('p', { class: 'muted adm-note', text: `Running npm run roster:remote again replaces these with roster-s${d.season}.json, so copy lasting changes there too.` }));
+
+  // the teams themselves: name, color, order, and how much of the dashboard each is part of
+  const onTeam = (id) => d.roster.filter((r) => r.team === id).length;
+  const check = (t, field, label, title) => {
+    const box = el('input', { type: 'checkbox' });
+    box.checked = !!t[field];
+    box.addEventListener('change', () => adminDo({ action: 'team.set', id: t.id, [field]: box.checked }, `Saved ${t.name}`));
+    return el('label', { class: 'adm-check', title }, box, label);
+  };
+  const move = (i, by) => {
+    const ids = teamList.map((t) => t.id);
+    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
+    adminDo({ action: 'team.order', ids }, 'Order saved');
+  };
+  const arrow = (i, by, label) => {
+    const b = el('button', { type: 'button', class: 'btn btn-quiet adm-arrow', 'aria-label': label, title: label, text: by < 0 ? '↑' : '↓' });
+    b.disabled = i + by < 0 || i + by >= teamList.length;
+    b.addEventListener('click', () => move(i, by));
+    return b;
+  };
+  const teamRows = teamList.map((t, i) => {
+    const name = el('input', { class: 'adm-input', type: 'text', value: t.name, maxlength: '40', 'aria-label': 'Name' });
+    const short = el('input', { class: 'adm-input adm-short', type: 'text', value: t.short, maxlength: '16', 'aria-label': 'Short name' });
+    const color = el('input', { class: 'adm-color', type: 'color', value: t.color, 'aria-label': 'Color', title: 'Color (a lighter shade of it is used on a dark page)' });
+    name.addEventListener('change', () => { if (name.value.trim()) adminDo({ action: 'team.set', id: t.id, name: name.value.trim() }, 'Saved'); });
+    short.addEventListener('change', () => { if (short.value.trim()) adminDo({ action: 'team.set', id: t.id, short: short.value.trim() }, 'Saved'); });
+    color.addEventListener('change', () => adminDo({ action: 'team.set', id: t.id, color: color.value }, `Saved ${t.name}’s color`));
+    const n = onTeam(t.id);
+    return el('tr', {},
+      el('td', { class: 'adm-order' }, arrow(i, -1, 'Move up'), arrow(i, 1, 'Move down')),
+      el('td', {}, color), el('td', {}, name), el('td', {}, short),
+      el('td', {}, el('div', { class: 'adm-checks' },
+        check(t, 'bar', 'Scoreboard', 'In the Combat page’s scoreboard bar'),
+        check(t, 'chart', 'Kills chart', 'Its kills as their own color in the Combat page’s chart (otherwise with the other deaths)'),
+        check(t, 'activity', 'Activity charts', 'In the Activity page’s by-team charts: Players online, Daily activity and Busiest times'))),
+      el('td', { class: 'muted adm-count', text: `${n} ${n === 1 ? 'player' : 'players'}` }),
+      el('td', { class: 'adm-act' }, n ? null : button('Remove', () => {
+        if (confirm(`Remove the team ${t.name}?`)) adminDo({ action: 'team.remove', id: t.id }, `Removed ${t.name}`);
+      }, 'btn-quiet')));
+  });
+  const newTeamName = el('input', { class: 'adm-input', type: 'text', placeholder: 'New team’s name', maxlength: '40' });
+  const newTeamColor = el('input', { class: 'adm-color', type: 'color', value: '#7a7f87', 'aria-label': 'Color' });
+  const addTeam = () => {
+    const name = newTeamName.value.trim();
+    if (!name) return;
+    // its id: the first word, as lowercase letters and digits (what the roster calls it)
+    let id = name.toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9-]/g, '').replace(/^[^a-z]+/, '').slice(0, 20);
+    if (!id) id = 'team';
+    for (let k = 2; teamList.some((t) => t.id === id); k++) id = `${id.replace(/\d+$/, '')}${k}`.slice(0, 20);
+    adminDo({ action: 'team.set', id, name, short: name.split(/\s+/)[0].slice(0, 16), color: newTeamColor.value }, `Added ${name}`);
+  };
+  const teamsCard = card('Teams', `Season ${d.season} · the order here is the order they’re listed and stacked in`,
+    el('div', { class: 'adm-table-wrap' }, el('table', { class: 'adm-table adm-teams' },
+      el('thead', {}, el('tr', {}, ...['', 'Color', 'Name', 'Short', 'Shown in', '', ''].map((h) => el('th', { text: h })))),
+      el('tbody', {}, ...teamRows))),
+    el('div', { class: 'adm-form adm-team-add' }, newTeamColor, newTeamName, button('Add team', addTeam, 'btn-primary')),
+    el('p', { class: 'muted adm-note', text: 'Put players on a team in Teams and eggs below. With two teams in the scoreboard it’s the tug-of-war bar; with one, or three or more, each gets a block. A team left out of a chart still has its players everywhere else.' }));
 
   // hidden players
   const hidName = nameInput('Player'), hidNote = el('input', { class: 'adm-input', type: 'text', placeholder: 'Note (optional)', maxlength: '200' });
@@ -5510,7 +5679,7 @@ function renderAdmin() {
         el('span', { class: 'adm-main', text: e.what }), el('span', { class: 'muted adm-when', text: `${secs(e.ago)} ago` }))))
         : empty('Nothing has happened to it lately.')));
 
-  $('#admin').replaceChildren(players, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard, linkCard);
+  $('#admin').replaceChildren(players, teamsCard, rosterCard, el('div', { class: 'grid2' }, hiddenCard, aliasCard), uncountedCard, deletedCard, gapsCard, linkCard);
 }
 
 // Right-click a chat line or a death, as an admin: delete it, or leave a death out of Combat.
