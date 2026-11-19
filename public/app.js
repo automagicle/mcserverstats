@@ -2493,7 +2493,7 @@ function moveRows(root, oldTops) {
   return moved;
 }
 
-// "Data starts on …" beside the heading; red with a warning icon when the range reaches back before it.
+// The season beside the heading; red when a range other than All reaches back before its data began.
 function renderLeaderboardNote() {
   const note = $('#lb-note');
   if (!state.dataStart) {
@@ -2504,11 +2504,9 @@ function renderLeaderboardNote() {
   const r = resolveWindow(w);
   const fit = fittingLeaderboardRange();
   // Red when the range is wider than the smallest preset that covers all the data and reaches back before it.
-  const warn = w.unit === 'all'
-    ? fit.unit !== 'all'
-    : fit.unit !== 'all' && r.from < state.dataStart && r.to - r.from > fit.count;
-  const start = el('span', { class: `data-note${warn ? ' warn' : ''}`, text: `Data starts on ${fmt(state.dataStart, { month: 'short', day: 'numeric' })}` });
-  if (warn) start.title = 'This range reaches back further than the data does, so totals cover less time than it suggests.';
+  const warn = w.unit !== 'all' && fit.unit !== 'all' && r.from < state.dataStart && r.to - r.from > fit.count;
+  const start = el('span', { class: `data-note${warn ? ' warn' : ''}`, text: `Season ${SEASON}` });
+  if (warn) start.title = `This range reaches back before the season’s data began (${fmt(state.dataStart, { month: 'short', day: 'numeric' })}), so totals cover less time than it suggests.`;
   note.replaceChildren(`${windowLabel(w, r, LB_PRESETS)} · `, start);
 }
 
@@ -3178,6 +3176,7 @@ const chat = {
   loaded: false,
   pinned: null, // a time picked on the graph; it stays the chat's time until the reader scrolls
   quietUntil: 0, // scroll events before this come from the page moving things, not the reader
+  followUntil: 0, // until then the log is on its way to the bottom after sending (performance.now())
   bottomGap: 0, // distance from the bottom, kept when the log's height changes
   unread: 0, // player messages newer than the last one seen at the bottom of the log, per the server
   seenId: (() => { try { const v = Number(localStorage.getItem('chatSeen')); return v > 0 ? v : null; } catch { return null; } })(),
@@ -3271,8 +3270,10 @@ function chatName(m) {
   const parts = m.display
     ? swapParts(m.display, m.name).map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t))
     : [m.name ? shownName(m.name) : 'Server'];
+  // without the game's own styling of the name (one still being sent, or logged without it): the team's color, as everywhere else
+  if (m.uuid && !m.pending) knownNames.set(m.uuid, m.name);
+  if (!m.display && m.name && rosterOf(m.name)) return teamName(m.uuid ? playerLink(el('a', { class: 'msg-name' }, ...parts), m.uuid, m.name) : el('span', { class: 'msg-name' }, ...parts), m.name);
   if (!m.uuid) return el('span', { class: 'msg-name' }, ...parts);
-  knownNames.set(m.uuid, m.name);
   const own = m.display?.find((p) => p.c && p.t.includes(m.name));
   if (own) nameColors.set(m.uuid, own.c);
   return playerLink(el('a', { class: 'msg-name' }, ...parts), m.uuid, m.name);
@@ -3472,7 +3473,8 @@ function renderChat(fresh = new Set(), freshWhispers = new Set()) {
       group = null;
     }
   };
-  for (const m of chat.messages) {
+  settlePending();
+  for (const m of [...chat.messages, ...pendingMessages()]) {
     putWhispers(m.ts);
     dayBreak(m.ts);
     // what was unread when the page opened starts under a "New" line
@@ -3482,12 +3484,25 @@ function renderChat(fresh = new Set(), freshWhispers = new Set()) {
     }
     let node;
     if (m.kind === 'chat' || m.kind === 'say') {
-      if (!group || prev.kind !== m.kind || prev.name !== m.name || prev.via !== m.via || m.ts - prev.ts > CHAT_GROUP_MS) {
+      const opens = !group || prev.kind !== m.kind || prev.name !== m.name || prev.via !== m.via || m.ts - prev.ts > CHAT_GROUP_MS;
+      if (opens) {
         group = msgGroup(m);
         frag.append(group);
       }
       node = chatLine(m);
       group.lastChild.append(node);
+      if (m.pending) {
+        // what you just sent, in its place in the log: grey and slanted until the server says it's shown in game
+        const p = m.pending;
+        if (!p.sent) {
+          node.classList.add('msg-sending');
+          node.append(el('span', { class: 'msg-status', text: 'sending…' }));
+        }
+        if (p.fresh) (opens ? group : node).classList.add('msg-new');
+        p.fresh = false;
+        prev = m;
+        continue;
+      }
     } else {
       group = null;
       node = sysRow(m);
@@ -3696,21 +3711,30 @@ async function pollChat() {
   // the chat log was reset while this page was open: start over with what came after
   if (res.start && chat.messages.length && chat.messages[0].ts < res.start) return loadChatLatest().then(syncChatTime);
   chat.maxId = Math.max(chat.maxId, res.max_id);
-  chat.unread = res.unread ?? 0;
+  // At the bottom of the log (or on the way there, having just sent something) what arrives is seen as it
+  // arrives, so it's never counted as unread: not even for the moment before the log has scrolled to it.
+  const follow = (fromBottom() < 60 && chat.pinned == null) || performance.now() < chat.followUntil;
+  if (follow && !chat.moreAfter) {
+    chat.unread = 0;
+    if (chat.seenId == null || chat.maxId > chat.seenId) {
+      chat.seenId = chat.maxId;
+      remember('chatSeen', String(chat.maxId));
+    }
+  } else chat.unread = res.unread ?? 0;
   renderUnread();
   if (!res.messages.length || chat.moreAfter || chat.loading) return;
   const known = new Set(chat.messages.map((m) => m.id));
   const fresh = res.messages.filter((m) => !known.has(m.id));
   if (!fresh.length) return;
-  settlePending(fresh);
-  const follow = fromBottom() < 60 && chat.pinned == null;
   const anchor = chatAnchor();
   chat.messages = chat.messages.concat(fresh).sort((a, b) => a.ts - b.ts || a.id - b.id);
   if (chat.messages.length > CHAT_KEEP) {
     chat.messages.splice(0, chat.messages.length - CHAT_KEEP);
     chat.moreBefore = true;
   }
-  renderChat(new Set(fresh.map((m) => m.id)));
+  // (the logged copy of a message you sent takes the place of the one already showing, without a flourish)
+  const mine = settlePending();
+  renderChat(new Set(fresh.filter((m) => !mine.has(m.id)).map((m) => m.id)));
   if (follow) {
     chat.quietUntil = performance.now() + 800;
     chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
@@ -3725,9 +3749,9 @@ async function pollChat() {
 /* ---------- sending chat into the game ---------- */
 
 // Players whose login email is on the roster can send chat; the server mod shows it in game as
-// "[Web] <name> message" and logs it, so it comes back into this log a few seconds later. Until
-// the server says it showed it, it's faded under the log with a "sending…" tag; from then on it
-// looks like any other message, and its logged copy takes its place when it arrives.
+// "[Web] <name> message" and logs it, so it comes back into this log a few seconds later. Meanwhile
+// it shows at the end of the log as one of your messages: grey and slanted with "sending…" until the
+// server says it showed it, then like any other, and its logged copy takes its place unnoticed.
 const compose = { me: null, sending: false, pending: [], checked: 0 };
 const chatInput = $('#chat-input');
 
@@ -3781,30 +3805,42 @@ function composeError(msg) {
   if (msg) composeErrTimer = setTimeout(() => { box.hidden = true; }, 6000);
 }
 
-function renderPending() {
-  $('#chat-pending').replaceChildren(...compose.pending.map((p) => {
-    const m = { kind: 'chat', name: p.name, ts: p.ts, text: p.text, uuid: null, via: p.admin ? 'admin' : 'web' };
-    const group = msgGroup(m);
-    if (!p.sent) {
-      group.classList.add('msg-pending');
-      group.querySelector('.msg-meta').append(el('span', { class: 'msg-tag', text: 'sending…' }));
-    }
-    group.lastChild.append(chatLine(m));
-    return group;
-  }));
+// What you've sent that isn't in the log yet, as messages at its end (only while the newest are loaded).
+// Each looks like your last message there (the name as the game styles it), so nothing changes when
+// its logged copy takes its place.
+function pendingMessages() {
+  if (!chat.loaded || chat.moreAfter) return [];
+  return compose.pending.map((p, i) => {
+    const last = p.admin ? null : chat.messages.findLast((m) => m.kind === 'chat' && m.name && m.name.toLowerCase() === p.name.toLowerCase());
+    return {
+      id: `pending-${i}`, pending: p, kind: 'chat', ts: p.ts, text: p.text, via: p.admin ? 'admin' : 'web',
+      name: last?.name ?? p.name, uuid: last?.uuid ?? (p.admin ? null : uuidForName(p.name)), display: last?.display ?? null,
+    };
+  });
 }
 
-// Messages that came back in the log replace their faded copies.
-function settlePending(fresh) {
-  if (!compose.pending.length) return;
-  const before = compose.pending.length;
-  for (const m of fresh) {
-    if (m.via !== 'web' && m.via !== 'admin') continue;
-    const i = compose.pending.findIndex((p) => p.text === m.text
-      && (p.admin ? m.via === 'admin' : m.via === 'web' && p.name.toLowerCase() === (m.name || '').toLowerCase()));
-    if (i >= 0) compose.pending.splice(i, 1);
-  }
-  if (compose.pending.length !== before) renderPending();
+// Redraws the log with what's being sent, keeping it where it is (or at the bottom).
+function renderPending() {
+  if ($('#view-chat').hidden || !chat.loaded) return;
+  const stick = fromBottom() < 60;
+  const anchor = chatAnchor();
+  renderChat();
+  if (stick) setScroll(chatScroll.scrollHeight);
+  else restoreAnchor(anchor);
+}
+
+// A message that has come back in the log (logged after it was sent, same sender and text) is no longer
+// pending. Gives the ids of the logged copies.
+function settlePending() {
+  const ids = new Set();
+  if (!compose.pending.length) return ids;
+  compose.pending = compose.pending.filter((p) => {
+    const m = chat.messages.findLast((x) => x.id > p.after && !ids.has(x.id) && x.text === p.text
+      && (p.admin ? x.via === 'admin' : x.via === 'web' && p.name.toLowerCase() === (x.name || '').toLowerCase()));
+    if (m) ids.add(m.id);
+    return !m;
+  });
+  return ids;
 }
 
 // Checks the log every second and a half until this message's logged copy has replaced it. If it
@@ -3815,7 +3851,7 @@ function watchPending(p, ms, missed) {
     if (!compose.pending.includes(p)) return clearInterval(timer);
     if (Date.now() < until) return void pollChat().catch(() => {});
     clearInterval(timer);
-    compose.pending.splice(compose.pending.indexOf(p), 1);
+    compose.pending = compose.pending.filter((x) => x !== p);
     renderPending();
     missed?.();
   }, 1500);
@@ -3833,13 +3869,16 @@ async function sendChat() {
     return;
   }
   compose.sending = true;
-  const p = { name: me.admin ? null : me.ign, admin: !!me.admin, text, ts: Date.now(), sent: false };
-  compose.pending.push(p);
+  // (after: the newest message when it was sent; its logged copy comes after that)
+  const p = { name: me.admin ? null : me.ign, admin: !!me.admin, text, ts: Date.now(), sent: false, fresh: true, after: chat.maxId };
   chatInput.value = '';
   updateComposeCount();
   if (chat.moreAfter) await loadChatLatest().catch(() => {});
+  compose.pending.push(p);
   renderPending();
   chat.pinned = null;
+  chat.followUntil = performance.now() + 1500; // on the way to the bottom
+  chat.quietUntil = performance.now() + 800;
   chatScroll.scrollTo({ top: chatScroll.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
   try {
     const res = await fetch('/api/chat/send', {
@@ -3868,7 +3907,7 @@ async function sendChat() {
       watchPending(p, 60_000);
     }
   } catch (err) {
-    compose.pending.splice(compose.pending.indexOf(p), 1);
+    compose.pending = compose.pending.filter((x) => x !== p);
     renderPending();
     if (!chatInput.value) chatInput.value = text; // give it back to try again
     composeError(err.message);
@@ -5650,7 +5689,6 @@ function rerenderNames() {
     renderChat();
     restoreAnchor(anchor);
     renderOnlineThen(true);
-    renderPending();
     renderComposer();
     renderChatOnline();
   }

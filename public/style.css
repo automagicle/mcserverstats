@@ -1045,8 +1045,9 @@ a.msg-name:hover { text-decoration: underline; }
   animation: rise-in 0.2s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 .chat-compose-err[hidden] { display: none; }
-/* what you sent, until it comes back in the log */
-.msg-pending { opacity: 0.6; }
+/* what you sent, until the server says it's shown in game */
+.msg-line.msg-sending { color: var(--muted); font-style: italic; }
+.msg-status { margin-left: 8px; font-size: 11px; font-style: normal; color: var(--muted); animation: loading-pulse 1.2s ease-in-out infinite; }
 /* an admin's messages: a yellow tag where a player's name would be */
 .msg-admin {
   display: inline-block;
@@ -1060,7 +1061,6 @@ a.msg-name:hover { text-decoration: underline; }
   letter-spacing: 0.01em;
 }
 .chat-compose-me .msg-admin { font-size: 11.5px; }
-.msg-pending .msg-tag { animation: loading-pulse 1.2s ease-in-out infinite; }
 .online-pill:hover { color: var(--ink); background: var(--surface-2); }
 .online-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
 .online-pill.none .dot { background: var(--muted); }
