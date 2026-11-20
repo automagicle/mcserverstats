@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Server Stats</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b5a2b'/%3E%3Crect width='16' height='6' rx='3' fill='%235cb85c'/%3E%3Crect y='3' width='16' height='3' fill='%235cb85c'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Crect width='8' height='8' fill='%238a5a33'/%3E%3Crect width='8' height='3' fill='%235fae4c'/%3E%3Cpath fill='%235fae4c' d='M1 3h1v1H1zM4 3h2v1H4zM7 3h1v1H7z'/%3E%3Cpath fill='%2386cf6f' d='M0 0h2v1H0zM5 0h1v1H5zM3 1h1v1H3zM6 1h2v1H6z'/%3E%3Cpath fill='%236b4324' d='M2 5h1v1H2zM6 4h1v1H6zM4 6h2v1H4zM0 7h1v1H0z'/%3E%3Cpath fill='%23a47148' d='M0 4h1v1H0zM3 5h1v1H3zM6 6h1v1H6zM2 7h1v1H2z'/%3E%3C/svg%3E">
+  <!-- Archivo for text; the Jersey pixel faces for numbers and titles (each drawn for one size, see style.css) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,400..800;1,400..800&family=Jersey+10&family=Jersey+15&family=Jersey+20&family=Jersey+25&display=swap">
   <link rel="stylesheet" href="/style.css">
   <script>
     // Dark by default; a theme picked with the switch is saved and wins. Set before first paint, so there's no flash.
@@ -79,6 +83,7 @@
 
     <!-- Home -->
     <section id="view-home" hidden>
+      <div class="now">
       <div class="tiles">
         <div class="tile"><div class="tile-label" id="t-online-label">Online now</div><div class="tile-value" id="t-online">–</div><div class="tile-sub" id="t-online-sub"></div></div>
         <div class="tile"><div class="tile-label" id="t-peak-label">Peak today</div><div class="tile-value" id="t-peak">–</div><div class="tile-sub">players at once</div></div>
@@ -87,6 +92,7 @@
       </div>
 
       <div id="online-list" class="chips"></div>
+      </div>
       <div id="sample-warning" class="notice" hidden></div>
 
       <section class="card">
@@ -190,7 +196,7 @@
         <section class="card pcombat-card" id="p-combat-card">
           <div class="card-head">
             <div class="card-title"><h2>Combat</h2><span class="card-sub" id="pcb-sub"></span></div>
-            <a class="card-link" href="#/combat">Combat page →</a>
+            <a class="card-link" href="#/combat">Combat page</a>
           </div>
           <div id="p-combat"></div>
         </section>

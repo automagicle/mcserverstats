@@ -4,8 +4,27 @@
     {
       "name": "mcstats-dev",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["wrangler", "dev", "--test-scheduled", "--port", "8787"],
+      "runtimeArgs": [
+        "wrangler",
+        "dev",
+        "--test-scheduled",
+        "--port",
+        "8787"
+      ],
       "port": 8787
+    },
+    {
+      "name": "mcstats-redesign",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "wrangler",
+        "dev",
+        "--port",
+        "8788",
+        "--persist-to",
+        ".wrangler/redesign/state"
+      ],
+      "port": 8788
     }
   ]
 }

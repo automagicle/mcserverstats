@@ -223,8 +223,8 @@ function activityTeam(id) {
   return w && w.activity && !w.activity_with ? w.id : null;
 }
 const TEAM_DEFAULTS = {
-  red: { name: 'Red Faction', short: 'Red', color: '#c42f2a', color_dark: '#f27a72' },
-  blue: { name: 'Blue Faction', short: 'Blue', color: '#1d5fc4', color_dark: '#6ea8f5' },
+  red: { name: 'Red Faction', short: 'Red', color: '#d93a33', color_dark: '#f27a72' },
+  blue: { name: 'Blue Faction', short: 'Blue', color: '#2a6fe3', color_dark: '#6ea8f5' },
 };
 const TEAM_ID = /^[a-z][a-z0-9-]{0,19}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -2040,7 +2040,7 @@ function removeChip(chip, bg) {
 
 // Keeps a row of chips in step with who's online; on live updates players pop in and pixel out.
 // bg: the color behind the row, which leaving chips dissolve into.
-function syncChips(list, players, bg = '--page') {
+function syncChips(list, players, bg = '--surface') {
   const animate = live();
   const current = new Map([...list.querySelectorAll('.chip:not(.leaving)')].map((c) => [c.dataset.uuid, c]));
   const wanted = new Set(players.map((p) => p.uuid));
@@ -3355,8 +3355,8 @@ function linkify(text) {
   return out;
 }
 
-// Names as chat shows them, in their team colors: exact on the light page (pale ones get a shadow),
-// lightened where needed on the dark page (the CSS picks).
+// Names as chat shows them, in the game's colors: exact on the light page (pale ones get a shadow),
+// lightened where needed on the dark page (the CSS picks). Red and blue are the teams' own colors.
 const nameColors = new Map(); // uuid -> color of the name itself, for chips and lists elsewhere
 const mcCache = new Map();
 
@@ -3378,9 +3378,10 @@ function mcStyle(hex) {
     // light page: the exact color; ones too pale to read on white (white, yellow, aqua) get
     // Minecraft's own text shadow, the same color at a quarter brightness
     const shadow = contrast(luminance(rgb), 0.96) < 2 ? `1px 1px 0 ${toHex(rgb.map((c) => c / 4))}` : 'none';
-    // the two team colors match the leaderboards on a dark page, which read better than the game's
-    const team = { '#ff5555': '#f27a72', '#5555ff': '#6ea8f5' }[hex.toLowerCase()];
-    v = `--cl:${hex};--cs:${shadow};--cd:${team || toHex(dark)}`;
+    // the game's red and blue are the two teams: those take the team's color, as the leaderboards
+    // do, on either page (the game's own red and blue look off beside them)
+    const team = { '#ff5555': 'red', '#5555ff': 'blue' }[hex.toLowerCase()];
+    v = team ? `--cl:var(--team-${team});--cs:none;--cd:var(--team-${team})` : `--cl:${hex};--cs:${shadow};--cd:${toHex(dark)}`;
     mcCache.set(hex, v);
   }
   return v;
@@ -4646,7 +4647,7 @@ function renderCard({ name, uuid, chatInfo, player, error }) {
           pcStat(dur(playedBetween(sessions, now - 7 * 86400, now)), 'last 7 days')),
       el('div', { class: 'pc-section', text: 'Past 24 hours' }),
       last24Hours(sessions),
-      el('a', { class: 'pc-open', href: `#/player/${uuid}` }, 'View profile', el('span', { 'aria-hidden': 'true', text: ' →' })),
+      el('a', { class: 'pc-open', href: `#/player/${uuid}` }, 'View profile'),
     );
   }
   pcard.replaceChildren(...kids);
