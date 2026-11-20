@@ -144,7 +144,10 @@ export async function ingestChat(request, env) {
   return json({ accepted: rows.length, skipped: events.length - rows.length });
 }
 
-const COLS = 'id, ts_ms AS ts, kind, uuid, name, text, display, rich, via';
+// a death's killer, and whether an admin asked for "(by name)" after it (src/admin.js death.attribute)
+const COLS = `id, ts_ms AS ts, kind, uuid, name, text, display, rich, via,
+  CASE WHEN kind = 'death' THEN (SELECT killer FROM deaths WHERE deaths.id = chat.id) END AS killer,
+  CASE WHEN kind = 'death' THEN (SELECT attr_note FROM deaths WHERE deaths.id = chat.id) END AS attr_note`;
 const withDisplay = (rows) => rows.map((r) => ({
   ...r, display: r.display ? JSON.parse(r.display) : null, rich: r.rich ? JSON.parse(r.rich) : null,
 }));

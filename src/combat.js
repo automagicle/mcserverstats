@@ -197,7 +197,7 @@ export async function combatLog(env, url, season) {
     args.push(Number(c[1]), Number(c[1]), Number(c[2]));
   }
   const { results } = await env.DB.prepare(
-    `SELECT c.id, c.ts_ms AS ts, c.kind, c.uuid, c.name, c.text, c.display, c.rich, ${KILLER('d.')} AS killer, d.cause, d.mob
+    `SELECT c.id, c.ts_ms AS ts, c.kind, c.uuid, c.name, c.text, c.display, c.rich, ${KILLER('d.')} AS killer, d.cause, d.mob, d.attr_note
      FROM deaths d JOIN chat c ON c.id = d.id
      WHERE ${where.join(' AND ')} ORDER BY d.ts_ms DESC, d.id DESC LIMIT ?`
   ).bind(...args, limit + 1).all();

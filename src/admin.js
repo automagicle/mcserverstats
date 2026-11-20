@@ -259,12 +259,13 @@ const ACTIONS = {
     const d = await db.prepare('SELECT victim FROM deaths WHERE id = ?').bind(id).first();
     if (!d) return bad('not a death');
     if (killer && killer.toLowerCase() === d.victim.toLowerCase()) return bad('they can’t be credited with their own death');
+    const note = killer && b.note ? 1 : 0;
     await db.prepare(
-      `UPDATE deaths SET killer = ?2,
+      `UPDATE deaths SET killer = ?2, attr_note = ?3,
               killer_uuid = (SELECT uuid FROM players WHERE name = ?2 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1),
               mob = CASE WHEN ?2 IS NULL THEN mob ELSE NULL END
        WHERE id = ?1`
-    ).bind(id, killer).run();
+    ).bind(id, killer, note).run();
     return json({ ok: true, killer, victim: d.victim });
   },
   async 'death.count'(db, b) {

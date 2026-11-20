@@ -3375,9 +3375,13 @@ function sysRow(m) {
   else if (m.name && m.text.startsWith(displayText(m))) body.append(chatName(m), m.text.slice(displayText(m).length));
   else if (m.name && m.text.startsWith(m.name)) body.append(chatName({ ...m, display: null }), m.text.slice(m.name.length));
   else body.append(noTag(m.text));
+  if (m.kind === 'death' && m.attr_note && m.killer) body.append(byNote(m.killer));
   return el('div', { class: `msg-sys sys-${m.kind}` },
     el('span', { class: 'msg-lead' }, lead), body, el('time', { class: 'msg-time', text: clock(m.ts / 1000) }));
 }
+
+// "(by name)" after a death an admin attributed, when they chose to show it
+const byNote = (name) => el('em', { class: 'by-note', text: ` (by ${name})` });
 
 // A run of messages from one player: head and name once, then their lines.
 function msgGroup(m) {
@@ -5275,6 +5279,7 @@ function deathRow(m, { when = clock(m.ts / 1000) } = {}) {
   const text = el('div', { class: 'dl-text' });
   if (m.rich) text.append(...richText(m));
   else text.append(noTag(m.text));
+  if (m.attr_note && m.killer) text.append(byNote(m.killer));
   const time = el('button', { type: 'button', class: 'dl-time', text: when,
     title: `${fmt(m.ts / 1000, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · open the chat log here` });
   time.addEventListener('click', () => {
@@ -6326,7 +6331,12 @@ document.addEventListener('contextmenu', (e) => {
   };
   adminMenu.replaceChildren(
     ...(row.dataset.death ? [
-      item('Attribute death', () => attributeDeath(id, row, e)),
+      (() => {
+        const now = deathKiller(id);
+        const b = item(now.killer ? 'Attribute death · ' : 'Attribute death', () => attributeDeath(id, row, e));
+        if (now.killer) b.append(el('strong', { text: now.killer }));
+        return b;
+      })(),
       item("Don't count in combat", () => adminRemove(id, 'death.uncount'))] : []),
     item('Delete message', () => adminRemove(id, 'chat.delete'), true));
   row.classList.add('ctx-target');
@@ -6346,7 +6356,15 @@ window.addEventListener('scroll', (e) => {
 
 // "Attribute death": the menu turns into a small picker (type or pick a player, then Attribute; or No
 // one to take the kill away). The death then counts as that player's kill on the Combat page.
+// The killer a death has now, and whether its "(by name)" note shows, from whatever is loaded.
+function deathKiller(id) {
+  const m = deathLog.items.find((x) => x.id === id) || chat.messages.find((x) => x.id === id);
+  const d = combat.rows.find((x) => x.id === id);
+  return { killer: m?.killer ?? d?.killer ?? null, note: !!m?.attr_note };
+}
+
 function attributeDeath(id, row, e) {
+  const now = deathKiller(id);
   const names = [...new Set(knownNames.values())].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const list = el('datalist', { id: 'attr-names' }, ...names.map((n) => el('option', { value: n })));
   const input = el('input', { type: 'text', list: 'attr-names', placeholder: 'Player name', maxlength: '16',
@@ -6356,26 +6374,42 @@ function attributeDeath(id, row, e) {
     closeAdminMenu();
     let res;
     try {
-      res = await adminPost({ action: 'death.attribute', id, killer });
+      res = await adminPost({ action: 'death.attribute', id, killer, note: noteBox.checked });
     } catch (err) {
       if (err instanceof DbLimitError) showError(err.message);
       toast(err.message, { error: true });
       return;
     }
     const who = names.find((n) => n.toLowerCase() === (killer || '').toLowerCase()) || killer;
-    toast(killer ? `Counted as ${who}’s kill` : 'No one gets the kill now');
+    toast(killer ? `Counted as ${who}’s kill` : 'Cleared: no one gets the kill now');
     for (const d of combat.rows) if (d.id === id) { d.killer = who; if (who) d.mob = null; }
-    for (const m of deathLog.items) if (m.id === id) { m.killer = who; if (who) m.mob = null; }
-    if (!$('#view-combat').hidden) { renderDeathLog(); renderCombat(); }
+    const note = who && noteBox.checked ? 1 : 0;
+    for (const m of deathLog.items) if (m.id === id) { m.killer = who; m.attr_note = note; if (who) m.mob = null; }
+    for (const m of chat.messages) if (m.id === id) { m.killer = who; m.attr_note = note; }
+    if (!$('#view-chat').hidden) renderChat();
+    renderDeathLog(); // drawn even while its page is hidden, so it's right when it next shows
+    if (!$('#view-combat').hidden) renderCombat();
     else if (state.playerData && !$('#view-player').hidden) renderPlayerCombat(state.playerData.name).catch(() => {});
   };
   const ok = el('button', { type: 'button', class: 'ctx-primary', text: 'Attribute' });
   ok.addEventListener('click', () => go(input.value.trim()));
-  const none = el('button', { type: 'button', text: 'No one' });
-  none.addEventListener('click', () => go(null));
   input.addEventListener('keydown', (k) => { if (k.key === 'Enter') { k.preventDefault(); go(input.value.trim()); } });
+  const noteBox = el('input', { type: 'checkbox' });
+  noteBox.checked = !!now.note;
+  const updateNote = () => { noteText.textContent = `(by ${input.value.trim() || 'name'})`; };
+  const noteText = el('em', {});
+  input.addEventListener('input', updateNote);
+  // who has it now, with a button to take it away
+  const current = now.killer ? el('div', { class: 'ctx-current' },
+    el('span', {}, 'Now: ', el('strong', { text: now.killer })),
+    (() => { const c = el('button', { type: 'button', class: 'danger', text: 'Clear' }); c.addEventListener('click', () => go(null)); return c; })())
+    : null;
+  if (now.killer) input.value = now.killer;
+  updateNote();
   adminMenu.replaceChildren(el('div', { class: 'ctx-attr' },
-    el('div', { class: 'ctx-label', text: 'Who gets the kill?' }), input, list, el('div', { class: 'ctx-row' }, none, ok)));
+    el('div', { class: 'ctx-label', text: 'Who gets the kill?' }), current, input, list,
+    el('label', { class: 'ctx-check' }, noteBox, el('span', {}, 'Show ', noteText, ' in the message')),
+    el('div', { class: 'ctx-row' }, ok)));
   row.classList.add('ctx-target');
   adminMenu.hidden = false;
   const { width, height } = adminMenu.getBoundingClientRect();

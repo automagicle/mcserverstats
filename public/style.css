@@ -1715,6 +1715,10 @@ a.pcb-who:hover { text-decoration: underline; }
 .ctx-attr { display: flex; flex-direction: column; gap: 6px; padding: 6px; width: 210px; }
 .ctx-label { font-size: 12px; color: var(--muted); }
 .ctx-attr input { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--ring); background: var(--surface-2); color: var(--ink); }
+.ctx-current { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.ctx-menu .ctx-current button { padding: 3px 8px; }
+.ctx-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.by-note { color: var(--muted); }
 .ctx-row { display: flex; justify-content: flex-end; gap: 4px; }
 .ctx-menu .ctx-row button { text-align: center; }
 .ctx-menu button.ctx-primary { background: var(--series-1); color: #fff; }
