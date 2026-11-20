@@ -1812,3 +1812,17 @@ a.pcb-who:hover { text-decoration: underline; }
 .adm-from-now { color: var(--ink-2); line-height: 1.45; font-size: 13px; margin-top: 12px; }
 .adm-from-now strong { color: var(--ink); }
 .adm-subhead { margin: 14px 0 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+
+/* Admin: the Settings / Analytics tabs, and the Analytics tab */
+.adm-top { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin: 16px 0 4px; }
+.adm-top .adm-title { margin: 0; }
+.adm-tabs a { font-size: 13px; color: var(--ink-2); padding: 4px 12px; border-radius: 6px; text-decoration: none; }
+.adm-tabs a:hover { color: var(--ink); }
+.adm-tabs a[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--ring); }
+.an-controls { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin: 12px 0; }
+.an-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.an-scroll { max-height: 420px; overflow: auto; }
+.an-table th, .an-table td { padding: 5px 6px; border-top: 1px solid var(--grid); text-align: left; }
+.an-table thead th { border-top: 0; font-size: 12.5px; font-weight: 600; color: var(--ink-2); position: sticky; top: 0; background: var(--surface); }
+.an-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.an-tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--ink-2); background: var(--surface-2); vertical-align: 1px; }

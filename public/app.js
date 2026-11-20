@@ -2487,9 +2487,9 @@ async function loadTimeline(slide = 0) {
     opts.fmtTick = (v) => `${v}%`;
     opts.fmtValue = (v) => `${Math.round(v)}%`;
   } else {
-    // up to the most online in the range, in steps of 5 (5, 10, 15, …)
+    // up to the most online in the range, in steps of 5, never less than 0-10 so the scale stays steady
     opts.yScale = (vmax) => {
-      const ymax = Math.max(5, Math.ceil(vmax / 5) * 5);
+      const ymax = Math.max(10, Math.ceil(vmax / 5) * 5);
       return { ymax, ystep: ymax <= 20 ? 5 : niceStep(ymax / 4) };
     };
   }
@@ -5975,8 +5975,16 @@ window.addEventListener('beforeunload', (e) => {
   if (admin.draft && adminDirty()) e.preventDefault(); // "Leave site? Changes you made may not be saved."
 });
 
+// The Settings and Analytics tabs: one shows, the other hides.
+function adminTab(name) {
+  $('#admin').hidden = name !== 'settings';
+  $('#analytics').hidden = name !== 'analytics';
+  for (const t of ['settings', 'analytics']) $(`#adm-tab-${t}`).setAttribute('aria-selected', String(t === name));
+}
+
 async function showAdmin() {
   showView('admin');
+  adminTab('settings');
   document.title = `Admin · ${SITE}`;
   const root = $('#admin');
   if (!site.admin) {
@@ -5993,6 +6001,135 @@ async function showAdmin() {
   [admin.data] = await Promise.all([api('/api/admin'), loadStatus()]);
   if (!keep) admin.draft = adminDraftFrom(admin.data);
   renderAdmin();
+}
+
+/* ---------- website analytics ---------- */
+
+// Each page view, and each minute a page is open and visible, goes to /api/hit (src/analytics.js).
+// Only the route is sent (home, chat, combat, admin, player:<uuid>); the server knows who's signed in.
+const analyticsPage = () => {
+  const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
+  if (m) return `player:${m[1].toLowerCase()}`;
+  return { '#/chat': 'chat', '#/combat': 'combat', '#/admin': 'admin', '#/admin/analytics': 'admin' }[location.hash] || 'home';
+};
+const onPhone = () => matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600;
+function sendHit(beat) {
+  if (DUMMY) return;
+  const body = JSON.stringify({ page: analyticsPage(), beat, mobile: onPhone() });
+  fetch('/api/hit', { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
+}
+let lastView = null;
+function countView() {
+  const page = analyticsPage();
+  if (page === lastView) return; // a re-render of the same page isn't another view
+  lastView = page;
+  sendHit(false);
+}
+setInterval(() => { if (document.visibilityState === 'visible' && lastView) sendHit(true); }, 60_000);
+
+const stats = { days: 30, data: null, noAdmins: true };
+
+async function showAnalytics({ refresh = false } = {}) {
+  showView('admin');
+  adminTab('analytics');
+  document.title = `Analytics · ${SITE}`;
+  const root = $('#analytics');
+  if (!site.admin) {
+    const r = DUMMY ? null : await api('/api/me').catch(() => null);
+    site.admin = !!r?.admin;
+  }
+  if (!site.admin) {
+    root.replaceChildren(el('div', { class: 'card empty', text: 'This page is only for admins.' }));
+    return;
+  }
+  if (!stats.data && !refresh) root.replaceChildren(el('div', { class: 'card empty', text: 'Loading…' }));
+  stats.data = await api(`/api/admin/analytics?days=${stats.days}`);
+  renderAnalytics();
+}
+
+function renderAnalytics() {
+  const d = stats.data;
+  if (!d) return;
+  const root = $('#analytics');
+  const rows = d.rows.filter((r) => !(stats.noAdmins && d.visitors[r.visitor]?.admin));
+  const who = (v) => d.visitors[v]?.name || v;
+  const pageName = (p) => (p.startsWith('player:') ? `Player · ${d.players[p.slice(7)] || 'unknown'}` : { home: 'Activity', chat: 'Chat log', combat: 'Combat', admin: 'Admin' }[p] || p);
+  const time = (min) => (min < 60 ? `${min} min` : `${fmtHours(min / 60)} h`);
+  const dayTs = (day) => Date.parse(`${day}T00:00:00Z`) / 1000;
+
+  // the range's days, oldest first
+  const days = [];
+  for (let t = dayTs(d.from); t <= dayTs(d.today); t += 86400) days.push(new Date(t * 1000).toISOString().slice(0, 10));
+  const byDay = new Map(days.map((x) => [x, { visitors: new Set(), views: 0, minutes: 0 }]));
+  const pages = new Map(), people = new Map();
+  for (const r of rows) {
+    const b = byDay.get(r.day);
+    if (b) { b.visitors.add(r.visitor); b.views += r.views; b.minutes += r.minutes; }
+    const p = pages.get(r.page) || pages.set(r.page, { views: 0, minutes: 0, visitors: new Set() }).get(r.page);
+    p.views += r.views; p.minutes += r.minutes; p.visitors.add(r.visitor);
+    const v = people.get(r.visitor) || people.set(r.visitor, { views: 0, minutes: 0, days: new Set(), last: 0, mobile: false }).get(r.visitor);
+    v.views += r.views; v.minutes += r.minutes; v.days.add(r.day); v.last = Math.max(v.last, r.last_ts); v.mobile ||= !!r.mobile;
+  }
+  const total = { views: 0, minutes: 0 };
+  for (const r of rows) { total.views += r.views; total.minutes += r.minutes; }
+  const newCount = [...people.keys()].filter((v) => d.visitors[v]?.first >= d.from).length;
+  const phones = [...people.values()].filter((v) => v.mobile).length;
+
+  const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Range' }, ...[[7, '7 days'], [30, '30 days'], [90, '90 days'], [365, 'Year']].map(([n, text]) => {
+    const b = el('button', { type: 'button', text, 'aria-pressed': String(stats.days === n) });
+    b.addEventListener('click', () => { if (stats.days !== n) { stats.days = n; showAnalytics({ refresh: true }).catch((e) => showError(e.message)); } });
+    return b;
+  }));
+  const box = el('input', { type: 'checkbox' });
+  box.checked = stats.noAdmins;
+  box.addEventListener('change', () => { stats.noAdmins = box.checked; renderAnalytics(); });
+  const controls = el('div', { class: 'an-controls' }, seg, el('label', { class: 'an-check' }, box, ' Leave out admins'));
+
+  const tile = (label, value, sub) => el('div', { class: 'tile' }, el('div', { class: 'tile-label', text: label }), el('div', { class: 'tile-value', text: value }), el('div', { class: 'tile-sub', text: sub }));
+  const range = stats.days === 365 ? 'last year' : `last ${stats.days} days`;
+  const tiles = el('div', { class: 'tiles' },
+    tile('Visitors', people.size.toLocaleString(), newCount ? `${newCount} new · ${range}` : range),
+    tile('Page views', total.views.toLocaleString(), range),
+    tile('Time on the site', time(total.minutes), people.size ? `${time(Math.round(total.minutes / people.size))} per visitor` : 'with the page open'),
+    tile('On a phone', people.size ? `${Math.round((phones / people.size) * 100)}%` : '–', `${phones} of ${people.size} visitors`));
+
+  const chart = el('div', { class: 'chart an-chart' });
+  const key = (color, text) => el('span', {}, el('span', { class: 'key', style: `background:${color}` }), text);
+  const legend = el('div', { class: 'legend' }, key('var(--series-1)', 'Visitors'), key('var(--series-2)', 'Page views'));
+  const chartCard = el('section', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', { text: 'Each day' }), el('span', { class: 'card-sub', text: 'days in UTC' })), legend, chart);
+
+  const table = (head, body) => body.length
+    ? el('div', { class: 'an-scroll' }, el('table', { class: 'an-table' }, el('thead', {}, el('tr', {}, ...head.map((h, i) => el('th', { class: i ? 'num' : '', text: h })))), el('tbody', {}, ...body)))
+    : el('div', { class: 'muted adm-empty', text: 'No visits in this range yet.' });
+  const pageRows = [...pages].sort((a, b) => b[1].views - a[1].views || b[1].minutes - a[1].minutes).map(([p, x]) => {
+    const name = p.startsWith('player:') ? el('a', { href: `#/player/${p.slice(7)}`, text: pageName(p) }) : pageName(p);
+    return el('tr', {}, el('td', {}, name), el('td', { class: 'num', text: x.views.toLocaleString() }), el('td', { class: 'num', text: x.visitors.size }), el('td', { class: 'num', text: time(x.minutes) }));
+  });
+  const ago = (ts) => { const s = nowSec() - ts; return s < 120 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : fmt(ts, { month: 'short', day: 'numeric' }); };
+  const personRows = [...people].sort((a, b) => b[1].last - a[1].last).map(([v, x]) => el('tr', {},
+    el('td', {}, who(v), d.visitors[v]?.first >= d.from ? el('span', { class: 'an-tag', text: 'new' }) : null, x.mobile ? el('span', { class: 'an-tag', text: 'phone', title: 'Visited on a phone' }) : null),
+    el('td', { class: 'num', text: x.views.toLocaleString() }), el('td', { class: 'num', text: x.days.size }), el('td', { class: 'num', text: time(x.minutes) }), el('td', { class: 'num muted', text: ago(x.last) })));
+
+  root.replaceChildren(controls, tiles, chartCard,
+    el('div', { class: 'grid2' },
+      el('section', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'Pages' })), table(['Page', 'Views', 'Visitors', 'Time'], pageRows)),
+      el('section', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: 'Visitors' }), el('span', { class: 'card-sub', text: 'by login' })), table(['Who', 'Views', 'Days', 'Time', 'Last seen'], personRows))),
+    el('p', { class: 'adm-intro', text: 'Counted by the site itself: a view each time someone opens a page, and a minute for each minute a page is open and visible. Only signed-in visitors can reach the site, so each one is counted by their login.' }));
+
+  const pts = (f) => days.map((x) => ({ t: dayTs(x), v: f(byDay.get(x)) }));
+  renderLineChart(chart, {
+    key: `analytics:${stats.days}`, from: dayTs(days[0]), to: dayTs(days[days.length - 1]), step: 86400, yScale: (vmax) => {
+      const ystep = niceStep(Math.max(1, Math.max(vmax, 10) / 4));
+      return { ymax: Math.max(10, Math.ceil(vmax / ystep) * ystep), ystep };
+    },
+    series: [
+      { name: 'visitors', cls: '1', color: 'var(--series-1)', area: true, pts: pts((b) => b.visitors.size) },
+      { name: 'views', cls: '2', color: 'var(--series-2)', pts: pts((b) => b.views) },
+    ],
+    fmtValue: (v) => String(Math.round(v)),
+    fmtTime: (t) => fmtDay(new Date(t * 1000).toISOString().slice(0, 10), { weekday: 'short', month: 'short', day: 'numeric' }),
+  });
 }
 
 // Runs one of the things that happen at once, then reloads the lists. Unsaved changes stay as they are.
@@ -6598,8 +6735,10 @@ async function route() {
     else if (location.hash === '#/chat') await showChat();
     else if (location.hash === '#/combat') await showCombat();
     else if (location.hash === '#/admin') await showAdmin();
+    else if (location.hash === '#/admin/analytics') await showAnalytics();
     else await showHome();
     renderUnread();
+    countView();
   } catch (err) {
     console.error(err);
     if (err instanceof AuthError) {
@@ -6614,7 +6753,7 @@ async function route() {
 
 /* ---------- light / dark ---------- */
 
-// Follows the system until the switch is used, then remembers the choice.
+// Dark until the switch is used, then remembers the choice (set before first paint in index.html).
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 const themeToggle = $('#theme-toggle');
 const isDark = () => (document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light')) === 'dark';
@@ -6892,6 +7031,7 @@ async function refresh() {
     else if (location.hash === '#/chat') await showChat({ refresh: true });
     else if (location.hash === '#/combat') await showCombat({ refresh: true });
     else if (location.hash === '#/admin') { /* the admin page reloads only on a change */ }
+    else if (location.hash === '#/admin/analytics') await showAnalytics({ refresh: true });
     else await showHome();
     renderUnread();
     showError('');

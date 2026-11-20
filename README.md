@@ -121,6 +121,16 @@ For local development, add `ADMIN_EMAIL=` with your `DEV_EMAIL` to `.dev.vars`. 
 replaced the next time `npm run roster:remote` runs, so copy lasting ones into the roster file (it also holds the real
 names and chat emails, which the page doesn't show).
 
+### Analytics
+
+`#/admin/analytics` (the **Analytics** tab beside **Settings**) is website analytics kept in our own database
+(table `site_visits`, `src/analytics.js`), with no outside service. The page sends `POST /api/hit` with only its
+route (home, chat, combat, admin, or `player:<uuid>`) on each page view, and once a minute while a page is open and
+visible. Rows are per visitor (their Cloudflare Access login), page and UTC day, so storage stays small. The tab shows
+visitors, page views, time on the site and the share on phones for the last 7, 30 or 90 days or year, a chart of
+each day, the most viewed pages, and each visitor (by IGN where their login is on the roster) with their views, days,
+time and when they were last on. **Leave out admins** (on by default) hides the `ADMIN_EMAIL` logins' own visits.
+
 ## Live online list
 
 The charts and totals come from the once-a-minute check (mcstatus.io plus the server mod's list, below). What's online
@@ -292,6 +302,7 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
 - **Time ranges**: each chart and the leaderboard has presets, a date picker (custom ranges show a temporary "Custom" option),
   and ‹ › to step back or forward by the current range (charts scroll sideways as they page). Players online
   defaults to the last 24 hours, and stepping back with ‹ pages through whole days (midnight to midnight).
+  Its y-axis always reaches at least 10 players, so a quiet range doesn't stretch to fill the chart.
   A step scrolls the chart by exactly the time it moved, with the y-axis held still, also when that's less than a
   whole range (stepping forward to now after scrolling back a little).
   The leaderboard defaults to 1d (today since midnight; ‹ › steps a day at a time), and the other
@@ -322,8 +333,8 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   on the Chat log tab and in the page title, and on the jump button while you're scrolled up. The count is remembered in
   the browser, and a "New" line marks where they start when you open the page. Both the graph and the bar of who's online now
   (along the bottom) fold away, and the page remembers that.
-- **Theme**: the switch at the top picks light or dark and is remembered in the browser; until it's used,
-  the page follows the system setting.
+- **Theme**: dark by default on every device; the switch at the top picks light or dark and the choice is
+  remembered in the browser.
 - Times are shown in `TZ_NAME` from `wrangler.jsonc` (Pacific by default).
 
 ## Notes

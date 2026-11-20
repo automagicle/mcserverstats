@@ -8,8 +8,9 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238b5a2b'/%3E%3Crect width='16' height='6' rx='3' fill='%235cb85c'/%3E%3Crect y='3' width='16' height='3' fill='%235cb85c'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
   <script>
-    // Apply a saved theme before first paint, so there's no flash of the other one.
-    try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+    // Dark by default; a theme picked with the switch is saved and wins. Set before first paint, so there's no flash.
+    document.documentElement.dataset.theme = 'dark';
+    try { const t = localStorage.getItem('theme'); if (t === 'light') document.documentElement.dataset.theme = t; } catch {}
   </script>
   <script src="/app.js" defer></script>
 </head>
@@ -292,8 +293,15 @@
 
     <!-- Admin (only for the emails in the ADMIN_EMAIL secret) -->
     <section id="view-admin" hidden>
-      <h1 class="page-title adm-title">Admin</h1>
+      <div class="adm-top">
+        <h1 class="page-title adm-title">Admin</h1>
+        <div class="seg adm-tabs" role="tablist" aria-label="Admin sections">
+          <a role="tab" href="#/admin" id="adm-tab-settings">Settings</a>
+          <a role="tab" href="#/admin/analytics" id="adm-tab-analytics">Analytics</a>
+        </div>
+      </div>
       <div id="admin"></div>
+      <div id="analytics" hidden></div>
     </section>
 
     <!-- Chat log -->

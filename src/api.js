@@ -16,6 +16,7 @@ import { adminAction, adminState, isAdmin, me } from './admin.js';
 import { cached } from './cache.js';
 import { presence } from './presence.js';
 import { teamRows } from './teams.js';
+import { analytics, recordHit } from './analytics.js';
 
 const DAY = 86400;
 
@@ -85,6 +86,9 @@ export async function handleApi(request, env, url) {
     return sendWebChat(request, env, url, who);
   }
   if (url.pathname === '/api/me') return me(env, who);
+  // Website analytics (src/analytics.js): the page reports views, and admins read them.
+  if (url.pathname === '/api/hit') return recordHit(request, env, who);
+  if (url.pathname === '/api/admin/analytics') return analytics(env, url, who);
   // Who's online, pushed over a WebSocket as players join and leave (src/presence.js).
   // The page says who's signed in, so whispers reach them and the server knows they're on the website.
   if (url.pathname === '/api/live') {
