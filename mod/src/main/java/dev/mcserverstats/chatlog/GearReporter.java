@@ -126,7 +126,7 @@ final class GearReporter {
 		if (!stack.isEmpty()) into.add(key, item(stack));
 	}
 
-	// { id, n?, glint?, model?, egg?, name?, asset?, trim?: { pattern, palette }, dye? }
+	// { id, n?, glint?, model?, egg?, name?, tip?, asset?, trim?: { pattern, palette }, dye? }
 	private static JsonObject item(ItemStack stack) {
 		JsonObject o = new JsonObject();
 		String id = id(stack);
@@ -140,6 +140,12 @@ final class GearReporter {
 		if (isEgg(stack)) o.addProperty("egg", true);
 		Component name = stack.get(DataComponents.CUSTOM_NAME);
 		if (name != null) o.addProperty("name", clip(name.getString(), 50));
+		// A weapon or tool's tooltip as the game shows it (its name in its colors, enchantments,
+		// attributes, lore), the same as for a weapon in a death message. Not for armor or eggs.
+		if (WEAPON.matcher(short_(id)).matches()) {
+			JsonArray tip = ChatLogMod.tooltip(stack);
+			if (tip != null) o.add("tip", tip);
+		}
 
 		// Armor: which texture set it wears, its trim (pattern and the palette for this armor), its dye.
 		Equippable eq = stack.get(DataComponents.EQUIPPABLE);

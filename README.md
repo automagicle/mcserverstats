@@ -269,9 +269,9 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, spear, axe,
   pickaxe, shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
   little toward the mouse. Under it, the weapon's name is in the game's colors with its in-game tooltip on hover, and
-  their egg is on the line below. A named item takes its colors and tooltip from the latest death message that named it
-  (their own kills first): the server mod reports only the plain name with the gear. Other items use their rarity color
-  (aqua when enchanted). The button next to the name lists every weapon and tool they carry; picking one puts it in
+  their egg is on the line below. With mod 1.9.0 or newer, each weapon and tool comes with its tooltip, enchantments
+  included. Before that, a named item takes its colors and tooltip from the latest death message that named it (their
+  own kills first), and other items use their rarity color (aqua when enchanted). The button next to the name lists every weapon and tool they carry; picking one puts it in
   the model's hand. Gear comes from the server mod (1.2.0 or newer); until a player has been on with it, the model
   shows just their skin and roster egg. Armor and item textures are read on demand from Mojang's official game client
   for `MC_VERSION` (in `wrangler.jsonc`; set it to the server's version) by `/api/mc/…`, so none of Mojang's files are in

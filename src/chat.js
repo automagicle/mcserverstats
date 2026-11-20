@@ -41,7 +41,7 @@ function cleanDisplay(d) {
 const PLAYER_RE = /^[A-Za-z0-9_.-]{1,32}$/;
 
 // An item's tooltip: up to 24 lines of up to 8 pieces { t, c?, i? (italic) }. An empty line stays (a gap).
-function cleanTooltip(lines) {
+export function cleanTooltip(lines) {
   if (!Array.isArray(lines) || !lines.length) return null;
   const out = [];
   for (const line of lines.slice(0, 24)) {

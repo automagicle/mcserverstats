@@ -433,8 +433,17 @@ public final class ChatLogMod implements DedicatedServerModInitializer {
 	// lines, each a list of { t, c?, i? (italic) } pieces. An empty list is a blank line.
 	private static JsonArray tooltip(HoverEvent.ShowItem show) {
 		try {
+			return tooltip(show.item().create());
+		} catch (RuntimeException e) {
+			LOG.debug("Couldn't read an item's tooltip", e);
+			return null;
+		}
+	}
+
+	// The same for an item in hand (GearReporter: the weapons and tools a player carries).
+	static JsonArray tooltip(ItemStack stack) {
+		try {
 			MinecraftServer s = current;
-			ItemStack stack = show.item().create();
 			Item.TooltipContext context = s == null ? Item.TooltipContext.EMPTY : Item.TooltipContext.of(s.registryAccess());
 			JsonArray lines = new JsonArray();
 			for (Component line : stack.getTooltipLines(context, null, TooltipFlag.NORMAL)) {

@@ -1,10 +1,10 @@
 // What each player last wore and carried, reported by the server mod (POST /api/ingest/gear) for the
 // 3D model on their page. Only the fields the dashboard uses are kept; everything is re-checked here.
 
-import { sameSecret } from './chat.js';
+import { cleanTooltip, sameSecret } from './chat.js';
 import { json, UUID_RE } from './util.js';
 
-const MAX_BODY = 256 * 1024;
+const MAX_BODY = 1024 * 1024; // weapons and tools carry their tooltips (mod 1.9.0)
 const MAX_PLAYERS = 100;
 const MAX_ITEMS = 40;
 const ID_RE = /^[a-z0-9_.:/-]{1,64}$/;
@@ -13,7 +13,8 @@ const NAME_RE = /^[A-Za-z0-9_.]{1,20}$/;
 
 const clean = (s, max) => s.replace(/[\u0000-\u001f\u007f]|§[0-9a-fk-or]/gi, '').trim().slice(0, max);
 
-// { id, n?, glint?, model?, egg?, name?, asset?, trim?: { pattern, palette }, dye? } or null
+// { id, n?, glint?, model?, egg?, name?, tip?, asset?, trim?: { pattern, palette }, dye? } or null
+// tip: a weapon or tool's tooltip as the game shows it (mod 1.9.0), lines of { t, c?, i? } as in chat
 function cleanItem(it) {
   if (!it || typeof it !== 'object' || typeof it.id !== 'string' || !ID_RE.test(it.id)) return null;
   const out = { id: it.id };
@@ -22,6 +23,8 @@ function cleanItem(it) {
   if (typeof it.model === 'string' && ID_RE.test(it.model)) out.model = it.model;
   if (it.egg === true) out.egg = true;
   if (typeof it.name === 'string' && clean(it.name, 50)) out.name = clean(it.name, 50);
+  const tip = cleanTooltip(it.tip);
+  if (tip) out.tip = tip;
   if (typeof it.asset === 'string' && ID_RE.test(it.asset)) out.asset = it.asset;
   const t = it.trim;
   if (t && typeof t.pattern === 'string' && ID_RE.test(t.pattern) && typeof t.palette === 'string' && PALETTE_RE.test(t.palette)) {
@@ -107,7 +110,8 @@ export async function gearFor(db, names) {
 // Items no message has named yet are left out (the page draws them from their item id).
 export async function gearStyles(db, gear, names) {
   const wanted = new Set();
-  for (const it of [gear?.mainhand, gear?.offhand, ...(gear?.items || [])]) if (it?.name) wanted.add(it.name);
+  // (items the server mod sent with their own tooltip, from 1.9.0, don't need one from the chat log)
+  for (const it of [gear?.mainhand, gear?.offhand, ...(gear?.items || [])]) if (it?.name && !it.tip) wanted.add(it.name);
   if (!wanted.size) return {};
   const mine = new Set(names.map((n) => n.toLowerCase()));
   const { results } = await db.prepare(

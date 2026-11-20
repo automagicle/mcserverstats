@@ -448,8 +448,9 @@ function carriedWeapons(gear) {
   return [...seen.values()].sort((a, b) => weaponRank(a.item) - weaponRank(b.item));
 }
 
-// An item's name in the game's colors: as a death message in the chat log showed it (gear.styles,
-// with its tooltip), else in the color the game gives its rarity (aqua when it's enchanted).
+// An item's name in the game's colors, and its tooltip: as the server mod sent it with the gear (1.9.0
+// and newer); else as a death message in the chat log showed it (gear.styles); else in the color the
+// game gives its rarity (aqua when it's enchanted).
 const RARITY = { common: '#ffffff', uncommon: '#ffff55', rare: '#55ffff', epic: '#ff55ff' };
 function itemRarity(it) {
   const base = it.id === 'mace' ? 'epic' : it.id === 'trident' ? 'rare' : 'common';
@@ -457,6 +458,8 @@ function itemRarity(it) {
   return base === 'epic' || base === 'rare' ? 'epic' : 'rare';
 }
 function gearItemLook(it, styles) {
+  // the tooltip the server mod sent with the gear (1.9.0 and newer): its first line is the name in its colors
+  if (it.tip?.[0]?.length) return { name: it.tip[0].map(({ t, c }) => ({ t, ...(c ? { c } : {}) })), tip: it.tip, note: null };
   const known = it.name && styles?.[it.name];
   const color = RARITY[itemRarity(it)];
   if (known) {
@@ -472,7 +475,7 @@ function gearItemLook(it, styles) {
     tip: [[{ t: itemName(it), c: color, ...(it.name ? { i: 1 } : {}) }]],
     note: it.name
       ? 'Its enchantments show here once a death message in the chat log names it.'
-      : it.glint ? 'Enchanted. Only named items show up in the chat log, so which enchantments isn’t known.' : null,
+      : it.glint ? 'Enchanted. Which enchantments shows here once the server runs mcstats-chat 1.9.0.' : null,
   };
 }
 
