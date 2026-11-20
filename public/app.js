@@ -404,8 +404,8 @@ const eggInfo = (id) => {
   return { id, name, color, model };
 };
 
-// The best weapon they carry: mace, then trident, sword, axe, pickaxe, shovel; better material first.
-const WEAPON_KINDS = ['mace', 'trident', 'sword', 'axe', 'pickaxe', 'shovel'];
+// The best weapon they carry: mace, then trident, sword, spear, axe, pickaxe, shovel; better material first.
+const WEAPON_KINDS = ['mace', 'trident', 'sword', 'spear', 'axe', 'pickaxe', 'shovel'];
 const TOOL_MATERIALS = ['netherite', 'diamond', 'iron', 'copper', 'stone', 'golden', 'wooden'];
 function weaponRank(it) {
   if (!it || it.egg) return null;
@@ -429,7 +429,52 @@ function heldEgg(gear, assigned) {
   const info = eggInfo(assigned);
   return info ? { id: info.model } : null;
 }
-const itemName = (it) => it.name || it.id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const itemKind = (it) => it.id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const itemName = (it) => it.name || itemKind(it);
+
+// Every weapon and tool they carry, best first; the same item twice is one entry with a count.
+// (The held item is also in the inventory list, unless that list was cut short.)
+const gearKey = (it) => JSON.stringify([it.id, it.name || '', !!it.glint, it.model || '']);
+function carriedWeapons(gear) {
+  const seen = new Map();
+  for (const it of [gear?.offhand, ...(gear?.items || [])]) {
+    if (weaponRank(it) == null) continue;
+    const k = gearKey(it);
+    if (seen.has(k)) seen.get(k).count++;
+    else seen.set(k, { item: it, key: k, count: 1 });
+  }
+  const held = gear?.mainhand;
+  if (weaponRank(held) != null && !seen.has(gearKey(held))) seen.set(gearKey(held), { item: held, key: gearKey(held), count: 1 });
+  return [...seen.values()].sort((a, b) => weaponRank(a.item) - weaponRank(b.item));
+}
+
+// An item's name in the game's colors: as a death message in the chat log showed it (gear.styles,
+// with its tooltip), else in the color the game gives its rarity (aqua when it's enchanted).
+const RARITY = { common: '#ffffff', uncommon: '#ffff55', rare: '#55ffff', epic: '#ff55ff' };
+function itemRarity(it) {
+  const base = it.id === 'mace' ? 'epic' : it.id === 'trident' ? 'rare' : 'common';
+  if (!it.glint) return base;
+  return base === 'epic' || base === 'rare' ? 'epic' : 'rare';
+}
+function gearItemLook(it, styles) {
+  const known = it.name && styles?.[it.name];
+  const color = RARITY[itemRarity(it)];
+  if (known) {
+    return {
+      name: known.name,
+      tip: known.tip,
+      note: known.tip ? `As a death message showed it, ${fmt(known.ts / 1000, { month: 'short', day: 'numeric' })}` : null,
+    };
+  }
+  return {
+    name: [{ t: itemName(it), c: color }],
+    // a custom name is slanted in the game's tooltips
+    tip: [[{ t: itemName(it), c: color, ...(it.name ? { i: 1 } : {}) }]],
+    note: it.name
+      ? 'Its enchantments show here once a death message in the chat log names it.'
+      : it.glint ? 'Enchanted. Only named items show up in the chat log, so which enchantments isn’t known.' : null,
+  };
+}
 
 /* ---------- tooltip ---------- */
 
@@ -3029,32 +3074,47 @@ function clearPlayerModel() {
   playerModel = null;
   $('#p-model').replaceChildren();
 }
+// The weapon or tool picked from the list under the model, for this player (kept across refreshes
+// while they still carry it; another player's page starts from their best one again).
+let modelPick = null; // { name, key }
+function modelWeapon(name, gear) {
+  const pick = modelPick?.name === name && carriedWeapons(gear).find((w) => w.key === modelPick.key);
+  return pick ? pick.item : bestWeapon(gear);
+}
 function renderPlayerModel(name, gear) {
   const card = $('#p-model-card');
   const spec = {
     name,
     uuid: gear?.uuid ? gear.uuid.replace(/-/g, '') : null,
     armor: gear?.armor || {},
-    mainhand: bestWeapon(gear),
     offhand: heldEgg(gear, playerEggId(name, gear)),
     // the egg's particle aura (a dim one when it has no energy left)
     aura: playerEggId(name, gear) ? { id: playerEggId(name, gear), cracked: gear?.egg?.energy === 0 } : null,
   };
+  // the held item changes in place (setMainhand), so it isn't part of what rebuilds the model
   const key = JSON.stringify(spec);
-  renderModelNote(spec, gear);
-  if (playerModel?.key === key) return; // the same look: leave it turning
+  const mainhand = modelWeapon(name, gear);
+  renderModelNote(name, gear, mainhand);
+  if (playerModel?.key === key) {
+    const changed = !playerModel.mainhand !== !mainhand || (mainhand && gearKey(mainhand) !== gearKey(playerModel.mainhand));
+    playerModel.mainhand = mainhand;
+    if (changed) playerModel.handle?.setMainhand(mainhand);
+    return; // the same look: leave it turning
+  }
   clearPlayerModel();
   card.hidden = false;
   const abort = new AbortController();
-  const mine = { key, abort, handle: null };
+  const mine = { key, abort, handle: null, mainhand };
   playerModel = mine;
   const box = $('#p-model');
   box.classList.add('loading');
   import('/player3d.js')
-    .then((m) => m.mountPlayer(box, { ...spec, signal: abort.signal }))
+    .then((m) => m.mountPlayer(box, { ...spec, mainhand, signal: abort.signal }))
     .then((handle) => {
       if (playerModel !== mine) return handle.dispose();
       mine.handle = handle;
+      // picked from the list while it was loading
+      if (mine.mainhand !== mainhand) handle.setMainhand(mine.mainhand);
     })
     .catch((err) => {
       console.error('3D model:', err);
@@ -3062,19 +3122,94 @@ function renderPlayerModel(name, gear) {
     })
     .finally(() => box.classList.remove('loading'));
 }
-// Under the model: what they're holding, and when that was reported.
-function renderModelNote(spec, gear) {
+
+// Under the model: the weapon in their hand as the game styles it (hover for its tooltip), with a
+// list of everything else they carry next to it; their egg on the line below; when it was reported.
+function renderModelNote(name, gear, mainhand) {
   const note = $('#p-model-note');
-  const parts = [];
-  if (spec.mainhand) parts.push(el('span', { text: itemName(spec.mainhand) }));
-  const egg = eggInfo(playerEggId(state.playerData?.name, gear));
-  if (egg) parts.push(el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: egg.name }));
+  closeGearMenu();
+  const rows = [];
+  const all = carriedWeapons(gear);
+  if (mainhand) {
+    const look = gearItemLook(mainhand, gear?.styles);
+    const label = itemTip(el('span', { class: 'msg-item p-weapon' }, ...mcRuns(look.name)), look.tip, look.note);
+    const line = el('div', { class: 'p-model-held' }, label);
+    if (all.length > 1) {
+      const toggle = el('button', { type: 'button', class: 'p-gear-toggle', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+        title: `All ${all.length} weapons and tools they carry`, 'aria-label': `All ${all.length} weapons and tools they carry` },
+      el('span', { class: 'p-gear-count', text: all.length }), icon(['M4 6l4 4 4-4'], 12));
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (gearMenu.hidden) openGearMenu(toggle, name, gear, mainhand, all);
+        else closeGearMenu();
+      });
+      line.append(toggle);
+    }
+    rows.push(line);
+  }
+  const egg = eggInfo(playerEggId(name, gear));
+  if (egg) rows.push(el('div', { class: 'p-model-egg' }, el('span', { class: 'p-egg', style: egg.color ? `--egg:${egg.color}` : '', text: egg.name })));
   const when = gear?.ts ? `Gear updated ${ago(gear.ts)}` : 'No gear reported yet';
-  note.replaceChildren(
-    ...(parts.length ? [el('div', { class: 'p-model-held' }, ...parts.flatMap((p, i) => (i ? [' · ', p] : [p])))] : []),
-    el('div', { class: 'muted', text: when }),
-  );
+  note.replaceChildren(...rows, el('div', { class: 'muted p-model-when', text: when }));
 }
+
+// The list of everything they carry: each in its game colors (hover for its tooltip); picking one
+// puts it in the model's hand.
+const gearMenu = el('div', { class: 'gear-menu', role: 'menu', hidden: '' });
+document.body.append(gearMenu);
+function closeGearMenu() {
+  if (gearMenu.hidden) return;
+  gearMenu.hidden = true;
+  document.querySelector('.p-gear-toggle[aria-expanded="true"]')?.setAttribute('aria-expanded', 'false');
+  hideTip();
+}
+function openGearMenu(toggle, name, gear, current, all) {
+  const currentKey = gearKey(current);
+  gearMenu.replaceChildren(el('div', { class: 'gear-menu-head', text: 'Weapons and tools they carry' }), ...all.map((w, i) => {
+    const look = gearItemLook(w.item, gear?.styles);
+    const picked = w.key === currentKey;
+    const row = el('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(picked), class: `gear-row${picked ? ' picked' : ''}` },
+      el('span', { class: 'gear-check' }, picked ? icon(['M3.5 8.5l3 3 6-7'], 12) : null),
+      el('span', { class: 'gear-name msg-item' }, ...mcRuns(look.name)),
+      el('span', { class: 'gear-sub muted', text: [w.item.name ? itemKind(w.item) : '', w.count > 1 ? `×${w.count}` : '', i === 0 ? 'best' : ''].filter(Boolean).join(' · ') }));
+    // its tooltip beside the list, as in the chat log
+    const show = () => {
+      const r = row.getBoundingClientRect();
+      showTip(r.right + 4, r.top + 12, [{ node: itemTipNode(look.tip, look.note) }]);
+    };
+    row.addEventListener('pointerenter', show);
+    row.addEventListener('focus', () => { if (row.matches(':focus-visible')) show(); else hideTip(); });
+    row.addEventListener('pointerleave', hideTip);
+    row.addEventListener('click', () => {
+      modelPick = { name, key: w.key };
+      closeGearMenu();
+      renderPlayerModel(name, gear);
+      $('#p-model-note .p-gear-toggle')?.focus({ preventScroll: true });
+    });
+    return row;
+  }));
+  gearMenu.hidden = false;
+  toggle.setAttribute('aria-expanded', 'true');
+  const r = toggle.getBoundingClientRect();
+  const { width, height } = gearMenu.getBoundingClientRect();
+  gearMenu.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - width / 2, innerWidth - width - 8))}px`;
+  gearMenu.style.top = `${r.bottom + 6 + height > innerHeight - 8 ? Math.max(8, r.top - height - 6) : r.bottom + 6}px`;
+  (gearMenu.querySelector('.gear-row.picked') || gearMenu.querySelector('.gear-row'))?.focus({ preventScroll: true });
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!gearMenu.hidden && !gearMenu.contains(e.target) && !e.target.closest('.p-gear-toggle')) closeGearMenu();
+});
+gearMenu.addEventListener('keydown', (e) => {
+  const rows = [...gearMenu.querySelectorAll('.gear-row')];
+  const i = rows.indexOf(document.activeElement);
+  if (e.key === 'Escape') { closeGearMenu(); $('#p-model-note .p-gear-toggle')?.focus(); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    rows[(i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length]?.focus();
+  }
+});
+window.addEventListener('scroll', (e) => { if (!gearMenu.hidden && !gearMenu.contains(e.target)) closeGearMenu(); }, { passive: true, capture: true });
+window.addEventListener('resize', closeGearMenu);
 
 // Chat messages sent, all time or today (the choice is remembered). A finished season shows its total.
 const chatDataStartLabel = (ms) => {
@@ -3333,13 +3468,22 @@ function richText(m) {
 // An item named in a message, a little bolder like the players' names. Hovering (or tapping) shows
 // its tooltip as in game, when the server mod sent one.
 function itemSpan(run) {
-  const node = el('span', { class: 'msg-item' }, ...run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t)));
+  const node = el('span', { class: 'msg-item' }, ...mcRuns(run));
   const lines = run.find((p) => p.i)?.i;
-  if (!lines) return node;
+  if (lines) itemTip(node, lines);
+  return node;
+}
+const mcRuns = (run) => run.map((p) => (p.c ? el('span', { class: 'mc', style: mcStyle(p.c), text: p.t }) : p.t));
+// An item's tooltip as the game draws it (lines of { t, c?, i? } pieces), with an optional note under it.
+const itemTipNode = (lines, note) => el('div', { class: 'item-tip' },
+  ...lines.map((line, k) => el('div', { class: `it-line${k ? '' : ' it-name'}` },
+    ...(line.length ? line.map((p) => el('span', { style: `${p.c ? `color:${p.c};` : ''}${p.i ? 'font-style:italic' : ''}`, text: p.t })) : ['\u00a0']))),
+  note ? el('div', { class: 'it-note', text: note }) : null);
+// Hovering (or focusing, or tapping) the node shows it.
+function itemTip(node, lines, note) {
   node.classList.add('has-tip');
   node.tabIndex = 0;
-  const tipNode = () => el('div', { class: 'item-tip' }, ...lines.map((line, k) => el('div', { class: `it-line${k ? '' : ' it-name'}` },
-    ...(line.length ? line.map((p) => el('span', { style: `${p.c ? `color:${p.c};` : ''}${p.i ? 'font-style:italic' : ''}`, text: p.t })) : ['\u00a0']))));
+  const tipNode = () => itemTipNode(lines, note);
   const show = (e) => showTip(e.clientX, e.clientY, [{ node: tipNode() }]);
   node.addEventListener('pointerenter', show);
   node.addEventListener('pointermove', show);
@@ -6443,6 +6587,7 @@ async function adminRemove(id, action) {
 
 async function route() {
   closeTip();
+  closeGearMenu();
   showError('');
   const m = location.hash.match(/^#\/player\/([0-9a-fA-F-]{36})$/);
   try {

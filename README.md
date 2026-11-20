@@ -266,9 +266,13 @@ npm run dev               # http://localhost:8787, trigger a check at /__schedul
   which `python3 scripts/egg-tooltips.py [path to the Egg SMP datapack]` writes from the datapack's own tooltip
   reader (`tools/generate_tooltips.py`); run it again when the datapack changes.
 - **3D player model**: player pages show the player in 3D with their skin, the armor they last wore (trims, leather dye
-  and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, axe, pickaxe,
-  shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
-  little toward the mouse. Gear comes from the server mod (1.2.0 or newer); until a player has been on with it, the model
+  and the enchantment shimmer included), their best weapon in the main hand (mace, then trident, sword, spear, axe,
+  pickaxe, shovel; better material first) and their egg in the off hand (the one they carry, else their roster egg). It turns a
+  little toward the mouse. Under it, the weapon's name is in the game's colors with its in-game tooltip on hover, and
+  their egg is on the line below. A named item takes its colors and tooltip from the latest death message that named it
+  (their own kills first): the server mod reports only the plain name with the gear. Other items use their rarity color
+  (aqua when enchanted). The button next to the name lists every weapon and tool they carry; picking one puts it in
+  the model's hand. Gear comes from the server mod (1.2.0 or newer); until a player has been on with it, the model
   shows just their skin and roster egg. Armor and item textures are read on demand from Mojang's official game client
   for `MC_VERSION` (in `wrangler.jsonc`; set it to the server's version) by `/api/mc/…`, so none of Mojang's files are in
   this repository; skins come from Mojang through `/api/skin/<name>`. Drawn with three.js, loaded only on player pages.

@@ -98,3 +98,55 @@ export async function gearFor(db, names) {
     return null;
   }
 }
+
+// Each named item they carry (a custom name, as on an anvil) as the game styles it, found in the chat
+// log: a death message names the weapon it was done with, with its colors and tooltip (src/chat.js
+// cleanRich). The server mod reports only the plain name with the gear, so this is how the dashboard
+// can show it as in game without asking the mod for more. Their own kills come first, then the latest.
+//   -> { [plain name]: { name: [{ t, c? }], tip: [[{ t, c?, i? }]] or null, ts (ms) } }
+// Items no message has named yet are left out (the page draws them from their item id).
+export async function gearStyles(db, gear, names) {
+  const wanted = new Set();
+  for (const it of [gear?.mainhand, gear?.offhand, ...(gear?.items || [])]) if (it?.name) wanted.add(it.name);
+  if (!wanted.size) return {};
+  const mine = new Set(names.map((n) => n.toLowerCase()));
+  const { results } = await db.prepare(
+    `SELECT c.ts_ms AS ts, c.rich, d.killer FROM chat c LEFT JOIN deaths d ON d.id = c.id
+     WHERE c.kind = 'death' AND c.rich IS NOT NULL AND (c.rich LIKE '%"w":1%' OR c.text LIKE '%[%]%')
+     ORDER BY c.ts_ms DESC LIMIT 3000`
+  ).all();
+  const out = {};
+  const rank = {}; // name -> 0 for one of their own kills, 1 for anyone's
+  for (const r of results) {
+    let pieces;
+    try { pieces = JSON.parse(r.rich); } catch { continue; }
+    const item = weaponIn(pieces);
+    if (!item || !wanted.has(item.plain)) continue;
+    const k = r.killer && mine.has(r.killer.toLowerCase()) ? 0 : 1;
+    const had = out[item.plain];
+    // newest first, so a later row only wins by being theirs, or by having a tooltip where the other didn't
+    if (had && (rank[item.plain] < k || (rank[item.plain] === k && (had.tip || !item.tip)))) continue;
+    out[item.plain] = { name: item.name, tip: item.tip, ts: r.ts };
+    rank[item.plain] = k;
+  }
+  return out;
+}
+
+// The weapon named in a death message's pieces: the ones the server mod marked (w), or in older
+// messages the [bracketed] part that isn't a player. Its name without the brackets, and its tooltip.
+function weaponIn(pieces) {
+  let run = pieces.filter((p) => p.w);
+  if (!run.length) {
+    const from = pieces.findIndex((p) => !p.p && p.t.trimStart().startsWith('['));
+    const to = from < 0 ? -1 : pieces.findIndex((p, k) => k >= from && p.t.trimEnd().endsWith(']'));
+    if (to < 0 || pieces.slice(from, to + 1).some((p) => p.p)) return null;
+    run = pieces.slice(from, to + 1);
+  }
+  const tip = run.find((p) => p.i)?.i || null;
+  const name = run.map((p) => ({ t: p.t, ...(p.c ? { c: p.c } : {}) }));
+  name[0] = { ...name[0], t: name[0].t.replace(/^\s*\[/, '') };
+  name[name.length - 1] = { ...name.at(-1), t: name.at(-1).t.replace(/\]\s*$/, '') };
+  const shown = name.filter((p) => p.t);
+  const plain = shown.map((p) => p.t).join('').trim();
+  return plain ? { name: shown, tip, plain } : null;
+}

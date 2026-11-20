@@ -592,11 +592,12 @@ export async function mountPlayer(container, spec) {
 
   // Held items: the weapon in the main (right) hand, the egg in the off (left) hand, placed exactly
   // as the game places them (see HELD above).
-  const holdItem = async (item, arm) => {
+  // The item drawn in a hand, as a group of its own (not yet in the hand), or null.
+  const itemHolder = async (item, arm) => {
     const id = item && (item.model || item.id);
-    if (!id || !ID_RE.test(id)) return false;
+    if (!id || !ID_RE.test(id)) return null;
     const img = await loadImage(TEX(`item/${id}`));
-    if (!img || cancelled()) return false;
+    if (!img || cancelled()) return null;
     const { geo, canvas: c, size } = itemGeometry(img);
     const tex = keep(pixelTexture(c));
     const mat = material(tex);
@@ -607,12 +608,20 @@ export async function mountPlayer(container, spec) {
     if (item.glint && glintTex) {
       const gmat = keep(glintMaterial(tex, glintTex, new THREE.Vector2(0.5, 0.5)));
       glints.push(gmat);
+      holder.userData.glint = gmat;
       holder.add(new THREE.Mesh(geo, gmat));
     }
+    return holder;
+  };
+  const held = {}; // arm -> its holder
+  const holdItem = async (item, arm) => {
+    const holder = await itemHolder(item, arm);
+    if (!holder) return false;
     parts[arm].add(holder);
+    held[arm] = holder;
     return true;
   };
-  const [hasWeapon, hasEgg] = await Promise.all([
+  let [hasWeapon, hasEgg] = await Promise.all([
     holdItem(spec.mainhand, 'rightArm'),
     holdItem(spec.offhand, 'leftArm'),
   ]);
@@ -783,7 +792,25 @@ export async function mountPlayer(container, spec) {
   pose(0);
   renderer.render(scene, camera);
 
+  let swapping = 0;
   return {
+    // Puts another item in their right hand (or none), without building the rest again.
+    async setMainhand(item) {
+      const mine = ++swapping;
+      const holder = item ? await itemHolder(item, 'rightArm') : null;
+      if (mine !== swapping || disposed) return;
+      const old = held.rightArm;
+      if (old) {
+        parts.rightArm.remove(old);
+        if (old.userData.glint) glints.splice(glints.indexOf(old.userData.glint), 1);
+      }
+      held.rightArm = holder;
+      if (holder) parts.rightArm.add(holder);
+      hasWeapon = !!holder;
+      pose(performance.now() / 1000);
+      renderer.render(scene, camera);
+      wake();
+    },
     dispose() {
       disposed = true;
       cancelAnimationFrame(frame);

@@ -3,7 +3,7 @@ import { POLL_SECONDS } from './poll.js';
 import { chatPlayers, ingestChat, playerChat, readChat, searchChat } from './chat.js';
 import { combatData, combatLog } from './combat.js';
 import { chatSeason, clampRange, seasonFor } from './seasons.js';
-import { gearFor, ingestGear } from './gear.js';
+import { gearFor, gearStyles, ingestGear } from './gear.js';
 import { advancementsFor, ingestAdvancements } from './advancements.js';
 import { ingestOnline } from './online.js';
 import { serveItem, serveSkin, serveTexture } from './mcassets.js';
@@ -261,6 +261,8 @@ export async function handleApi(request, env, url) {
     player.first_seen = season.n ? (sessions[0]?.[0] ?? null) : player.first_seen;
     // what they last wore and carried (not limited to the season: it's their latest)
     const gear = await gearFor(db, group.names);
+    // their named weapons and tools as the game styles them, from the chat log
+    if (gear) gear.styles = await gearStyles(db, gear, group.names).catch(() => ({}));
     return json({ player, poll_seconds: POLL_SECONDS, sessions, gear });
   }
 
