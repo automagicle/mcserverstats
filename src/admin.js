@@ -250,6 +250,23 @@ const ACTIONS = {
   async 'link.test'(db, b, season, env) {
     return json({ ok: true, probe: await linkProbe(env), link: await linkStatus(env) });
   },
+  // credit a death to a player (it then counts as their kill), or to no one with killer: null
+  async 'death.attribute'(db, b) {
+    const id = chatId(b.id);
+    if (!id) return bad('bad id');
+    const killer = b.killer == null || b.killer === '' ? null : b.killer;
+    if (killer !== null && (typeof killer !== 'string' || !/^[A-Za-z0-9_]{1,16}$/.test(killer))) return bad('bad name');
+    const d = await db.prepare('SELECT victim FROM deaths WHERE id = ?').bind(id).first();
+    if (!d) return bad('not a death');
+    if (killer && killer.toLowerCase() === d.victim.toLowerCase()) return bad('they can’t be credited with their own death');
+    await db.prepare(
+      `UPDATE deaths SET killer = ?2,
+              killer_uuid = (SELECT uuid FROM players WHERE name = ?2 COLLATE NOCASE ORDER BY first_seen DESC LIMIT 1),
+              mob = CASE WHEN ?2 IS NULL THEN mob ELSE NULL END
+       WHERE id = ?1`
+    ).bind(id, killer).run();
+    return json({ ok: true, killer, victim: d.victim });
+  },
   async 'death.count'(db, b) {
     const id = chatId(b.id);
     if (!id) return bad('bad id');

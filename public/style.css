@@ -1712,6 +1712,13 @@ a.pcb-who:hover { text-decoration: underline; }
 .ctx-menu button { font: inherit; font-size: 13px; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer; }
 .ctx-menu button:hover, .ctx-menu button:focus-visible { background: var(--surface-2); outline: none; }
 .ctx-menu button.danger { color: var(--critical); }
+.ctx-attr { display: flex; flex-direction: column; gap: 6px; padding: 6px; width: 210px; }
+.ctx-label { font-size: 12px; color: var(--muted); }
+.ctx-attr input { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--ring); background: var(--surface-2); color: var(--ink); }
+.ctx-row { display: flex; justify-content: flex-end; gap: 4px; }
+.ctx-menu .ctx-row button { text-align: center; }
+.ctx-menu button.ctx-primary { background: var(--series-1); color: #fff; }
+.ctx-menu button.ctx-primary:hover, .ctx-menu button.ctx-primary:focus-visible { background: color-mix(in oklab, var(--series-1) 85%, black); }
 .ctx-target { background: color-mix(in oklab, var(--series-1) 12%, transparent); border-radius: 6px; }
 
 .toast { position: fixed; z-index: 70; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100vw - 32px);

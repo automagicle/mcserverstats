@@ -6325,7 +6325,9 @@ document.addEventListener('contextmenu', (e) => {
     return b;
   };
   adminMenu.replaceChildren(
-    ...(row.dataset.death ? [item("Don't count in combat", () => adminRemove(id, 'death.uncount'))] : []),
+    ...(row.dataset.death ? [
+      item('Attribute death', () => attributeDeath(id, row, e)),
+      item("Don't count in combat", () => adminRemove(id, 'death.uncount'))] : []),
     item('Delete message', () => adminRemove(id, 'chat.delete'), true));
   row.classList.add('ctx-target');
   adminMenu.hidden = false;
@@ -6341,6 +6343,46 @@ window.addEventListener('scroll', (e) => {
   const t = document.querySelector('.ctx-target');
   if (!adminMenu.hidden && (!t || e.target === document || e.target.contains?.(t))) closeAdminMenu();
 }, { passive: true, capture: true });
+
+// "Attribute death": the menu turns into a small picker (type or pick a player, then Attribute; or No
+// one to take the kill away). The death then counts as that player's kill on the Combat page.
+function attributeDeath(id, row, e) {
+  const names = [...new Set(knownNames.values())].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const list = el('datalist', { id: 'attr-names' }, ...names.map((n) => el('option', { value: n })));
+  const input = el('input', { type: 'text', list: 'attr-names', placeholder: 'Player name', maxlength: '16',
+    spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Player who gets the kill' });
+  const go = async (killer) => {
+    if (killer !== null && !/^[A-Za-z0-9_]{1,16}$/.test(killer)) { input.focus(); input.select(); return; }
+    closeAdminMenu();
+    let res;
+    try {
+      res = await adminPost({ action: 'death.attribute', id, killer });
+    } catch (err) {
+      if (err instanceof DbLimitError) showError(err.message);
+      toast(err.message, { error: true });
+      return;
+    }
+    const who = names.find((n) => n.toLowerCase() === (killer || '').toLowerCase()) || killer;
+    toast(killer ? `Counted as ${who}’s kill` : 'No one gets the kill now');
+    for (const d of combat.rows) if (d.id === id) { d.killer = who; if (who) d.mob = null; }
+    for (const m of deathLog.items) if (m.id === id) { m.killer = who; if (who) m.mob = null; }
+    if (!$('#view-combat').hidden) { renderDeathLog(); renderCombat(); }
+    else if (state.playerData && !$('#view-player').hidden) renderPlayerCombat(state.playerData.name).catch(() => {});
+  };
+  const ok = el('button', { type: 'button', class: 'ctx-primary', text: 'Attribute' });
+  ok.addEventListener('click', () => go(input.value.trim()));
+  const none = el('button', { type: 'button', text: 'No one' });
+  none.addEventListener('click', () => go(null));
+  input.addEventListener('keydown', (k) => { if (k.key === 'Enter') { k.preventDefault(); go(input.value.trim()); } });
+  adminMenu.replaceChildren(el('div', { class: 'ctx-attr' },
+    el('div', { class: 'ctx-label', text: 'Who gets the kill?' }), input, list, el('div', { class: 'ctx-row' }, none, ok)));
+  row.classList.add('ctx-target');
+  adminMenu.hidden = false;
+  const { width, height } = adminMenu.getBoundingClientRect();
+  adminMenu.style.left = `${Math.min(e.clientX, innerWidth - width - 8)}px`;
+  adminMenu.style.top = `${Math.min(e.clientY, innerHeight - height - 8)}px`;
+  input.focus({ preventScroll: true });
+}
 
 // Takes it out here at once (the server has already changed by the time this runs).
 async function adminRemove(id, action) {
