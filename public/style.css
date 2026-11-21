@@ -45,7 +45,7 @@
   --px-50: "Jersey 25", var(--font);
   /* Corners are cut the way pixel art rounds them: one 2px square missing from each. Shadows are the
      same cut shape again, shifted down and to the right at 45 degrees and one flat color, like the
-     shadow under text in the game. Panels and badges sit a step above the page, floating layers two. */
+     shadow under text in the game. Panels and badges sit one 2px step above the page, floating layers two. */
   --pit: #aab0b8;
   --pit-float: rgba(20, 24, 30, 0.24);
   --r: 0px;
@@ -54,14 +54,14 @@
 /* Declared on everything (not just :root) so each takes the colors of wherever it's used.
    --pixel draws an element 2px larger all round, minus the corner squares, in --pc: with the edge
    color that is a frame (--frame); with the element's own background it is just the cut corners.
-   --drop, --drop-sm and --lift are that shape's shadow, 4px, 3px and 6px away. */
+   --drop is that shape's shadow one 2px step away (--drop-sm is the same), --lift two steps. */
 *, ::before, ::after {
   --pc: var(--edge);
   --pixel: -2px 0 0 var(--pc), 2px 0 0 var(--pc), 0 -2px 0 var(--pc), 0 2px 0 var(--pc);
   --frame: var(--pixel);
-  --drop-sm: 1px 3px 0 var(--pit), 5px 3px 0 var(--pit), 3px 1px 0 var(--pit), 3px 5px 0 var(--pit);
-  --drop: 2px 4px 0 var(--pit), 6px 4px 0 var(--pit), 4px 2px 0 var(--pit), 4px 6px 0 var(--pit);
-  --lift: 4px 6px 0 var(--pit-float), 8px 6px 0 var(--pit-float), 6px 4px 0 var(--pit-float), 6px 8px 0 var(--pit-float);
+  --drop: 0 2px 0 var(--pit), 4px 2px 0 var(--pit), 2px 0 0 var(--pit), 2px 4px 0 var(--pit);
+  --drop-sm: var(--drop);
+  --lift: 2px 4px 0 var(--pit-float), 6px 4px 0 var(--pit-float), 4px 2px 0 var(--pit-float), 4px 6px 0 var(--pit-float);
 }
 
 /* Night: deepslate. Follows the system unless the theme switch picked one (data-theme on <html>). */
@@ -259,7 +259,7 @@ main {
 .tile-value-sm { font: 400 30px/1.1 var(--px-30); padding: 6px 0 5px; }
 .tile-sub { font-size: 12.5px; color: var(--muted); margin-top: 0; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 12px; }
 .chips:empty { display: none; }
 
 .chip {
@@ -318,7 +318,8 @@ main {
   border: 0;
   background: transparent;
   color: var(--ink-2);
-  padding: 4px 10px;
+  height: 26px;
+  padding: 0 10px;
   cursor: pointer;
 }
 .seg button:hover { color: var(--ink); }
@@ -531,7 +532,7 @@ tr.link:hover td { background: var(--hover); }
   white-space: nowrap;
   transition: width 0.25s ease, padding 0.25s ease, margin 0.25s ease;
 }
-.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -12px; }
+.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -16px; }
 
 /* player page: placeholders while loading, then a quick fade-in */
 @keyframes loading-pulse { 50% { opacity: 0.45; } }
@@ -579,20 +580,20 @@ tr.link:hover td { background: var(--hover); }
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 6px;
   margin-left: auto;
 }
 .icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border: 0;
   background: var(--surface-2);
   color: var(--ink-2);
   cursor: pointer;
 }
-.icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--grid); }
+.icon-btn:hover:not(:disabled) { --pc: var(--grid); color: var(--ink); background: var(--grid); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .seg button[hidden] { display: none; }
 
@@ -981,7 +982,7 @@ a.msg-name:hover { text-decoration: underline; }
   padding: 8px 12px 8px 16px;
   border-top: 1px solid var(--edge);
 }
-.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 12px; margin: 0; padding: 3px 6px 6px 3px; overflow-x: auto; scrollbar-width: none; }
+.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 14px; margin: 0; padding: 3px 5px 5px 3px; overflow-x: auto; scrollbar-width: none; }
 .chat-chips .chip { flex: none; }
 .chat-chips .since { display: none; }
 .chat-online-empty { flex: 1; font-size: 13px; }
@@ -1565,7 +1566,7 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 .death-log { position: sticky; top: 12px; display: flex; flex-direction: column; margin: 0; padding: 0; overflow: hidden; height: calc(100vh - 110px); min-height: 320px; }
 .dl-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--edge); }
 .dl-head h2 { margin-right: auto; white-space: nowrap; }
-.dl-head .seg button { padding: 3px 9px; font-size: 12.5px; }
+.dl-head .seg button { height: 24px; padding: 0 9px; font-size: 12.5px; }
 .dl-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; outline: none; }
 .dl-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--series-1); }
 .dl-day { margin: 12px 14px 4px; font-size: 11.5px; }
