@@ -43,20 +43,25 @@
   --px-30: "Jersey 15", var(--font);
   --px-40: "Jersey 20", var(--font);
   --px-50: "Jersey 25", var(--font);
-  /* Shadows are hard-edged and fall down and to the right, one step per level, like the shadow under
-     text in the game: panels and badges sit a step above the page, floating layers a step above that. */
-  --pit: rgba(30, 36, 44, 0.13);
-  --drop-sm: 2px 2px 0 var(--pit);
-  --drop: 3px 3px 0 var(--pit);
-  --lift: 4px 4px 0 var(--shade);
-  --r: 4px;        /* controls, tags */
-  --r-panel: 3px;  /* panels: only just off square */
-  --r-float: 5px;  /* popovers, menus, tooltips */
+  /* Corners are cut the way pixel art rounds them: one 2px square missing from each. Shadows are the
+     same cut shape again, shifted down and to the right at 45 degrees and one flat color, like the
+     shadow under text in the game. Panels and badges sit a step above the page, floating layers two. */
+  --pit: #c2c7cd;
+  --pit-float: rgba(20, 24, 30, 0.24);
+  --r: 0px;
+  --r-float: 0px;
 }
-/* A hairline around a panel. Declared on everything (not just :root) so it takes the edge color of
-   wherever it's used. */
+/* Declared on everything (not just :root) so each takes the colors of wherever it's used.
+   --pixel draws an element 2px larger all round, minus the corner squares, in --pc: with the edge
+   color that is a frame (--frame); with the element's own background it is just the cut corners.
+   --drop, --drop-sm and --lift are that shape's shadow, 4px, 3px and 6px away. */
 *, ::before, ::after {
-  --frame: 0 0 0 1px var(--edge);
+  --pc: var(--edge);
+  --pixel: -2px 0 0 var(--pc), 2px 0 0 var(--pc), 0 -2px 0 var(--pc), 0 2px 0 var(--pc);
+  --frame: var(--pixel);
+  --drop-sm: 1px 3px 0 var(--pit), 5px 3px 0 var(--pit), 3px 1px 0 var(--pit), 3px 5px 0 var(--pit);
+  --drop: 2px 4px 0 var(--pit), 6px 4px 0 var(--pit), 4px 2px 0 var(--pit), 4px 6px 0 var(--pit);
+  --lift: 4px 6px 0 var(--pit-float), 8px 6px 0 var(--pit-float), 6px 4px 0 var(--pit-float), 6px 8px 0 var(--pit-float);
 }
 
 /* Night: deepslate. Follows the system unless the theme switch picked one (data-theme on <html>). */
@@ -74,7 +79,7 @@
     --axis: #4a5159;
     --edge: #2e333a;
     --ring: rgba(255, 255, 255, 0.12);
-    --shade: rgba(0, 0, 0, 0.5); --pit: rgba(0, 0, 0, 0.4);
+    --shade: rgba(0, 0, 0, 0.5); --pit: #23272c; --pit-float: rgba(0, 0, 0, 0.55);
     --bar: #0c0e10;
     --stage: #0e1012;
     --floor: rgba(255, 255, 255, 0.07);
@@ -107,7 +112,7 @@
   --axis: #4a5159;
   --edge: #2e333a;
   --ring: rgba(255, 255, 255, 0.12);
-  --shade: rgba(0, 0, 0, 0.5); --pit: rgba(0, 0, 0, 0.4);
+  --shade: rgba(0, 0, 0, 0.5); --pit: #23272c; --pit-float: rgba(0, 0, 0, 0.55);
   --bar: #0c0e10;
   --stage: #0e1012;
   --floor: rgba(255, 255, 255, 0.07);
@@ -254,22 +259,22 @@ main {
 .tile-value-sm { font: 400 30px/1.1 var(--px-30); padding: 6px 0 5px; }
 .tile-sub { font-size: 12.5px; color: var(--muted); margin-top: 0; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; }
 .chips:empty { display: none; }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 13px 5px 5px;
+  gap: 8px;
+  padding: 2px 11px 2px 2px;
   background: var(--raise);
   box-shadow: var(--frame), var(--drop-sm);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 550;
   text-decoration: none;
 }
 .chip:hover { background: color-mix(in srgb, var(--raise) 82%, var(--ink) 18%); }
-.chip img { width: 24px; height: 24px; image-rendering: pixelated; border-radius: 2px; }
+.chip img { width: 24px; height: 24px; image-rendering: pixelated; }
 .chip .since { color: var(--muted); font-weight: 400; }
 
 .card {
@@ -525,7 +530,7 @@ tr.link:hover td { background: var(--hover); }
   white-space: nowrap;
   transition: width 0.25s ease, padding 0.25s ease, margin 0.25s ease;
 }
-.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -10px; }
+.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -12px; }
 
 /* player page: placeholders while loading, then a quick fade-in */
 @keyframes loading-pulse { 50% { opacity: 0.45; } }
@@ -975,8 +980,8 @@ a.msg-name:hover { text-decoration: underline; }
   padding: 8px 12px 8px 16px;
   border-top: 1px solid var(--edge);
 }
-.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 8px; margin: 0; padding: 2px 4px 4px 2px; overflow-x: auto; scrollbar-width: none; }
-.chat-chips .chip { flex: none; padding: 4px 11px 4px 4px; font-size: 13px; }
+.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 12px; margin: 0; padding: 3px 6px 6px 3px; overflow-x: auto; scrollbar-width: none; }
+.chat-chips .chip { flex: none; }
 .chat-chips .since { display: none; }
 .chat-online-empty { flex: 1; font-size: 13px; }
 .chat-online-close { flex: none; width: 28px; height: 28px; margin-left: auto; }
@@ -1877,25 +1882,16 @@ a.pcb-who:hover { text-decoration: underline; }
 
 /* ---------- shape ---------- */
 
-/* Panels are only just off square and cast a short hard shadow onto the page. What you press, type in
-   or read as a tag is slightly rounded, and so is anything that floats over the page. Dots are round;
-   color swatches are small squares. */
-.card, .now, .tiles, .pcb-stats, .p-avatar, .notice, .season-note { border-radius: var(--r-panel); }
+/* Nothing is rounded with a curve. Panels, badges and floating layers have a cut-corner frame and its
+   shadow; controls get the cut corners in their own color, with no line. Small tags, swatches and
+   dots are plain squares. Only the marker riding a chart's line stays round. */
 .card, .now, .tiles, .pcb-stats { box-shadow: var(--frame), var(--drop); }
-.now, .tiles, .pcb-stats { overflow: hidden; }
-.now > .tiles { border-radius: 0; box-shadow: none; }
-.btn-primary, .chat-send:not(:disabled) { box-shadow: var(--drop-sm); }
-.btn, .icon-btn, .seg, .tabs a, .adv-tabs, .chip, .live, .search-btn, .theme-toggle, .dl-open,
-.egg-game-toggle, .p-gear-toggle, .sr-more, .pc-open, .chat-send, .cg-toggle, .tile-select,
-.adm-input, .adm-color, .range-pop input, .sf-row select, .chat-compose input, .ctx-attr input,
-.pc-stat, .adm-periods, .day-badge, .msg-admin, .ctx-target { border-radius: var(--r); }
-.seg button, .adv-tabs button, .adm-tabs a, .theme-knob, .search-btn kbd, .ctx-menu button, .gear-row,
-.chat-suggest-item, .cb-table th.sortable button, .badge, .msg-tag, .egg-tag, .egg-cost, .egg-cracked,
-.an-tag, .notice code, .cg-person, .tooltip.tip-item, .tooltip.tip-adv, .egg-game-tip { border-radius: 3px; }
-.tooltip, .range-pop, .pcard, .search-pop, .gear-menu, .ctx-menu, .chat-suggest, .toast,
-.chat-compose-err, .adm-savebar, .chat-jump, .online-pill { border-radius: var(--r-float); }
-.search-pop { overflow: hidden; }
-.tab-badge, .search-filter-n, .adm-unsaved { border-radius: 999px; }
-.live .dot, .online-pill .dot, .pc-dot, .adm-link-dot, .cg-dot, .egg-pips i { border-radius: 50%; }
-.team-dot, .adm-dot, .fb-key, .cb-key, .scale span.sw, .peek-head .key { border-radius: 2px; }
-.bar, .cg-cursor::before, .cg-cursor::after, .adm-tl { border-radius: 1px; }
+.now > .tiles { box-shadow: none; }
+.seg, .icon-btn, .live, .search-btn, .theme-toggle, .adv-tabs, .adm-periods, .pc-stat,
+.dl-open, .egg-game-toggle { --pc: var(--surface-2); box-shadow: var(--pixel); }
+.seg button[aria-pressed="true"], .adv-tabs button[aria-selected="true"], .adm-tabs a[aria-selected="true"] { --pc: var(--raise); }
+.btn-primary, .btn-primary:hover:not(:disabled), .chat-send:not(:disabled) { --pc: var(--series-1); box-shadow: var(--pixel), var(--drop-sm); }
+.chat-send:disabled { --pc: var(--grid); box-shadow: var(--pixel); }
+.toast { --pc: var(--ink); box-shadow: var(--pixel), var(--lift); }
+.toast-error { --pc: var(--critical); }
+.cg-dot { border-radius: 50%; }
