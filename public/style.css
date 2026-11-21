@@ -43,9 +43,15 @@
   --px-30: "Jersey 15", var(--font);
   --px-40: "Jersey 20", var(--font);
   --px-50: "Jersey 25", var(--font);
-  --lift: 0 8px 24px var(--shade);
+  /* Shadows are hard-edged and fall down and to the right, one step per level, like the shadow under
+     text in the game: panels and badges sit a step above the page, floating layers a step above that. */
+  --pit: rgba(30, 36, 44, 0.13);
+  --drop-sm: 2px 2px 0 var(--pit);
+  --drop: 3px 3px 0 var(--pit);
+  --lift: 4px 4px 0 var(--shade);
   --r: 4px;        /* controls, tags */
-  --r-float: 6px;  /* popovers, menus, tooltips */
+  --r-panel: 3px;  /* panels: only just off square */
+  --r-float: 5px;  /* popovers, menus, tooltips */
 }
 /* A hairline around a panel. Declared on everything (not just :root) so it takes the edge color of
    wherever it's used. */
@@ -57,20 +63,20 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #15181b;
-    --surface: #1f2327;
-    --surface-2: #171a1d;
-    --raise: #2b3035;
+    --page: #111315;
+    --surface: #1a1d21;
+    --surface-2: #121417;
+    --raise: #272b30;
     --ink: #eceef0;
     --ink-2: #b6bcc4;
     --muted: #878e97;
-    --grid: #2a2f34;
+    --grid: #24282d;
     --axis: #4a5159;
-    --edge: #33383f;
+    --edge: #2e333a;
     --ring: rgba(255, 255, 255, 0.12);
-    --shade: rgba(0, 0, 0, 0.45);
-    --bar: #101214;
-    --stage: #121416;
+    --shade: rgba(0, 0, 0, 0.5); --pit: rgba(0, 0, 0, 0.4);
+    --bar: #0c0e10;
+    --stage: #0e1012;
     --floor: rgba(255, 255, 255, 0.07);
     --series-1: #4a90e8;
     --series-2: #e0703a;
@@ -78,7 +84,7 @@
     --good: #3fbf5a;
     --critical: #e5534b;
     --warning: #f0b429;
-    --lv0: #171a1d;
+    --lv0: #14171a;
     --lv1: #173d6e;
     --lv2: #2565b5;
     --lv3: #4f96e8;
@@ -90,20 +96,20 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #15181b;
-  --surface: #1f2327;
-  --surface-2: #171a1d;
-  --raise: #2b3035;
+  --page: #111315;
+  --surface: #1a1d21;
+  --surface-2: #121417;
+  --raise: #272b30;
   --ink: #eceef0;
   --ink-2: #b6bcc4;
   --muted: #878e97;
-  --grid: #2a2f34;
+  --grid: #24282d;
   --axis: #4a5159;
-  --edge: #33383f;
+  --edge: #2e333a;
   --ring: rgba(255, 255, 255, 0.12);
-  --shade: rgba(0, 0, 0, 0.45);
-  --bar: #101214;
-  --stage: #121416;
+  --shade: rgba(0, 0, 0, 0.5); --pit: rgba(0, 0, 0, 0.4);
+  --bar: #0c0e10;
+  --stage: #0e1012;
   --floor: rgba(255, 255, 255, 0.07);
   --series-1: #4a90e8;
   --series-2: #e0703a;
@@ -111,7 +117,7 @@
   --good: #3fbf5a;
   --critical: #e5534b;
   --warning: #f0b429;
-  --lv0: #171a1d;
+  --lv0: #14171a;
   --lv1: #173d6e;
   --lv2: #2565b5;
   --lv3: #4f96e8;
@@ -248,22 +254,22 @@ main {
 .tile-value-sm { font: 400 30px/1.1 var(--px-30); padding: 6px 0 5px; }
 .tile-sub { font-size: 12.5px; color: var(--muted); margin-top: 0; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }
 .chips:empty { display: none; }
 
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 10px 0 0;
-  overflow: hidden;
-  background: var(--surface-2);
-  font-size: 13px;
-  font-weight: 500;
+  gap: 9px;
+  padding: 5px 13px 5px 5px;
+  background: var(--raise);
+  box-shadow: var(--frame), var(--drop-sm);
+  font-size: 14px;
+  font-weight: 550;
   text-decoration: none;
 }
-.chip:hover { background: var(--grid); }
-.chip img { width: 24px; height: 24px; image-rendering: pixelated; }
+.chip:hover { background: color-mix(in srgb, var(--raise) 82%, var(--ink) 18%); }
+.chip img { width: 24px; height: 24px; image-rendering: pixelated; border-radius: 2px; }
 .chip .since { color: var(--muted); font-weight: 400; }
 
 .card {
@@ -519,7 +525,7 @@ tr.link:hover td { background: var(--hover); }
   white-space: nowrap;
   transition: width 0.25s ease, padding 0.25s ease, margin 0.25s ease;
 }
-.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -6px; }
+.chip.collapsed { width: 0 !important; padding-left: 0; padding-right: 0; margin-right: -10px; }
 
 /* player page: placeholders while loading, then a quick fade-in */
 @keyframes loading-pulse { 50% { opacity: 0.45; } }
@@ -969,9 +975,8 @@ a.msg-name:hover { text-decoration: underline; }
   padding: 8px 12px 8px 16px;
   border-top: 1px solid var(--edge);
 }
-.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 8px; margin: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
-.chat-chips .chip { flex: none; }
-.chat-chips .chip:hover { background: var(--grid); }
+.chat-chips { flex: 1; min-width: 0; flex-wrap: nowrap; gap: 8px; margin: 0; padding: 2px 4px 4px 2px; overflow-x: auto; scrollbar-width: none; }
+.chat-chips .chip { flex: none; padding: 4px 11px 4px 4px; font-size: 13px; }
 .chat-chips .since { display: none; }
 .chat-online-empty { flex: 1; font-size: 13px; }
 .chat-online-close { flex: none; width: 28px; height: 28px; margin-left: auto; }
@@ -993,7 +998,7 @@ a.msg-name:hover { text-decoration: underline; }
   font: inherit;
   font-size: 12.5px;
   font-weight: 600;
-  box-shadow: var(--frame), 0 4px 14px var(--shade);
+  box-shadow: var(--frame), var(--drop);
   cursor: pointer;
   animation: rise-in 0.25s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
@@ -1863,17 +1868,23 @@ a.pcb-who:hover { text-decoration: underline; }
 /* the four numbers and, under them, everyone who's on right now */
 .now { display: grid; gap: 1px; margin: 0 0 12px; background: var(--edge); box-shadow: var(--frame); }
 .now > .tiles { margin: 0; box-shadow: none; grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr)); }
-.now > .chips { margin: 0; padding: 8px 16px; background: var(--surface); }
+.now > .chips { margin: 0; padding: 12px 16px 14px; background: var(--surface); }
 @media (max-width: 800px) {
   .now > .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .now > .chips { padding: 8px 12px; }
+  .now > .chips { padding: 10px 12px 12px; }
 }
 
 
 /* ---------- shape ---------- */
 
-/* Panels keep square corners. What you press, type in or read as a tag is slightly rounded, and so
-   is anything that floats over the page. Dots are round; color swatches are small squares. */
+/* Panels are only just off square and cast a short hard shadow onto the page. What you press, type in
+   or read as a tag is slightly rounded, and so is anything that floats over the page. Dots are round;
+   color swatches are small squares. */
+.card, .now, .tiles, .pcb-stats, .p-avatar, .notice, .season-note { border-radius: var(--r-panel); }
+.card, .now, .tiles, .pcb-stats { box-shadow: var(--frame), var(--drop); }
+.now, .tiles, .pcb-stats { overflow: hidden; }
+.now > .tiles { border-radius: 0; box-shadow: none; }
+.btn-primary, .chat-send:not(:disabled) { box-shadow: var(--drop-sm); }
 .btn, .icon-btn, .seg, .tabs a, .adv-tabs, .chip, .live, .search-btn, .theme-toggle, .dl-open,
 .egg-game-toggle, .p-gear-toggle, .sr-more, .pc-open, .chat-send, .cg-toggle, .tile-select,
 .adm-input, .adm-color, .range-pop input, .sf-row select, .chat-compose input, .ctx-attr input,
