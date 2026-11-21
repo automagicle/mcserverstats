@@ -999,7 +999,7 @@ a.msg-name:hover { text-decoration: underline; }
 }
 .online-pill[hidden] { display: none; }
 /* above the message box when there is one */
-.chat-card:has(.chat-compose:not([hidden])) .online-pill { bottom: 64px; }
+.chat-card:has(.chat-compose:not([hidden])) .online-pill { bottom: 70px; }
 
 /* sending chat into the game */
 .chat-compose {
@@ -1007,8 +1007,8 @@ a.msg-name:hover { text-decoration: underline; }
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px 7px 12px;
+  gap: 9px;
+  padding: 9px 12px 9px 14px;
   border-top: 1px solid var(--edge);
 }
 .chat-compose[hidden] { display: none; }
@@ -1018,8 +1018,8 @@ a.msg-name:hover { text-decoration: underline; }
 .chat-compose input {
   flex: 1;
   min-width: 0;
-  height: 34px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 11px;
   border: 1px solid var(--edge);
   background: var(--surface-2);
   color: var(--ink);
@@ -1035,7 +1035,7 @@ a.msg-name:hover { text-decoration: underline; }
 /* names (and commands) suggested while typing one, as the game does */
 .chat-suggest {
   position: absolute;
-  left: 12px;
+  left: 14px;
   bottom: calc(100% + 6px);
   z-index: 5;
   min-width: 200px;
@@ -1059,8 +1059,8 @@ a.msg-name:hover { text-decoration: underline; }
   flex: none;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border: 0;
   background: var(--series-1);
   color: var(--accent-ink);

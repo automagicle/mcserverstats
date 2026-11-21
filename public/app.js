@@ -50,7 +50,7 @@ function headImg(name, size, attrs = {}) {
 // A season that's over is shown as of its end: the page's clock stops there.
 const CURRENT_SEASON = 2; // keep in step with src/seasons.js
 const SEASON = Number(location.pathname.match(/^\/s(\d+)\//)?.[1]) || CURRENT_SEASON;
-const SITE = SEASON < CURRENT_SEASON ? `Season ${SEASON} · Server Stats` : 'Server Stats';
+const SITE = SEASON < CURRENT_SEASON ? `Season ${SEASON} · mcstats` : 'mcstats';
 // ?dummydata on the main page fills it with made-up activity (public/dummy.js). The chat log stays empty.
 const DUMMY = SEASON === CURRENT_SEASON && new URLSearchParams(location.search).has('dummydata');
 let clockStop = Infinity; // the last moment of a finished season (unix seconds)
