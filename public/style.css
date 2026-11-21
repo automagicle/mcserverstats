@@ -46,7 +46,7 @@
   /* Corners are cut the way pixel art rounds them: one 2px square missing from each. Shadows are the
      same cut shape again, shifted down and to the right at 45 degrees and one flat color, like the
      shadow under text in the game. Panels and badges sit a step above the page, floating layers two. */
-  --pit: #c2c7cd;
+  --pit: #aab0b8;
   --pit-float: rgba(20, 24, 30, 0.24);
   --r: 0px;
   --r-float: 0px;
@@ -79,7 +79,7 @@
     --axis: #4a5159;
     --edge: #2e333a;
     --ring: rgba(255, 255, 255, 0.12);
-    --shade: rgba(0, 0, 0, 0.5); --pit: #23272c; --pit-float: rgba(0, 0, 0, 0.55);
+    --shade: rgba(0, 0, 0, 0.5); --pit: #3b4149; --pit-float: rgba(0, 0, 0, 0.55);
     --bar: #0c0e10;
     --stage: #0e1012;
     --floor: rgba(255, 255, 255, 0.07);
@@ -112,7 +112,7 @@
   --axis: #4a5159;
   --edge: #2e333a;
   --ring: rgba(255, 255, 255, 0.12);
-  --shade: rgba(0, 0, 0, 0.5); --pit: #23272c; --pit-float: rgba(0, 0, 0, 0.55);
+  --shade: rgba(0, 0, 0, 0.5); --pit: #3b4149; --pit-float: rgba(0, 0, 0, 0.55);
   --bar: #0c0e10;
   --stage: #0e1012;
   --floor: rgba(255, 255, 255, 0.07);
@@ -243,7 +243,7 @@ main {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   background: var(--edge);
   box-shadow: var(--frame);
 }
@@ -267,13 +267,14 @@ main {
   align-items: center;
   gap: 8px;
   padding: 2px 11px 2px 2px;
+  --pc: var(--raise);
   background: var(--raise);
-  box-shadow: var(--frame), var(--drop-sm);
+  box-shadow: var(--pixel), var(--drop-sm);
   font-size: 13px;
   font-weight: 550;
   text-decoration: none;
 }
-.chip:hover { background: color-mix(in srgb, var(--raise) 82%, var(--ink) 18%); }
+.chip:hover { --pc: color-mix(in srgb, var(--raise) 82%, var(--ink) 18%); background: var(--pc); }
 .chip img { width: 24px; height: 24px; image-rendering: pixelated; }
 .chip .since { color: var(--muted); font-weight: 400; }
 
@@ -281,7 +282,7 @@ main {
   background: var(--surface);
   box-shadow: var(--frame);
   padding: 14px 16px 16px;
-  margin: 12px 0;
+  margin: 14px 0;
   min-width: 0;
 }
 
@@ -300,10 +301,10 @@ main {
 .grid2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 .grid2 > .card { margin: 0; }
-.grid2 { margin: 12px 0; }
+.grid2 { margin: 14px 0; }
 
 .seg {
   display: inline-flex;
@@ -435,7 +436,7 @@ tr.link:hover td { background: var(--hover); }
   padding: 8px 14px 8px 16px;
   font-size: 14px;
   color: var(--ink-2);
-  margin: 0 0 12px;
+  margin: 0 0 14px;
 }
 .notice code { font-size: 13px; background: var(--surface-2); padding: 1px 5px; }
 .notice-error { box-shadow: var(--frame), inset 3px 0 0 var(--critical); }
@@ -674,7 +675,7 @@ tr.link:hover td { background: var(--hover); }
 /* ---------- header tabs ---------- */
 
 .top-left { display: flex; align-items: center; gap: 22px; min-width: 0; }
-.tabs { display: flex; gap: 2px; }
+.tabs { display: flex; gap: 6px; }
 .tabs a {
   padding: 5px 12px;
   font-size: 14px;
@@ -1370,7 +1371,7 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 .pc-name .team-dot { margin: 0 6px 2px 0; vertical-align: middle; }
 
 /* Player page: the 3D model beside the name and tiles */
-.player-top { display: flex; gap: 12px; align-items: stretch; margin: 0 0 12px; }
+.player-top { display: flex; gap: 12px; align-items: stretch; margin: 0 0 14px; }
 .player-side { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .player-side > .tiles { flex: 1; }
 .player-top .player-head { margin-top: 0; }
@@ -1438,7 +1439,7 @@ body.archived .chat-card .chat-scroll { padding-bottom: 0; }
 /* ---------- combat page ---------- */
 
 .page-title { margin: 0; font: 400 30px/1 var(--px-30); }
-.combat { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; align-items: start; }
+.combat { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
 .combat.log-closed { grid-template-columns: minmax(0, 1fr); }
 .combat.log-closed .death-log { display: none; }
 .combat-main { min-width: 0; }
@@ -1871,7 +1872,7 @@ a.pcb-who:hover { text-decoration: underline; }
 /* ---------- home: who's on, in one slab ---------- */
 
 /* the four numbers and, under them, everyone who's on right now */
-.now { display: grid; gap: 1px; margin: 0 0 12px; background: var(--edge); box-shadow: var(--frame); }
+.now { display: grid; gap: 1px; margin: 0 0 14px; background: var(--edge); box-shadow: var(--frame); }
 .now > .tiles { margin: 0; box-shadow: none; grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr)); }
 .now > .chips { margin: 0; padding: 12px 16px 14px; background: var(--surface); }
 @media (max-width: 800px) {
