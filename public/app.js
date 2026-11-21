@@ -1046,7 +1046,9 @@ const redraws = new Map();
 
 function lineTarget(opts) {
   let vmax = opts.yMin || 0;
-  for (const s of opts.series) for (const p of s.pts) if (p.v > vmax) vmax = p.v;
+  // (points past the edges, drawn for scrolling into view, don't set the scale)
+  const lo = opts.from - opts.step, hi = opts.to + opts.step;
+  for (const s of opts.series) for (const p of s.pts) if (p.v > vmax && p.t >= lo && p.t <= hi) vmax = p.v;
   let ystep = niceStep(Math.max(1, Math.max(vmax, 4) / (opts.ticks || 4)));
   let ymax = Math.max(4, Math.ceil(vmax / ystep) * ystep);
   if (opts.yScale) ({ ymax, ystep } = opts.yScale(vmax));
@@ -1097,7 +1099,7 @@ function drawLineChart(root, opts, f) {
   const { step, series } = opts;
   const { from, to, ymax, ystep } = f;
   const pts0 = series[0].pts;
-  if (!pts0.length) {
+  if (!pts0.some((p) => p.t >= from - step && p.t <= to + step)) {
     root.append(el('div', { class: 'empty-chart', text: 'No data in this range yet' }));
     opts.onDraw?.(null);
     return;
@@ -1135,26 +1137,29 @@ function drawLineChart(root, opts, f) {
   yaxis.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), class: 'baseline' }));
 
   // x ticks: local hours for short ranges, local midnights for long ones
+  // Which ones get a label depends on the clock, not on where the range starts, so they stay the
+  // same ones as the chart is scrolled along. Half a width past each edge is labelled as well
+  // (.overscan, hidden until a scroll brings it into view; see pinchZoom).
   const days = (to - from) / 86400;
-  const candidates = [];
-  for (let h = Math.ceil(from / 3600) * 3600; h < to; h += 3600) { // the end itself would hang off the edge
-    const info = hourInfo(h);
-    if (days <= 0.6 || (days <= 1.5 ? info.hour % 3 === 0 : info.hour === 0)) candidates.push(h);
-  }
+  const apart = days <= 0.6 ? 3600 : days <= 1.5 ? 3 * 3600 : 86400; // seconds between the hours that can have one
   const maxTicks = Math.max(2, Math.floor(pw / 80));
-  const every = Math.max(1, Math.ceil(candidates.length / maxTicks));
-  candidates.forEach((h, i) => {
-    if (i % every) return;
+  const every = Math.max(1, Math.ceil((to - from) / apart / maxTicks));
+  const beyond = sv('g', { class: 'overscan', visibility: 'hidden' });
+  for (let h = Math.ceil((from - (to - from) / 2) / 3600) * 3600; h < to + (to - from) / 2; h += 3600) {
+    const info = hourInfo(h);
+    if (!(days <= 0.6 || (days <= 1.5 ? info.hour % 3 === 0 : info.hour === 0))) continue;
+    if (Math.round(h / apart) % every) continue;
     const t = sv('text', { x: x(h), y: H - 6, 'text-anchor': 'middle', class: 'axis-text' });
-    t.textContent = days <= 1.5 ? hourName(hourInfo(h).hour, false)
+    t.textContent = days <= 1.5 ? hourName(info.hour, false)
       : days <= 8 ? fmt(h, { weekday: 'short' })
       : fmt(h, { month: 'short', day: 'numeric' });
-    body.append(t);
-  });
+    (h >= from && h < to ? body : beyond).append(t); // the end itself would hang off the edge
+  }
+  body.append(beyond);
 
   // lines, broken wherever there is missing data; clipped to the plot while the domain slides
   const clipId = `${root.id}-clip`;
-  const clip = sv('clipPath', { id: clipId });
+  const clip = sv('clipPath', { id: clipId, class: 'plot-clip' });
   clip.append(sv('rect', { x: m.l, y: 0, width: pw, height: m.t + ph + 1 }));
   body.append(clip);
   const plot = sv('g', { 'clip-path': `url(#${clipId})` });
@@ -1163,6 +1168,10 @@ function drawLineChart(root, opts, f) {
   // hatched block for the time before tracking started
   if (opts.dataStart && opts.dataStart > from) {
     noDataBlock(svg, plot, `${root.id}-hatch`, m.l, Math.min(m.l + pw, x(opts.dataStart)), m.t, ph);
+  }
+  // (and past the left edge, for scrolling into view)
+  if (opts.dataStart && x(opts.dataStart) > m.l - pw) {
+    noDataBlock(svg, plot, `${root.id}-hatch`, m.l - pw, Math.min(m.l, x(opts.dataStart)), m.t, ph, { label: false });
   }
 
   // the shading between a stacked line and the one under it (the same points), broken at gaps as the lines are
@@ -2167,13 +2176,13 @@ async function renderServerDaily(animate = false, slide = 0) {
 async function teamHoursPerBucket(buckets) {
   if (!roster.size || !buckets.length || !activityTeams().length) return null;
   const from = buckets[0].start, to = buckets[buckets.length - 1].end;
-  // asked for up to now in ten-minute steps, so today's bar keeps up without a request per redraw
-  const r = await memoApi(`/api/sessions?from=${from}&to=${Math.min(to, Math.ceil(nowSec() / 600) * 600)}`);
+  // (kept between redraws, and as the chart is scrolled along; see timeCache)
+  await dailySessions.ensure(from, to);
   const out = Object.fromEntries(activityTeams().map((t) => [t.id, buckets.map(() => 0)]));
   const stop = Math.min(to, nowSec());
-  for (const [, name, a0, b0] of r.rows) {
+  for (const [, name, a0, b0] of dailySessions.rows(from, to)) {
     // (cut where the player changed teams, if that change only counted from then on)
-    for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(stop, b0 + r.poll_seconds))) {
+    for (const [id, a, b] of teamSpans(name, Math.max(from, a0), Math.min(stop, b0 + POLL))) {
       const team = out[activityTeam(id)];
       if (!team) continue;
       for (let i = 0; i < buckets.length && buckets[i].start < b; i++) {
@@ -2414,14 +2423,18 @@ async function loadTimeline(slide = 0) {
   let opts;
 
   const minuteData = to - from <= 8 * 86400;
-  const [rows, sessionsRes] = await Promise.all([
-    minuteData
-      ? (r.live ? loadSnapshots(from) : memoApi(`/api/snapshots?from=${from}&to=${to}`).then((x) => x.rows))
-      : getHourlyRange(from, to),
-    r.live ? api(`/api/sessions?from=${from}&to=${to}`) : memoApi(`/api/sessions?from=${from}&to=${to}`),
-  ]);
+  await Promise.all([minuteData && tlSnaps.ensure(from, to), tlSessions.ensure(from, to)]);
   if (tlCtl.get() !== w) return; // another range was picked meanwhile
-  const sessions = sessionsRes.rows.map(([, name, a, b]) => [name, a, b + sessionsRes.poll_seconds]);
+  // Whatever is already here past each edge is drawn too, out of sight, so scrolling the chart along
+  // shows it at once (pinchZoom); lo..hi is that wider stretch.
+  const pad = timelinePad(from, to);
+  const local = !minuteData && state.hourly.length > 0 && from >= state.hourlyFrom; // the hours come from the page's own copy
+  const got = [tlSessions.span(), minuteData ? tlSnaps.span() : local ? { from: state.hourlyFrom, to: Infinity } : { from, to }];
+  const lo = Math.min(from, Math.max(from - pad, ...got.map((c) => c?.from ?? from)));
+  const hi = Math.max(to, Math.min(to + pad, ...got.map((c) => c?.to ?? to)));
+  const rows = minuteData ? tlSnaps.rows(lo, hi) : await getHourlyRange(local ? lo : from, local ? hi : to);
+  if (tlCtl.get() !== w) return;
+  const sessions = tlSessions.rows(lo, hi).map(([, name, a, b]) => [name, a, b + POLL]);
   // names online at t (minute data), or at any point in the hour starting at t (hourly data)
   const whoAt = (t) => {
     const end = minuteData ? t + 1 : t + 3600;
@@ -2460,8 +2473,6 @@ async function loadTimeline(slide = 0) {
       : teams ? [key(cm, 'Players online'), ...shownTeams.map((t) => band(teamVar(t.id), `${t.short} ${what}`))]
         : trend ? [key(c1, 'Players online'), key(c2, 'Average online (1 hour)')] : []));
   } else {
-    const rows = await getHourlyRange(from, to);
-    if (tlCtl.get() !== w) return;
     const avgPts = rows.map(([t, n, , s]) => ({ t, v: n ? s / n : 0 }));
     const peak = { name: 'peak', cls: '3', color: c3, pts: rows.map(([t, , , , pk]) => ({ t, v: pk })) };
     opts = {
@@ -2494,6 +2505,7 @@ async function loadTimeline(slide = 0) {
     };
   }
   renderLineChart($('#timeline'), opts, { animate: live(), slide });
+  if ($('#timeline').matches(':hover')) preloadTimeline(); // being read or scrolled: have the next stretch ready
 }
 
 const lbRowsBySize = new Map(); // range size -> most rows seen
@@ -2663,6 +2675,78 @@ async function memoApi(path) {
   }
   return memo.get(path);
 }
+
+// Rows over time kept as one unbroken stretch, so moving a chart along (or back to where it was)
+// mostly finds its data already here: a request reaching past either end asks only for the missing
+// part, and one nowhere near what's kept starts over.
+//   load(a, b) -> the rows for a..b    key(row): one fetched twice is kept once, as the newer copy
+//   start(row), end(row): its time     tail: seconds before the kept end that are asked for again (rows there can still change)
+//   slack: how far behind now the kept end may be    chunk: the longest stretch one request may ask for
+//   keep: past this length, only what was asked for and as much again either side stays
+function timeCache({ load, key, start, end = start, tail = 180, slack = 30, chunk = 100 * 86400, keep = 400 * 86400 }) {
+  let have = null; // { from, to, rows: Map }
+  let sorted = [];
+  let queue = Promise.resolve();
+  const fetchAll = async (a, b) => {
+    const parts = [];
+    for (let x = a; x < b; x += chunk) parts.push(load(x, Math.min(b, x + chunk)));
+    return (await Promise.all(parts)).flat();
+  };
+  const ensure = async (a, b) => {
+    b = Math.min(b, nowSec());
+    if (b <= a || (have && a >= have.from && b <= have.to + slack)) return;
+    const fresh = !have || a > have.to || b < have.from;
+    const parts = fresh ? [[a, b]] : [
+      ...(a < have.from ? [[a, have.from]] : []),
+      ...(b > have.to + slack ? [[Math.max(a, have.to - tail), b]] : []),
+    ];
+    const rows = (await Promise.all(parts.map(([x, y]) => fetchAll(x, y)))).flat();
+    const map = fresh ? new Map() : have.rows;
+    for (const r of rows) map.set(key(r), r);
+    have = fresh ? { from: a, to: b, rows: map } : { from: Math.min(a, have.from), to: Math.max(b, have.to), rows: map };
+    if (have.to - have.from > keep) {
+      const lo = a - (b - a), hi = b + (b - a);
+      for (const [k, r] of map) if (end(r) < lo || start(r) > hi) map.delete(k);
+      have.from = Math.max(have.from, lo);
+      have.to = Math.min(have.to, hi);
+    }
+    sorted = [...map.values()].sort((p, q) => start(p) - start(q));
+  };
+  return {
+    // one request at a time, so each builds on what the last one left
+    ensure: (a, b) => (queue = queue.then(() => ensure(a, b), () => ensure(a, b))),
+    span: () => have && { from: have.from, to: have.to },
+    rows: (a, b) => sorted.filter((r) => end(r) >= a && start(r) <= b),
+  };
+}
+const snapshotCache = () => timeCache({
+  load: (a, b) => api(`/api/snapshots?from=${a}&to=${b}`).then((x) => x.rows),
+  key: (r) => r[0], start: (r) => r[0], chunk: 7 * 86400, keep: 24 * 86400, slack: 5,
+});
+// (a session counts until the check after its last one)
+const sessionCache = (opts) => timeCache({
+  load: (a, b) => api(`/api/sessions?from=${a}&to=${b}`).then((x) => x.rows),
+  key: (r) => `${r[0]}|${r[2]}`, start: (r) => r[2], end: (r) => r[3] + POLL, tail: 300, ...opts,
+});
+const tlSnaps = snapshotCache(); // the Players online chart's minute rows
+const tlSessions = sessionCache({ slack: 5 }); // and who was on
+const dailySessions = sessionCache({ slack: 600 }); // Daily activity's (today's bar keeps up in ten-minute steps)
+
+// How far past each edge the Players online chart is drawn, when the data is already here.
+const timelinePad = (from, to) => Math.round((to - from) * (to - from > 2 * 86400 && to - from <= 8 * 86400 ? 0.25 : 0.5));
+// Fetches what's either side of a chart's range (see pinchZoom).
+function preloadAround(r, caches) {
+  const pad = timelinePad(r.from, r.to);
+  const a = Math.min(r.from, Math.max(state.dataStart ?? 0, r.from - pad));
+  for (const c of caches) c.ensure(a, r.to + pad).catch(() => {});
+}
+const preloadTimeline = () => {
+  const r = resolveWindow(tlCtl.get());
+  preloadAround(r, r.to - r.from <= 8 * 86400 ? [tlSnaps, tlSessions] : [tlSessions]);
+};
+const preloadDaily = () => {
+  if (roster.size && activityTeams().length) preloadAround(resolveWindow(dailyCtl.get()), [dailySessions]);
+};
 
 // Hourly rows in [from, to): from the cache when it covers them, otherwise fetched.
 async function getHourlyRange(from, to) {
@@ -6787,11 +6871,21 @@ function pageShift(prev, w, dir) {
 // (Ctrl+wheel in most browsers, gesture events in Safari), Ctrl+scroll with a mouse, or two fingers.
 // Each step is worked out from where the gesture started, so ranges that snap to whole hours
 // or days don't drift. toWindow(from, to) gives the window for a span (or an error string).
-function pinchZoom(root, { ctl, toWindow, render, min, max }) {
+// preload(), when given, fetches the data either side of what's shown: it's called when the pointer
+// settles on the chart and as a gesture starts, so what scrolls into view is usually already here.
+function pinchZoom(root, { ctl, toWindow, render, min, max, preload }) {
   let g = null;
   let idle = 0, timer = 0;
+  if (preload) {
+    let dwell = 0;
+    root.addEventListener('pointerenter', (e) => {
+      if (e.pointerType === 'mouse') dwell = setTimeout(preload, 200);
+    });
+    root.addEventListener('pointerleave', () => clearTimeout(dwell));
+  }
   const begin = (clientX) => {
     if (g) return;
+    preload?.();
     const r = resolveWindow(ctl.get());
     const box = root.getBoundingClientRect();
     const { l, r: right } = root.plotBox || { l: 0, r: 0 };
@@ -6826,12 +6920,48 @@ function pinchZoom(root, { ctl, toWindow, render, min, max }) {
     const dx = l * (1 - k) + ((drawn.from - from) / (to - from)) * pw;
     const same = Math.abs(k - 1) < 1e-4 && Math.abs(dx) < 0.25;
     for (const child of root.children) {
-      child.style.transformOrigin = '0 0';
-      child.style.transform = same ? '' : `translateX(${dx}px) scaleX(${k})`;
+      const node = plotOf(child, l, pw) || child;
+      node.style.transformOrigin = '0 0';
+      node.style.transform = same ? '' : `translateX(${dx}px) scaleX(${k})`;
     }
   };
+  // A chart that keeps its y-axis apart (.yaxis beside .slide-clip > .slide, as slideIn uses) has only
+  // its plot moved, behind the plot's edges, so the axis and its numbers stay where they are. What the
+  // chart drew past its edges (.overscan, and lines beyond .plot-clip) shows as it comes into view.
+  const plotOf = (svg, l, pw) => {
+    const frame = svg.querySelector(':scope > .slide-clip');
+    const body = frame?.querySelector(':scope > .slide');
+    if (!body) return null;
+    if (!svg.querySelector(':scope > .pan-clip')) {
+      const id = `pan-clip-${++slideClips}`;
+      const c = sv('clipPath', { id, class: 'pan-clip' });
+      c.append(sv('rect', { x: l - 1, y: -50, width: pw + 2, height: 5000 }));
+      svg.append(c);
+      frame.setAttribute('clip-path', `url(#${id})`);
+      for (const r of body.querySelectorAll('.plot-clip > rect')) {
+        r.setAttribute('x', l - pw);
+        r.setAttribute('width', pw * 3);
+      }
+      for (const o of body.querySelectorAll('.overscan')) o.setAttribute('visibility', 'visible');
+    }
+    return body;
+  };
   const unstretch = () => {
-    for (const child of root.children) child.style.transform = '';
+    const { l, r: right } = root.plotBox || { l: 0, r: 0 };
+    for (const child of root.children) {
+      child.style.transform = '';
+      const clip = child.querySelector(':scope > .pan-clip');
+      if (!clip) continue;
+      const frame = child.querySelector(':scope > .slide-clip'), body = frame.querySelector(':scope > .slide');
+      clip.remove();
+      frame.removeAttribute('clip-path');
+      body.style.transform = '';
+      for (const r of body.querySelectorAll('.plot-clip > rect')) {
+        r.setAttribute('x', l);
+        r.setAttribute('width', Math.max(1, child.clientWidth - l - right));
+      }
+      for (const o of body.querySelectorAll('.overscan')) o.setAttribute('visibility', 'hidden');
+    }
     root.style.overflow = '';
   };
   const shownSpan = () => {
@@ -6989,11 +7119,11 @@ if (recall('deathLog') === 'closed') {
 }
 
 pinchZoom($('#timeline'), {
-  ctl: tlCtl, toWindow: pickSeconds(TL_PRESETS), min: 30 * 60, max: 90 * 86400,
+  ctl: tlCtl, toWindow: pickSeconds(TL_PRESETS), min: 30 * 60, max: 90 * 86400, preload: preloadTimeline,
   render: () => loadTimeline().catch((e) => showError(e.message)),
 });
 pinchZoom($('#heatmap'), {
-  ctl: dailyCtl, min: 86400, max: 90 * 86400,
+  ctl: dailyCtl, min: 86400, max: 90 * 86400, preload: preloadDaily,
   toWindow: (from, to) => pickDays(DAILY_PRESETS)(hourInfo(from).date, hourInfo(to - 1).date),
   render: () => renderServerDaily().catch((e) => showError(e.message)),
 });

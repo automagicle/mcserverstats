@@ -57,20 +57,20 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #1a1d21;
-    --surface: #24282d;
-    --surface-2: #1b1e22;
-    --raise: #30353b;
+    --page: #15181b;
+    --surface: #1f2327;
+    --surface-2: #171a1d;
+    --raise: #2b3035;
     --ink: #eceef0;
     --ink-2: #b6bcc4;
     --muted: #878e97;
-    --grid: #30353b;
+    --grid: #2a2f34;
     --axis: #4a5159;
-    --edge: #383e45;
+    --edge: #33383f;
     --ring: rgba(255, 255, 255, 0.12);
     --shade: rgba(0, 0, 0, 0.45);
-    --bar: #15171a;
-    --stage: #17191c;
+    --bar: #101214;
+    --stage: #121416;
     --floor: rgba(255, 255, 255, 0.07);
     --series-1: #4a90e8;
     --series-2: #e0703a;
@@ -78,7 +78,7 @@
     --good: #3fbf5a;
     --critical: #e5534b;
     --warning: #f0b429;
-    --lv0: #1b1e22;
+    --lv0: #171a1d;
     --lv1: #173d6e;
     --lv2: #2565b5;
     --lv3: #4f96e8;
@@ -90,20 +90,20 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #1a1d21;
-  --surface: #24282d;
-  --surface-2: #1b1e22;
-  --raise: #30353b;
+  --page: #15181b;
+  --surface: #1f2327;
+  --surface-2: #171a1d;
+  --raise: #2b3035;
   --ink: #eceef0;
   --ink-2: #b6bcc4;
   --muted: #878e97;
-  --grid: #30353b;
+  --grid: #2a2f34;
   --axis: #4a5159;
-  --edge: #383e45;
+  --edge: #33383f;
   --ring: rgba(255, 255, 255, 0.12);
   --shade: rgba(0, 0, 0, 0.45);
-  --bar: #15171a;
-  --stage: #17191c;
+  --bar: #101214;
+  --stage: #121416;
   --floor: rgba(255, 255, 255, 0.07);
   --series-1: #4a90e8;
   --series-2: #e0703a;
@@ -111,7 +111,7 @@
   --good: #3fbf5a;
   --critical: #e5534b;
   --warning: #f0b429;
-  --lv0: #1b1e22;
+  --lv0: #171a1d;
   --lv1: #173d6e;
   --lv2: #2565b5;
   --lv3: #4f96e8;
@@ -396,7 +396,7 @@ main {
 /* Tables */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 0 8px 5px; }
-td { padding: 5px 8px; border-top: 1px solid var(--grid); vertical-align: middle; }
+td { padding: 6px 8px; border-top: 1px solid var(--grid); vertical-align: middle; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.rank { color: var(--muted); width: 24px; font-variant-numeric: tabular-nums; }
 tr.link { cursor: pointer; }
@@ -404,7 +404,7 @@ tr.link:hover td { background: var(--hover); }
 .pname { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pname img { width: 24px; height: 24px; image-rendering: pixelated; flex: none; }
 .pname a { text-decoration: none; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar { height: 6px; background: var(--series-1); margin-top: 4px; min-width: 2px; }
+.bar { height: 5px; background: var(--series-1); margin-top: 4px; min-width: 2px; }
 .bar.team-red { background: var(--team-red); }
 .bar.team-blue { background: var(--team-blue); }
 .muted { color: var(--muted); }
@@ -495,7 +495,8 @@ tr.link:hover td { background: var(--hover); }
 .odo-col { display: inline-block; height: 1.2em; overflow: hidden; }
 .odo-strip { display: block; will-change: transform; }
 .odo-strip > span { display: block; height: 1.2em; line-height: 1.2em; text-align: center; }
-.odo-static { white-space: pre; }
+/* the same line as the digit cells, so letters and digits sit on one baseline */
+.odo-static { white-space: pre; line-height: 1.2em; }
 .sr-only {
   position: absolute;
   width: 1px;
@@ -998,7 +999,7 @@ a.msg-name:hover { text-decoration: underline; }
 }
 .online-pill[hidden] { display: none; }
 /* above the message box when there is one */
-.chat-card:has(.chat-compose:not([hidden])) .online-pill { bottom: 74px; }
+.chat-card:has(.chat-compose:not([hidden])) .online-pill { bottom: 64px; }
 
 /* sending chat into the game */
 .chat-compose {
@@ -1006,8 +1007,8 @@ a.msg-name:hover { text-decoration: underline; }
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px 10px 16px;
+  gap: 8px;
+  padding: 7px 10px 7px 12px;
   border-top: 1px solid var(--edge);
 }
 .chat-compose[hidden] { display: none; }
@@ -1017,8 +1018,8 @@ a.msg-name:hover { text-decoration: underline; }
 .chat-compose input {
   flex: 1;
   min-width: 0;
-  height: 38px;
-  padding: 0 12px;
+  height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--edge);
   background: var(--surface-2);
   color: var(--ink);
@@ -1034,7 +1035,7 @@ a.msg-name:hover { text-decoration: underline; }
 /* names (and commands) suggested while typing one, as the game does */
 .chat-suggest {
   position: absolute;
-  left: 16px;
+  left: 12px;
   bottom: calc(100% + 6px);
   z-index: 5;
   min-width: 200px;
@@ -1058,8 +1059,8 @@ a.msg-name:hover { text-decoration: underline; }
   flex: none;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   border: 0;
   background: var(--series-1);
   color: var(--accent-ink);
